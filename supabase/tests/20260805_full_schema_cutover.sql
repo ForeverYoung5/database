@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(23);
+select plan(26);
 
 select is(
   (
@@ -106,14 +106,99 @@ select ok(
   'standalone publication epoch sequence moved to private'
 );
 
+-- Trigger inventory is asserted against the schemas this repository owns, not against a
+-- database-global total. A global `not tgisinternal` count also includes triggers that the
+-- Supabase platform installs into its own schemas (for example on `storage.buckets` and
+-- `storage.objects`); those follow the CLI/platform image rather than this repository, so a
+-- global pin silently changes meaning between CLI versions. Two authors in this repository do
+-- write outside the four application schemas and are asserted explicitly below. This assertion
+-- is one aggregate count across the four schemas, not a per-schema partition.
 select is(
   (
     select count(*)
     from pg_trigger trigger_record
+    join pg_class class on class.oid = trigger_record.tgrelid
+    join pg_namespace namespace on namespace.oid = class.relnamespace
     where not trigger_record.tgisinternal
+      and namespace.nspname in ('api', 'private', 'public', 'util')
   ),
-  128::bigint,
+  120::bigint,
   'all active application triggers and two Process composite-name sync triggers plus seven example write guards remain present, including the Result lifecycle guard and the append-only Result attestation guard'
+);
+
+-- Two authored triggers live outside those four schemas: the guarded dataset derivative rebuild
+-- fence on the pgmq embedding queue, and the deferrable Auth profile mirror on `auth.users`.
+-- Both are pinned by exact identity and by their load-bearing semantics. Only `storage`, `cron`
+-- and `pgsodium` are excluded here: their triggers belong to the platform image and follow the
+-- CLI version, not this repository. Every other schema is included, so a new authored trigger in
+-- `pgmq`, `auth` or `net` still fails this test. The discriminator is deliberately the schema and
+-- not extension ownership: none of those platform triggers is a `pg_depend` extension member.
+select is(
+  (
+    select count(*)::text || '|' || coalesce(string_agg(
+             namespace.nspname || '.' || class.relname || '.' || trigger_record.tgname
+               || ':constraint=' || (trigger_record.tgconstraint <> 0)::text
+               || ':deferrable=' || trigger_record.tgdeferrable::text
+               || ':initdeferred=' || trigger_record.tginitdeferred::text,
+             ',' order by namespace.nspname, class.relname, trigger_record.tgname
+           ), '')
+    from pg_trigger trigger_record
+    join pg_class class on class.oid = trigger_record.tgrelid
+    join pg_namespace namespace on namespace.oid = class.relnamespace
+    where not trigger_record.tgisinternal
+      and namespace.nspname not in ('api', 'private', 'public', 'util')
+      and namespace.nspname not in ('storage', 'cron', 'pgsodium')
+  ),
+  '2|auth.users.trg_sync_auth_users_to_private_users:constraint=true:deferrable=true:initdeferred=true,'
+  || 'pgmq.q_embedding_jobs.dataset_derivative_rebuild_embedding_visibility_fence:constraint=false:deferrable=false:initdeferred=false',
+  'the only authored triggers outside the four application schemas are the pgmq embedding-visibility fence and the deferrable Auth profile mirror on auth.users, and the Auth mirror is still a deferred constraint trigger'
+);
+
+-- The exact application-owned identity for the two Result guards this change adds. The full
+-- tgtype is pinned to 27 = ROW(1) | BEFORE(2) | DELETE(8) | UPDATE(16). Testing membership bits
+-- alone would accept an AFTER trigger (25) or a DELETE-only trigger (19), so the timing and the
+-- event set are asserted as an exact value with no statement/truncate/insert bits permitted, and
+-- the firing function is bound to its exact schema-qualified identity with no argument vector.
+select is(
+  (
+    select trigger_record.tgtype::integer
+    from pg_trigger trigger_record
+    join pg_class class on class.oid = trigger_record.tgrelid
+    join pg_namespace namespace on namespace.oid = class.relnamespace
+    where namespace.nspname = 'public'
+      and class.relname = 'processes'
+      and trigger_record.tgname = 'zzz_guard_process_result_lifecycle'
+      and not trigger_record.tgisinternal
+      and trigger_record.tgenabled = 'O'
+      and trigger_record.tgdeferrable = false
+      and trigger_record.tginitdeferred = false
+      and trigger_record.tgattr::text = ''
+      and trigger_record.tgfoid =
+        'private.zzz_guard_process_result_lifecycle()'::regprocedure
+  ),
+  27,
+  'the Result lifecycle guard on public.processes is an enabled, non-deferred, row-level before-update-or-delete trigger calling private.zzz_guard_process_result_lifecycle()'
+);
+
+select is(
+  (
+    select trigger_record.tgtype::integer
+    from pg_trigger trigger_record
+    join pg_class class on class.oid = trigger_record.tgrelid
+    join pg_namespace namespace on namespace.oid = class.relnamespace
+    where namespace.nspname = 'private'
+      and class.relname = 'result_process_publications'
+      and trigger_record.tgname = 'result_process_publications_immutable'
+      and not trigger_record.tgisinternal
+      and trigger_record.tgenabled = 'O'
+      and trigger_record.tgdeferrable = false
+      and trigger_record.tginitdeferred = false
+      and trigger_record.tgattr::text = ''
+      and trigger_record.tgfoid =
+        'private.result_process_publications_immutable_v1()'::regprocedure
+  ),
+  27,
+  'the Result attestation append-only guard on private.result_process_publications is an enabled, non-deferred, row-level before-update-or-delete trigger calling private.result_process_publications_immutable_v1()'
 );
 
 select is(

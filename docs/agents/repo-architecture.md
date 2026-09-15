@@ -410,6 +410,18 @@ bound to the intended disposable Preview and clean up only their own actors and
 effects. The exact proof required for each capability lives in
 `docs/agents/repo-validation.md`.
 
+Object inventories count only the schemas this repository owns. A database-global
+`pg_trigger` or `pg_policy` total also counts objects the Supabase platform
+installs into its own schemas, and that set follows the CLI/platform image rather
+than the migration ledger, so a global pin silently changes meaning between CLI
+versions. `20260805_full_schema_cutover.sql` therefore pins one aggregate
+non-internal count across `api`, `private`, `public`, and `util` (it does not pin
+per-schema counts), pins the exact identities of the authored triggers outside
+those schemas, and excludes only the platform-owned `storage`, `cron`, and
+`pgsodium` schemas. Those platform triggers are not extension members, so the
+exclusion is by schema and cannot be replaced with an extension-ownership filter.
+`pg_policy` needs no such partition because the platform installs none.
+
 The PR Preview transport probe keeps failure evidence deliberately narrow: it
 may report the HTTP status and a strict shape-validated PostgREST or SQLSTATE
 code, but never the raw response body, error prose, request payload, or public
