@@ -32,9 +32,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-16
-lastReviewedCommit: 66fd6d3c024ae16e97831d88aab52275792acd7d
-lastReviewedNote: "Reviewed for Database #649: only isolated local-contract startup excludes Studio, Mailpit and analytics collectors; bounded read-only inventory/readiness checks preserve required services without health waivers. All migration, generated schema/type, SQL, upgrade and hosted-job contracts remain. Independent P2 repair and ten-document reviews plus twelve pure tests pass; real Linux equivalence and performance validation remain pending."
+lastReviewedAt: 2026-09-13
+lastReviewedCommit: 784c64dd82e22fa8667e64dc94569fe68411d72c
+lastReviewedNote: "Database #644: documented the review-queue full-text-search, TIDAS partial-import, and example-dataset-scope suites as always-run local-contract coverage; proof matrix and hosted boundaries unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -69,36 +69,6 @@ ownership, bulk-refresh, selected-root-refresh, review-queue full-text-search,
 TIDAS partial-import, example-dataset-scope, result-process-state-120,
 result-process-lifecycle-protection, result-process-product-read-isolation, and
 manager-attested-result-publication suites before hosted steps.
-
-### CI local-contract service pilot
-
-The `local-contract` job uses the pinned Supabase CLI 2.116.0 with only
-`studio,mailpit,logflare,vector` excluded. This does not change `supabase/config.toml`
-or the developer, Preview, persistent-Dev, or production service configuration.
-Mailpit and Logflare use container suffixes `inbucket` and `analytics` respectively;
-an unrecognized CLI exclusion only warns, so arguments alone are not proof.
-
-`scripts/check_local_contract_services.py` reads the real Docker inventory after
-startup, the clean reset, and the populated upgrade. It requires exactly the eight
-retained project services (Database, Auth, Storage, Kong, PostgREST, pgMeta,
-Realtime, and Edge Runtime), running with healthy status when Docker exposes a
-health check. CLI 2.116.0 reset restarts services without waiting for satellite
-health, so complete running containers may recover from `starting` or `unhealthy`
-within one 60-second monotonic budget per checkpoint. Every poll checks the full
-inventory again; each Docker call is bounded by the smaller of 30 seconds and the
-remaining budget. Only final healthy (or running without a Docker health check)
-states pass. Missing, additional, stopped, malformed, or unknown states fail
-immediately; persistent unhealthy states and late responses fail at the deadline.
-All four excluded auxiliary containers remain forbidden. Normal Supabase health
-checks remain enabled, and no service restart, reset, or SQL retry is added.
-
-The pure `scripts/test_local_contract_services.py` fixtures exercise workflow
-commands through stubs only. Actual Linux CI must still prove generated schema
-and Data API type equality, all 28 SQL files, graph checks, populated upgrade,
-JSON Schemas, and always-run cleanup. No database state or result is cached, and
-no reset or assertion is removed. Compare actual job/startup measurements before
-adopting this pilot as an efficiency improvement; passing stub tests proves
-failure handling, not service equivalence or performance.
 
 ## Proof Matrix
 
