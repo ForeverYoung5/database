@@ -35,11 +35,16 @@ jobs:
         run: |
           python scripts/test_resolve_migration_head.py
           python scripts/test_supabase_dev_workflow_contract.py
+          python3 scripts/test_local_contract_services.py
           python scripts/check_portal_projection_manifest.py
           python3 scripts/check_portal_card_schema_parity.py
 
       - name: Rebuild migration history
-        run: supabase start && supabase db reset --no-seed
+        run: |
+          supabase start --exclude studio,mailpit,logflare,vector
+          python3 scripts/check_local_contract_services.py
+          supabase db reset --no-seed
+          python3 scripts/check_local_contract_services.py
 
       - name: Verify generated schema and Data API types
         run: |
@@ -81,6 +86,7 @@ jobs:
           supabase test db supabase/tests/20260623_data_product_publication_mvp.sql
           supabase test db supabase/tests/20260716_lci_lcia_release_control_plane.sql
           scripts/test_full_schema_cutover_upgrade.sh
+          python3 scripts/check_local_contract_services.py
 
       - name: Verify Portal JSON Schemas
         run: |

@@ -70,6 +70,30 @@ TIDAS partial-import, example-dataset-scope, result-process-state-120,
 result-process-lifecycle-protection, result-process-product-read-isolation, and
 manager-attested-result-publication suites before hosted steps.
 
+### CI local-contract service pilot
+
+The `local-contract` job uses the pinned Supabase CLI 2.116.0 with only
+`studio,mailpit,logflare,vector` excluded. This does not change `supabase/config.toml`
+or the developer, Preview, persistent-Dev, or production service configuration.
+Mailpit and Logflare use container suffixes `inbucket` and `analytics` respectively;
+an unrecognized CLI exclusion only warns, so arguments alone are not proof.
+
+`scripts/check_local_contract_services.py` reads the real Docker inventory after
+startup, the clean reset, and the populated upgrade. It requires exactly the eight
+retained project services (Database, Auth, Storage, Kong, PostgREST, pgMeta,
+Realtime, and Edge Runtime), running with healthy status when Docker exposes a
+health check. It rejects missing, additional, stopped, or unhealthy services and
+all four excluded auxiliary containers. Normal Supabase health checks remain
+enabled; missing Docker evidence fails the job rather than waiving readiness.
+
+The pure `scripts/test_local_contract_services.py` fixtures exercise workflow
+commands through stubs only. Actual Linux CI must still prove generated schema
+and Data API type equality, all 28 SQL files, graph checks, populated upgrade,
+JSON Schemas, and always-run cleanup. No database state or result is cached, and
+no reset or assertion is removed. Compare actual job/startup measurements before
+adopting this pilot as an efficiency improvement; passing stub tests proves
+failure handling, not service equivalence or performance.
+
 ## Proof Matrix
 
 | Change type | Minimum local proof | Stronger proof when risk is higher | Notes |
