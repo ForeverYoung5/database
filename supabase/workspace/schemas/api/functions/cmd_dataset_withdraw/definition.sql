@@ -87,6 +87,21 @@ begin
     );
   end if;
 
+  -- A Result Process is withdrawn only through a role-preserving path that does not yet
+  -- exist, so no caller may downgrade one to a draft. The check is deliberately scoped to
+  -- this table so the command stays type-scoped; only processes can reach state 120.
+  if p_table = 'processes' and v_state_code = 120 then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'RESULT_WITHDRAW_REQUIRES_MIGRATION_PATH',
+      'status', 403,
+      'message', 'A published Result Process cannot be withdrawn to a draft',
+      'details', jsonb_build_object(
+        'state_code', v_state_code
+      )
+    );
+  end if;
+
   if v_state_code < 100 or v_state_code >= 200 then
     return jsonb_build_object(
       'ok', false,

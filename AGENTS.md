@@ -37,9 +37,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-13
-lastReviewedCommit: 784c64dd82e22fa8667e64dc94569fe68411d72c
-lastReviewedNote: "Database #644: reviewed canonical repository identity migration to tiangong-lca/database, Gitleaks Action removal without replacement, and local-contract suite additions; repo contract, branch policy, and hosted boundaries unchanged."
+lastReviewedAt: 2026-09-15
+lastReviewedCommit: d76e078927308039791d7096eedeeadaf7e04c9d
+lastReviewedNote: "Database #646: reviewed against the state-120 foundation, lifecycle protection, product-read isolation and Result publication slices. Repo contract, schema boundary, ACL/capability manifest rules, branch policy, and hosted boundaries are unchanged; the new migration adds one private receipt table, ten private helpers, one append-only guard trigger and three actor-bound API RPCs within the existing api/private boundaries. The cutover trigger inventory now pins one aggregate count over api/private/public/util plus the exact identity and semantics of every authored trigger outside them, instead of a database-global non-internal total that also counted triggers created by whichever platform services are enabled for the environment."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md

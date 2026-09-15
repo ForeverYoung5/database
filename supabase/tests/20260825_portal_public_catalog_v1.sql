@@ -681,6 +681,10 @@ select extensions.is(
   'the pre-Portal canonical Search/Hybrid signature and grant snapshot is unchanged'
 );
 
+-- Raw core tables must gain no anonymous *access grant*. A RESTRICTIVE policy only removes
+-- rows from whatever the permissive set already allows, so it grants nothing on its own and
+-- is deliberately not counted here. Counting it as a grant would make a strict narrowing
+-- fence indistinguishable from a real anonymous read grant.
 select extensions.is(
   (
     select count(*)
@@ -692,13 +696,52 @@ select extensions.is(
         'flowproperties',
         'unitgroups'
       ])
+      and permissive = 'PERMISSIVE'
       and (
-        'anon' = any (roles)
-        or 'public' = any (roles)
+        'anon' = any(roles)
+        or 'public' = any(roles)
       )
   ),
   0::bigint,
-  'raw core tables gain no anon or PUBLIC SELECT policy'
+  'raw core tables gain no permissive anon or PUBLIC SELECT grant'
+);
+
+-- The Result isolation fence is the one reviewed exception, and it must stay a fence: a
+-- RESTRICTIVE SELECT policy that admits no role beyond the anonymous/executor roles the
+-- permissive set already covers. Asserting the exact permissive/restrictive pair keeps the
+-- anonymous surface unchanged while proving the fence cannot silently become a grant.
+select extensions.is(
+  (
+    select count(*)
+    from pg_catalog.pg_policies
+    where schemaname = 'public'
+      and tablename = 'processes'
+      and policyname = 'result_process_no_generic_read'
+      and permissive = 'RESTRICTIVE'
+      and cmd = 'SELECT'
+      and roles @> array['authenticated', 'anon']::name[]
+      and roles <@ array['authenticated', 'anon']::name[]
+      and qual like '%IS DISTINCT FROM 120%'
+  ),
+  1::bigint,
+  'the Result read-isolation fence on public.processes stays a RESTRICTIVE SELECT policy'
+);
+
+-- and that no role outside that exact set was added to it.
+select extensions.is(
+  (
+    select count(*)
+    from pg_catalog.pg_policies
+    where schemaname = 'public'
+      and tablename = 'processes'
+      and policyname = 'result_process_no_generic_read'
+      and not (
+        roles @> array['authenticated', 'anon']::name[]
+        and roles <@ array['authenticated', 'anon']::name[]
+      )
+  ),
+  0::bigint,
+  'the Result read-isolation fence admits no role beyond authenticated and anon'
 );
 
 select extensions.is(

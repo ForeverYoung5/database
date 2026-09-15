@@ -1,0 +1,1 @@
+CREATE POLICY "result_process_no_generic_read_public_executor" ON "public"."processes" AS RESTRICTIVE FOR SELECT TO "portal_public_executor", "next_public_search_executor" USING (("state_code" IS DISTINCT FROM 120));

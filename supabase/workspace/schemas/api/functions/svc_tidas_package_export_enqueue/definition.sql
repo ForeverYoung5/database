@@ -89,9 +89,13 @@ begin
     into v_exportable_count
     from requested
     join datasets using (table_name, id, version)
-    where datasets.user_id = p_requested_by
-       or datasets.state_code = -1
-       or datasets.state_code between 100 and 199;
+    where (
+        datasets.user_id = p_requested_by
+        or datasets.state_code = -1
+        or datasets.state_code between 100 and 199
+      )
+      -- A published Result Process is never an exportable root, for any requester.
+      and not (datasets.table_name = 'processes' and datasets.state_code = 120);
 
     if v_exportable_count <> v_root_count then
       return jsonb_build_object('ok', false, 'code', 'ROOT_EXPORT_FORBIDDEN', 'status', 403);

@@ -420,6 +420,10 @@ export type Database = {
         }
         Returns: Json
       }
+      cmd_result_process_publish_v1: {
+        Args: { p_request: Json }
+        Returns: Json
+      }
       cmd_review_append_log: {
         Args: {
           p_action: string
@@ -1913,6 +1917,14 @@ export type Database = {
           state_code: number
           target_table: string
         }[]
+      }
+      qry_result_process_publication_readback_v1: {
+        Args: { p_request: Json }
+        Returns: Json
+      }
+      qry_result_process_publish_prepare_v1: {
+        Args: { p_request: Json }
+        Returns: Json
       }
       qry_review_admin_queue_items_v2: {
         Args: { p_page?: number; p_page_size?: number; p_status?: string }

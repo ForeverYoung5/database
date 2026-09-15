@@ -40,8 +40,13 @@ begin
     v_role := 'support';
   else
     v_document := new.json_ordered::jsonb;
-    v_is_eligible :=
-      new.state_code between 100 and 199 and v_document is not null;
+    -- Only the processes numeric axis is narrowed to exactly 100. Every other
+    -- candidate dataset keeps its existing support eligibility predicate verbatim;
+    -- this slice does not redefine support data rules.
+    v_is_eligible := case
+      when tg_table_name = 'processes' then new.state_code = 100
+      else new.state_code between 100 and 199
+    end and v_document is not null;
     v_dataset_id := new.id;
     v_role := case
       when tg_table_name = 'processes' then 'unit_process'

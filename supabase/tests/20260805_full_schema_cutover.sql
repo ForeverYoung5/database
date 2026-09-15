@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(23);
+select plan(26);
 
 select is(
   (
@@ -68,8 +68,8 @@ select is(
     where namespace.nspname = 'api'
       and routine.prokind = 'f'
   ),
-  290::bigint,
-  'api contains the active cutover and consumer facades, including eight additive Portal/Next version-search APIs and two V4 review queues plus two partial-import APIs'
+  293::bigint,
+  'api contains the active cutover and consumer facades, including eight additive Portal/Next version-search APIs, two V4 review queues, two partial-import APIs, and the three manager-attested Result publication RPCs'
 );
 
 select is(
@@ -80,8 +80,8 @@ select is(
     where namespace.nspname = 'private'
       and routine.prokind = 'f'
   ),
-  341::bigint,
-  'private contains the active helpers, including the twenty-five exact-version, thirteen composite-name and one review-search internals plus two partial-import helpers and the example write guard'
+  351::bigint,
+  'private contains the active helpers, including the twenty-five exact-version, thirteen composite-name and one review-search internals, two partial-import helpers, the example write guard, the two state-120 candidate-cache helpers, the state-120 lifecycle guard, and the seven manager-attested Result publication helpers'
 );
 
 select ok(
@@ -106,14 +106,102 @@ select ok(
   'standalone publication epoch sequence moved to private'
 );
 
+-- Trigger inventory is asserted against the schemas this repository owns, not against a
+-- database-global total. A global `not tgisinternal` count also includes triggers created by
+-- whichever platform services are enabled for the environment (Realtime, Storage, Cron,
+-- pgsodium); those exist in the deployed service set rather than in this repository's migration
+-- ledger, so a global pin is not a repository-owned quantity. Two authors in this repository do
+-- write outside the four application schemas and are asserted explicitly below. This assertion
+-- is one aggregate count across the four schemas, not a per-schema partition.
 select is(
   (
     select count(*)
     from pg_trigger trigger_record
+    join pg_class class on class.oid = trigger_record.tgrelid
+    join pg_namespace namespace on namespace.oid = class.relnamespace
     where not trigger_record.tgisinternal
+      and namespace.nspname in ('api', 'private', 'public', 'util')
   ),
-  127::bigint,
-  'all active application triggers and two Process composite-name sync triggers plus seven example write guards remain present'
+  120::bigint,
+  'all active application triggers and two Process composite-name sync triggers plus seven example write guards remain present, including the Result lifecycle guard and the append-only Result attestation guard'
+);
+
+-- Two authored triggers live outside those four schemas: the guarded dataset derivative rebuild
+-- fence on the pgmq embedding queue, and the deferrable Auth profile mirror on `auth.users`.
+-- Both are pinned by exact identity and by their load-bearing semantics. Only the schemas owned
+-- by platform services (`realtime`, `storage`, `cron`, `pgsodium`) are excluded here: their
+-- triggers are created by whichever platform service is enabled for the environment, for example
+-- `realtime.subscription.tr_check_filters` exists only where the Realtime service runs, so they
+-- are outside this repository's application-owned inventory. Every other schema is included, so a
+-- new authored trigger in `pgmq`, `auth`, `net` or `supabase_functions` still fails this test. The
+-- discriminator is deliberately the schema and not extension ownership: none of those platform
+-- triggers is a `pg_depend` extension member.
+select is(
+  (
+    select count(*)::text || '|' || coalesce(string_agg(
+             namespace.nspname || '.' || class.relname || '.' || trigger_record.tgname
+               || ':constraint=' || (trigger_record.tgconstraint <> 0)::text
+               || ':deferrable=' || trigger_record.tgdeferrable::text
+               || ':initdeferred=' || trigger_record.tginitdeferred::text,
+             ',' order by namespace.nspname, class.relname, trigger_record.tgname
+           ), '')
+    from pg_trigger trigger_record
+    join pg_class class on class.oid = trigger_record.tgrelid
+    join pg_namespace namespace on namespace.oid = class.relnamespace
+    where not trigger_record.tgisinternal
+      and namespace.nspname not in ('api', 'private', 'public', 'util')
+      and namespace.nspname not in ('realtime', 'storage', 'cron', 'pgsodium')
+  ),
+  '2|auth.users.trg_sync_auth_users_to_private_users:constraint=true:deferrable=true:initdeferred=true,'
+  || 'pgmq.q_embedding_jobs.dataset_derivative_rebuild_embedding_visibility_fence:constraint=false:deferrable=false:initdeferred=false',
+  'the only authored triggers outside the four application schemas are the pgmq embedding-visibility fence and the deferrable Auth profile mirror on auth.users, and the Auth mirror is still a deferred constraint trigger'
+);
+
+-- The exact application-owned identity for the two Result guards this change adds. The full
+-- tgtype is pinned to 27 = ROW(1) | BEFORE(2) | DELETE(8) | UPDATE(16). Testing membership bits
+-- alone would accept a trigger with different timing or a different event set, so timing and
+-- events are asserted as one exact value with no statement/truncate/insert bits permitted, and
+-- the firing function is bound to its exact schema-qualified identity with no argument vector.
+select is(
+  (
+    select trigger_record.tgtype::integer
+    from pg_trigger trigger_record
+    join pg_class class on class.oid = trigger_record.tgrelid
+    join pg_namespace namespace on namespace.oid = class.relnamespace
+    where namespace.nspname = 'public'
+      and class.relname = 'processes'
+      and trigger_record.tgname = 'zzz_guard_process_result_lifecycle'
+      and not trigger_record.tgisinternal
+      and trigger_record.tgenabled = 'O'
+      and trigger_record.tgdeferrable = false
+      and trigger_record.tginitdeferred = false
+      and trigger_record.tgattr::text = ''
+      and trigger_record.tgfoid =
+        'private.zzz_guard_process_result_lifecycle()'::regprocedure
+  ),
+  27,
+  'the Result lifecycle guard on public.processes is an enabled, non-deferred, row-level before-update-or-delete trigger calling private.zzz_guard_process_result_lifecycle()'
+);
+
+select is(
+  (
+    select trigger_record.tgtype::integer
+    from pg_trigger trigger_record
+    join pg_class class on class.oid = trigger_record.tgrelid
+    join pg_namespace namespace on namespace.oid = class.relnamespace
+    where namespace.nspname = 'private'
+      and class.relname = 'result_process_publications'
+      and trigger_record.tgname = 'result_process_publications_immutable'
+      and not trigger_record.tgisinternal
+      and trigger_record.tgenabled = 'O'
+      and trigger_record.tgdeferrable = false
+      and trigger_record.tginitdeferred = false
+      and trigger_record.tgattr::text = ''
+      and trigger_record.tgfoid =
+        'private.result_process_publications_immutable_v1()'::regprocedure
+  ),
+  27,
+  'the Result attestation append-only guard on private.result_process_publications is an enabled, non-deferred, row-level before-update-or-delete trigger calling private.result_process_publications_immutable_v1()'
 );
 
 select is(
@@ -121,8 +209,8 @@ select is(
     select count(*)
     from pg_policy
   ),
-  103::bigint,
-  'all RLS policies, nine OAuth guards and five composite-name policies plus seven authenticated example policies remain present'
+  105::bigint,
+  'all RLS policies, nine OAuth guards and five composite-name policies plus seven authenticated example policies and the two restrictive Result read-isolation policies remain present'
 );
 
 select is(
@@ -136,8 +224,8 @@ select is(
       'util'::regnamespace
     )
   ),
-  597::bigint,
-  'all application, OAuth registry and twenty-two composite-name constraints plus ten partial-import constraints remain present'
+  613::bigint,
+  'all application, OAuth registry and twenty-two composite-name constraints plus ten partial-import constraints and the Result publication attestation constraints remain present'
 );
 
 select is(
