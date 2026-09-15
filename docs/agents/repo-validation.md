@@ -82,9 +82,15 @@ an unrecognized CLI exclusion only warns, so arguments alone are not proof.
 startup, the clean reset, and the populated upgrade. It requires exactly the eight
 retained project services (Database, Auth, Storage, Kong, PostgREST, pgMeta,
 Realtime, and Edge Runtime), running with healthy status when Docker exposes a
-health check. It rejects missing, additional, stopped, or unhealthy services and
-all four excluded auxiliary containers. Normal Supabase health checks remain
-enabled; missing Docker evidence fails the job rather than waiving readiness.
+health check. CLI 2.116.0 reset restarts services without waiting for satellite
+health, so complete running containers may recover from `starting` or `unhealthy`
+within one 60-second monotonic budget per checkpoint. Every poll checks the full
+inventory again; each Docker call is bounded by the smaller of 30 seconds and the
+remaining budget. Only final healthy (or running without a Docker health check)
+states pass. Missing, additional, stopped, malformed, or unknown states fail
+immediately; persistent unhealthy states and late responses fail at the deadline.
+All four excluded auxiliary containers remain forbidden. Normal Supabase health
+checks remain enabled, and no service restart, reset, or SQL retry is added.
 
 The pure `scripts/test_local_contract_services.py` fixtures exercise workflow
 commands through stubs only. Actual Linux CI must still prove generated schema

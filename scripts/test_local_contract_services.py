@@ -166,9 +166,11 @@ class InventoryTests(unittest.TestCase):
 
     def test_required_containers_must_run_and_report_healthy_when_available(self):
         healthy = "\n".join(f"/{name}|running|healthy" for name in names())
-        self.checker.verify_states(healthy)
-        self.checker.verify_states(healthy.replace("|healthy", "|none"))
-        for state in ("exited|healthy", "restarting|healthy", "running|unhealthy", "running|starting", "running|", "running|unknown"):
+        self.assertTrue(self.checker.verify_states(healthy))
+        self.assertTrue(self.checker.verify_states(healthy.replace("|healthy", "|none")))
+        for health in ("starting", "unhealthy"):
+            self.assertFalse(self.checker.verify_states(healthy.replace("healthy", health, 1)))
+        for state in ("exited|healthy", "restarting|healthy", "running|", "running|unknown"):
             with self.subTest(state=state), self.assertRaises(ValueError):
                 self.checker.verify_states(healthy.replace("running|healthy", state, 1))
         for malformed in ("", healthy + "\n" + healthy.splitlines()[0], "\n".join(healthy.splitlines()[1:]), healthy.replace(names()[0], "foreign", 1)):
@@ -201,6 +203,88 @@ class InventoryTests(unittest.TestCase):
             with patch.object(self.checker, "REPO_ROOT", Path(directory)), patch.object(self.checker.subprocess, "run") as run, contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(self.checker.main(), 1)
                 run.assert_not_called()
+
+
+class ReadinessTests(unittest.TestCase):
+    def setUp(self):
+        self.checker = importlib.import_module("check_local_contract_services")
+        self.now = 0.0
+        self.calls = []
+        self.healthy = "\n".join(f"/{name}|running|healthy" for name in names())
+
+    def run_with(self, respond):
+        def run(argv, **options):
+            self.calls.append((argv, options))
+            return subprocess.CompletedProcess(argv, 0, respond(argv, options))
+
+        def sleep(seconds):
+            self.now += seconds
+
+        with patch("time.monotonic", side_effect=lambda: self.now), patch("time.sleep", side_effect=sleep), patch.object(self.checker.subprocess, "run", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+            return self.checker.main()
+
+    def test_starting_and_transient_unhealthy_wait_for_healthy(self):
+        for transient in ("starting", "unhealthy"):
+            with self.subTest(transient=transient):
+                self.calls = []
+                self.now = 0
+                replies = iter([
+                    "\n".join(names()),
+                    self.healthy.replace("healthy", transient),
+                    "\n".join(names()),
+                    self.healthy,
+                ])
+                self.assertEqual(self.run_with(lambda *_: next(replies)), 0)
+                self.assertEqual(len(self.calls), 4)
+                self.assertEqual(self.now, 1)
+
+    def test_permanent_pending_health_exhausts_one_total_deadline(self):
+        for health in ("starting", "unhealthy"):
+            with self.subTest(health=health):
+                self.now = 0
+                self.calls = []
+                def respond(argv, _options):
+                    if argv[2] == "ls":
+                        return "\n".join(names())
+                    return self.healthy.replace("healthy", health)
+                self.assertEqual(self.run_with(respond), 1)
+                self.assertEqual(self.now, 60)
+                self.assertEqual(len(self.calls), 120)
+                self.assertTrue(all(0 < call[1]["timeout"] <= 30 for call in self.calls))
+
+    def test_each_docker_call_uses_remaining_budget_and_late_health_cannot_pass(self):
+        responses = iter([
+            (30, 25, "\n".join(names())),
+            (30, 5, self.healthy.replace("healthy", "starting")),
+            (29, 10, "\n".join(names())),
+            (19, 19, self.healthy),
+        ])
+        def respond(argv, options):
+            timeout, duration, response = next(responses)
+            self.assertEqual(options["timeout"], timeout)
+            self.now += duration
+            return response
+        self.assertEqual(self.run_with(respond), 1)
+        self.assertEqual(len(self.calls), 4)
+
+    def test_inventory_or_state_drift_during_wait_fails_immediately(self):
+        for inventory, states in (
+            (names()[1:], self.healthy),
+            (names() + names(("studio",)), self.healthy),
+            (names() + names(("unexpected",)), self.healthy),
+            (names() + [names()[0]], self.healthy),
+            (names(), self.healthy.replace("running", "exited", 1)),
+            (names(), self.healthy.replace("running", "restarting", 1)),
+            (names(), self.healthy.replace("healthy", "unknown", 1)),
+            (names(), "malformed"),
+        ):
+            with self.subTest(inventory=inventory, states=states):
+                self.now = 0
+                self.calls = []
+                replies = iter(["\n".join(names()), self.healthy.replace("healthy", "starting"), "\n".join(inventory), states])
+                self.assertEqual(self.run_with(lambda *_: next(replies)), 1)
+                self.assertEqual(self.now, 1)
+                self.assertLessEqual(len(self.calls), 4)
 
 
 if __name__ == "__main__":
