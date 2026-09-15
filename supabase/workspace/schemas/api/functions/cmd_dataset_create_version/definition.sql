@@ -8,6 +8,7 @@ declare
   v_root_key text;
   v_uri_slug text;
   v_source_exists boolean := false;
+  v_source_state integer;
   v_source_version text := nullif(btrim(coalesce(p_source_version, '')), '');
   v_highest_version text;
   v_parts integer[];
@@ -166,6 +167,33 @@ begin
         'status', 404,
         'message', 'Source dataset version not found'
       );
+    end if;
+
+    -- Result isolation: a published Result Process is never a version source, because
+    -- the derived row would be created as an ordinary owner-ready draft. The source row
+    -- is locked first so its state cannot change between this admission check and the
+    -- insert, and the established per-identity advisory lock above is retained; no broad
+    -- table lock is taken. The check reads the source's own state, so it holds even when
+    -- no publication receipt exists.
+    if p_table = 'processes' then
+      execute format(
+        'select d.state_code from public.%I d where d.id = $1 and d.version = $2 for update of d',
+        p_table
+      )
+        into v_source_state
+        using p_id, v_source_version;
+
+      if v_source_state = 120 then
+        return jsonb_build_object(
+          'ok', false,
+          'code', 'RESULT_VERSION_DERIVATION_BLOCKED',
+          'status', 403,
+          'message', 'A published Result Process cannot be used as a version source',
+          'details', jsonb_build_object(
+            'state_code', v_source_state
+          )
+        );
+      end if;
     end if;
 
     execute format(

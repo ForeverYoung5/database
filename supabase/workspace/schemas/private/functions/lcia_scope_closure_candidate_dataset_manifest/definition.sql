@@ -1,7 +1,12 @@
 CREATE OR REPLACE FUNCTION "private"."lcia_scope_closure_candidate_dataset_manifest"() RETURNS "jsonb"
-    LANGUAGE "sql" STABLE SECURITY DEFINER
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
+declare
+  v_manifest jsonb;
+begin
+  perform private.lcia_scope_closure_assert_candidate_cache_current();
+
   select coalesce(jsonb_agg(
     jsonb_build_object(
       'datasetType', dataset_type,
@@ -16,7 +21,11 @@ CREATE OR REPLACE FUNCTION "private"."lcia_scope_closure_candidate_dataset_manif
     )
     order by dataset_type, dataset_id, dataset_version, role
   ), '[]'::jsonb)
-  from private.lcia_scope_closure_candidate_document_hashes
+  into v_manifest
+  from private.lcia_scope_closure_candidate_document_hashes;
+
+  return v_manifest;
+end;
 $$;
 
 ALTER FUNCTION "private"."lcia_scope_closure_candidate_dataset_manifest"() OWNER TO "postgres";

@@ -22,7 +22,7 @@ checkPaths:
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-13
 lastReviewedCommit: 784c64dd82e22fa8667e64dc94569fe68411d72c
-lastReviewedNote: "Database #644: reviewed generated-workspace stability against the local-contract suite additions; refresh behavior and stable-overlay rules unchanged."
+lastReviewedNote: "Database #646: reviewed against the state-120 foundation, lifecycle protection, product-read isolation and Result publication slices. No fact owned by this document changed: refresh behavior, stable-overlay rules, and generated-path ownership are unaffected by the added migration, suites and regenerated workspace."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

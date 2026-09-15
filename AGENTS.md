@@ -39,7 +39,7 @@ checkPaths:
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-13
 lastReviewedCommit: 784c64dd82e22fa8667e64dc94569fe68411d72c
-lastReviewedNote: "Database #644: reviewed canonical repository identity migration to tiangong-lca/database, Gitleaks Action removal without replacement, and local-contract suite additions; repo contract, branch policy, and hosted boundaries unchanged."
+lastReviewedNote: "Database #646: reviewed against the state-120 foundation, lifecycle protection, product-read isolation and Result publication slices. Repo contract, schema boundary, ACL/capability manifest rules, branch policy, and hosted boundaries are unchanged; the new migration adds one private receipt table, ten private helpers, one append-only guard trigger and three actor-bound API RPCs within the existing api/private boundaries."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md

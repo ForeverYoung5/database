@@ -72,8 +72,8 @@ begin
         where (
             ((($1 = 'tg' AND d.state_code = 100) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
             or ($1 = 'co' and d.state_code = 200 and ($3 is null or d.team_id = $3))
-            or ($1 = 'my' and $2 is not null and d.user_id = $2 and ($4 is null or d.state_code = $4))
-            or ($1 = 'te' and $3 is not null and $5 and d.team_id = $3 and ($4 is null or d.state_code = $4))
+            or ($1 = 'my' and $2 is not null and d.user_id = $2 and ($4 is null or d.state_code = $4) and d.state_code is distinct from 120)
+            or ($1 = 'te' and $3 is not null and $5 and d.team_id = $3 and ($4 is null or d.state_code = $4) and d.state_code is distinct from 120)
           )
         order by d.id, d.version desc, d.modified_at desc
       ) latest

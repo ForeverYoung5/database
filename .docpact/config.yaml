@@ -1,8 +1,8 @@
 version: 1
 layout: repo
-lastReviewedAt: "2026-09-13"
-lastReviewedCommit: "784c64dd82e22fa8667e64dc94569fe68411d72c"
-lastReviewedNote: "Database #644: migrated canonicalRepo to tiangong-lca/database, removed the Gitleaks Action and its Action-only config, and added the review-queue full-text-search, TIDAS partial-import, and example-dataset-scope suites to the local-contract job; physical directory/owner labels and hosted boundaries unchanged."
+lastReviewedAt: "2026-09-15"
+lastReviewedCommit: "fc21d401f7c87a516af938f9136dd36eba4118e9"
+lastReviewedNote: "Database #646: delivered the Result Process publication slice end to end on the dev line: migration 20260915150000 adds the append-only manager-attestation receipt, the three actor-JWT RPCs (prepare, execute, readback) with strict phase-separated validation and the result-process-content.v1 stored-byte hash domain, and a narrow retryable result_publication_busy envelope for the governed actor row fence. Alongside it: the state-120 foundation, the lifecycle protection slice, and the product-read isolation slice with a restrictive SELECT policy plus exact 120 exclusions in the postgres-owned definer readers and the Edge-used package export admission. Registered the four SQL suites and two two-client concurrency runners in the local-contract job, recorded the proof-matrix rows, and refreshed the generated five-schema workspace and Data API types from the clean final migration state. Ownership, routing, catalog, branch, hosted-boundary, and generated-path rules are unchanged."
 
 # Keep deterministic governance facts here.
 # AGENTS.md remains the repo contract entrypoint.

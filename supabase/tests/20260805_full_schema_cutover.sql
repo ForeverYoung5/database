@@ -68,8 +68,8 @@ select is(
     where namespace.nspname = 'api'
       and routine.prokind = 'f'
   ),
-  290::bigint,
-  'api contains the active cutover and consumer facades, including eight additive Portal/Next version-search APIs and two V4 review queues plus two partial-import APIs'
+  293::bigint,
+  'api contains the active cutover and consumer facades, including eight additive Portal/Next version-search APIs, two V4 review queues, two partial-import APIs, and the three manager-attested Result publication RPCs'
 );
 
 select is(
@@ -80,8 +80,8 @@ select is(
     where namespace.nspname = 'private'
       and routine.prokind = 'f'
   ),
-  341::bigint,
-  'private contains the active helpers, including the twenty-five exact-version, thirteen composite-name and one review-search internals plus two partial-import helpers and the example write guard'
+  351::bigint,
+  'private contains the active helpers, including the twenty-five exact-version, thirteen composite-name and one review-search internals, two partial-import helpers, the example write guard, the two state-120 candidate-cache helpers, the state-120 lifecycle guard, and the seven manager-attested Result publication helpers'
 );
 
 select ok(
@@ -112,8 +112,8 @@ select is(
     from pg_trigger trigger_record
     where not trigger_record.tgisinternal
   ),
-  127::bigint,
-  'all active application triggers and two Process composite-name sync triggers plus seven example write guards remain present'
+  128::bigint,
+  'all active application triggers and two Process composite-name sync triggers plus seven example write guards remain present, including the Result lifecycle guard and the append-only Result attestation guard'
 );
 
 select is(
@@ -121,8 +121,8 @@ select is(
     select count(*)
     from pg_policy
   ),
-  103::bigint,
-  'all RLS policies, nine OAuth guards and five composite-name policies plus seven authenticated example policies remain present'
+  105::bigint,
+  'all RLS policies, nine OAuth guards and five composite-name policies plus seven authenticated example policies and the two restrictive Result read-isolation policies remain present'
 );
 
 select is(
@@ -136,8 +136,8 @@ select is(
       'util'::regnamespace
     )
   ),
-  597::bigint,
-  'all application, OAuth registry and twenty-two composite-name constraints plus ten partial-import constraints remain present'
+  613::bigint,
+  'all application, OAuth registry and twenty-two composite-name constraints plus ten partial-import constraints and the Result publication attestation constraints remain present'
 );
 
 select is(
