@@ -22,9 +22,9 @@ checkPaths:
   - .github/workflows/supabase-dev.yml
   - .env.supabase.dev.local.example
   - .env.supabase.main.local.example
-lastReviewedAt: 2026-09-16
-lastReviewedCommit: 66fd6d3c024ae16e97831d88aab52275792acd7d
-lastReviewedNote: "Reviewed for Database #649: only isolated local-contract startup excludes Studio, Mailpit and analytics collectors; bounded read-only inventory/readiness checks preserve required services without health waivers. All migration, generated schema/type, SQL, upgrade and hosted-job contracts remain. Independent P2 repair and ten-document reviews plus twelve pure tests pass; real Linux equivalence and performance validation remain pending."
+lastReviewedAt: 2026-09-13
+lastReviewedCommit: 784c64dd82e22fa8667e64dc94569fe68411d72c
+lastReviewedNote: "Database #646: reviewed against the added state-120 migrations and their suites. Branch bindings, Vault secret rules, preview classification inputs, and the persistent-Dev deployment path are unchanged; the new tests run in the existing local-contract job and no new deployable configuration input was introduced."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
