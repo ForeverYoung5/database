@@ -20,9 +20,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-13
-lastReviewedCommit: 784c64dd82e22fa8667e64dc94569fe68411d72c
-lastReviewedNote: "Database #644: reviewed the workflow-contract script's added required invocations for three local-contract SQL suites; script entrypoints and workspace refresh behavior unchanged."
+lastReviewedAt: 2026-09-16
+lastReviewedCommit: 66fd6d3c024ae16e97831d88aab52275792acd7d
+lastReviewedNote: "Reviewed for Database #649: only isolated local-contract startup excludes Studio, Mailpit and analytics collectors; bounded read-only inventory/readiness checks preserve required services without health waivers. All migration, generated schema/type, SQL, upgrade and hosted-job contracts remain. Independent P2 repair and ten-document reviews plus twelve pure tests pass; real Linux equivalence and performance validation remain pending."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml
