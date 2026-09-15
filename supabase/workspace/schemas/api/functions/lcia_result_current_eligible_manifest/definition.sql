@@ -8,7 +8,7 @@ CREATE OR REPLACE FUNCTION "api"."lcia_result_current_eligible_manifest"() RETUR
       version,
       state_code
     from public.processes
-    where state_code between 100 and 199
+    where state_code = 100
       and json ? 'processDataSet'
     order by id, version desc, modified_at desc
   ),
@@ -19,7 +19,7 @@ CREATE OR REPLACE FUNCTION "api"."lcia_result_current_eligible_manifest"() RETUR
         coalesce(
           string_agg(id::text || ':' || version, ',' order by id, version),
           ''
-        ) || '|published:100-199:latest-per-id:v1'
+        ) || '|published:100:latest-per-id:v2'
       ) as input_manifest_hash,
       coalesce(
         jsonb_agg(
@@ -35,16 +35,16 @@ CREATE OR REPLACE FUNCTION "api"."lcia_result_current_eligible_manifest"() RETUR
     from eligible
   )
   select jsonb_build_object(
-    'predicateVersion', 'published-state-code-100-199:latest-per-id:v1',
+    'predicateVersion', 'published-state-code-100:latest-per-id:v2',
     'inputStatusFilter', jsonb_build_object(
       'state_code',
-      jsonb_build_object('between', jsonb_build_array(100, 199))
+      jsonb_build_object('eq', 100)
     ),
     'eligibleInputCount', eligible_count,
     'includedInputCount', eligible_count,
     'inputManifestHash', input_manifest_hash,
     'inputManifest', jsonb_build_object(
-      'predicateVersion', 'published-state-code-100-199:latest-per-id:v1',
+      'predicateVersion', 'published-state-code-100:latest-per-id:v2',
       'selectionMode', 'all_eligible',
       'processes', processes
     )

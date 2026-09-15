@@ -118,7 +118,7 @@ select ok(
     )
   ) > 0
   and position(
-    'candidate-public-state-code-100-199:v1'
+    'candidate-public-state-code-100:v2'
     in pg_get_functiondef(
       'private.lcia_scope_closure_normalize_request(jsonb)'::regprocedure
     )

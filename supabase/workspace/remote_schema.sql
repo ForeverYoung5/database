@@ -3137,6 +3137,7 @@ declare
   v_root_key text;
   v_uri_slug text;
   v_source_exists boolean := false;
+  v_source_state integer;
   v_source_version text := nullif(btrim(coalesce(p_source_version, '')), '');
   v_highest_version text;
   v_parts integer[];
@@ -3295,6 +3296,33 @@ begin
         'status', 404,
         'message', 'Source dataset version not found'
       );
+    end if;
+
+    -- Result isolation: a published Result Process is never a version source, because
+    -- the derived row would be created as an ordinary owner-ready draft. The source row
+    -- is locked first so its state cannot change between this admission check and the
+    -- insert, and the established per-identity advisory lock above is retained; no broad
+    -- table lock is taken. The check reads the source's own state, so it holds even when
+    -- no publication receipt exists.
+    if p_table = 'processes' then
+      execute format(
+        'select d.state_code from public.%I d where d.id = $1 and d.version = $2 for update of d',
+        p_table
+      )
+        into v_source_state
+        using p_id, v_source_version;
+
+      if v_source_state = 120 then
+        return jsonb_build_object(
+          'ok', false,
+          'code', 'RESULT_VERSION_DERIVATION_BLOCKED',
+          'status', 403,
+          'message', 'A published Result Process cannot be used as a version source',
+          'details', jsonb_build_object(
+            'state_code', v_source_state
+          )
+        );
+      end if;
     end if;
 
     execute format(
@@ -7730,6 +7758,21 @@ begin
     );
   end if;
 
+  -- A Result Process is withdrawn only through a role-preserving path that does not yet
+  -- exist, so no caller may downgrade one to a draft. The check is deliberately scoped to
+  -- this table so the command stays type-scoped; only processes can reach state 120.
+  if p_table = 'processes' and v_state_code = 120 then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'RESULT_WITHDRAW_REQUIRES_MIGRATION_PATH',
+      'status', 403,
+      'message', 'A published Result Process cannot be withdrawn to a draft',
+      'details', jsonb_build_object(
+        'state_code', v_state_code
+      )
+    );
+  end if;
+
   if v_state_code < 100 or v_state_code >= 200 then
     return jsonb_build_object(
       'ok', false,
@@ -10076,6 +10119,243 @@ ALTER FUNCTION "api"."cmd_portal_lcia_result_package_publish_v1"("p_package_id" 
 
 COMMENT ON FUNCTION "api"."cmd_portal_lcia_result_package_publish_v1"("p_package_id" "uuid", "p_display_default_impact_category" "text", "p_expected_publish_plan_hash" "text", "p_reason" "text", "p_audit" "jsonb") IS 'Publishes only an exact authoritative Portal LCIA V3 package/projection plan and reconciles response-loss retries.';
 
+
+
+CREATE OR REPLACE FUNCTION "api"."cmd_result_process_publish_v1"("p_request" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_actor uuid := auth.uid();
+  v_check jsonb;
+  v_id uuid;
+  v_version text;
+  v_version_char character(9);
+  v_source jsonb;
+  v_reason text;
+  v_key text;
+  v_expected_prep text;
+  v_content_sha text;
+  v_validation jsonb;
+  v_existing private.result_process_publications%rowtype;
+  v_other private.result_process_publications%rowtype;
+  v_binding jsonb;
+  v_classification text;
+  v_state integer;
+  v_stored text;
+  v_prep text;
+  v_receipt jsonb;
+  v_receipt_id uuid;
+  v_published_at timestamptz;
+  v_rows integer;
+begin
+  if v_actor is null then
+    return jsonb_build_object('ok', false, 'code', 'auth_required', 'status', 401,
+      'message', 'Authentication required');
+  end if;
+  if not private.lca_release_is_manager() then
+    return jsonb_build_object('ok', false, 'code', 'not_data_product_manager',
+      'status', 403, 'message', 'Data product manager role is required');
+  end if;
+
+  v_check := private.result_process_publish_validate_v1(p_request, 'execute');
+  if not (v_check->>'ok')::boolean then
+    return v_check;
+  end if;
+
+  v_id := (p_request->>'id')::uuid;
+  v_version := p_request->>'version';
+  v_version_char := v_version::character(9);
+  v_source := p_request->'source';
+  v_reason := p_request#>>'{audit,reason}';
+  v_key := p_request->>'idempotencyKey';
+  v_expected_prep := p_request->>'expectedPreparationHash';
+
+  v_validation := private.result_process_content_validate_v1(
+    p_request->>'contentText', v_id, v_version
+  );
+  if not (v_validation->>'ok')::boolean then
+    return v_validation;
+  end if;
+
+  v_content_sha := private.result_process_content_sha256_v1(p_request->>'contentText');
+  if v_content_sha <> p_request->>'contentSha256' then
+    return jsonb_build_object('ok', false, 'code', 'result_content_hash_mismatch',
+      'status', 400,
+      'message', 'contentSha256 does not match the submitted content bytes');
+  end if;
+
+  -- Fixed lock order: identity namespace first, then idempotency-key namespace.
+  perform pg_advisory_xact_lock(6461201, hashtext(v_id::text || ':' || v_version));
+  perform pg_advisory_xact_lock(6461202, hashtext(v_actor::text || ':' || v_key));
+
+  -- Step 5a: resolve this actor's key FIRST, regardless of identity. A key already bound to
+  -- a different identity is a replay mismatch and must be rejected before any insert, so no
+  -- row can be created and then abandoned.
+  select * into v_other
+  from private.result_process_publications as receipt
+  where receipt.actor_user_id = v_actor
+    and receipt.idempotency_key = v_key;
+
+  if v_other.id is not null
+     and (v_other.dataset_id is distinct from v_id
+          or v_other.dataset_version is distinct from v_version) then
+    return jsonb_build_object('ok', false, 'code', 'result_publication_replay_mismatch',
+      'status', 409,
+      'message', 'This idempotency key is already bound to a different Result identity');
+  end if;
+
+  -- Step 5b: exact-binding retry. The precondition legitimately changed from absent to 120,
+  -- so the preparation is NOT recomputed here; the recorded binding is compared instead.
+  if v_other.id is not null then
+    v_binding := jsonb_build_object(
+      'id', v_id, 'version', v_version, 'contentSha256', v_content_sha,
+      'candidateSetHash', v_source->>'candidateSetHash',
+      'sourceManifestHash', v_source->>'sourceManifestHash',
+      'executablePlanHash', v_source->>'executablePlanHash',
+      'approvalHash', v_source->>'approvalHash',
+      'reason', v_reason, 'expectedPreparationHash', v_expected_prep
+    );
+    if v_other.content_sha256 = v_content_sha
+       and v_other.request_binding = v_binding then
+      select process_row.state_code, process_row.json_ordered::text
+      into v_state, v_stored
+      from public.processes as process_row
+      where process_row.id = v_id
+        and process_row.version = v_version_char;
+      if v_state is distinct from 120
+         or private.result_process_content_sha256_v1(v_stored) <> v_content_sha then
+        return jsonb_build_object('ok', false, 'code', 'result_publication_conflict',
+          'status', 409, 'message', 'The published row no longer matches its attestation');
+      end if;
+      return jsonb_build_object('ok', true, 'reused', true,
+        'data', private.result_process_receipt_json_v1(v_other));
+    end if;
+    return jsonb_build_object('ok', false, 'code', 'result_publication_replay_mismatch',
+      'status', 409,
+      'message', 'This idempotency key is already bound to a different publication binding');
+  end if;
+
+  -- Step 6: no receipt for this key. Classify the row before recomputing the preparation,
+  -- so a row that already exists is reported as a conflict (the specific and useful
+  -- diagnosis) rather than as a stale preparation. A different idempotency key against an
+  -- existing identity therefore conflicts, exactly as the contract requires.
+  select classified.classification, classified.state_code, classified.stored_sha256
+  into v_classification, v_state, v_stored
+  from private.result_process_publish_classify_v1(v_id, v_version, v_content_sha)
+    as classified;
+
+  if v_classification <> 'absent' then
+    return jsonb_build_object('ok', false, 'code', 'result_publication_conflict',
+      'status', 409, 'message', 'A row already exists for this identity',
+      'details', jsonb_build_object('stateCode', v_state));
+  end if;
+
+  v_prep := private.result_process_preparation_hash_v1(
+    v_actor, v_id, v_version, v_content_sha, v_source, v_reason, v_classification, v_state
+  );
+  if v_prep <> v_expected_prep then
+    return jsonb_build_object('ok', false, 'code', 'result_preparation_stale',
+      'status', 409,
+      'message', 'expectedPreparationHash does not match the current preparation');
+  end if;
+
+  -- Absent: insert directly at 120. Never 0, never 100.
+  begin
+    insert into public.processes (id, version, json_ordered, user_id, state_code)
+    values (v_id, v_version_char, (p_request->>'contentText')::json, v_actor, 120);
+  exception
+    when unique_violation then
+      return jsonb_build_object('ok', false, 'code', 'result_publication_conflict',
+        'status', 409, 'message', 'The identity was created concurrently');
+    when lock_not_available then
+      -- Narrow, retryable case. The governed row fence
+      -- private.dataset_flow_identity_active_fence takes a NON-BLOCKING actor lock on
+      -- 'dataset-flow-identity-actor:<user_id>' and raises SQLSTATE 55P03 with this exact
+      -- message when another transaction currently holds it. That is contention on the
+      -- actor's own row domain, not a defect and not an authorization result, and the
+      -- promise of this command is a typed JSON envelope, so it is reported as retryable.
+      --
+      -- The match is deliberately exact and narrow: the insert subtransaction has already
+      -- rolled back here (so no Process row survives), nothing is written to the receipt or
+      -- audit, and EVERY other 55P03 or unexpected failure re-raises unchanged. The
+      -- underlying fence is not altered, relaxed or bypassed, and no retry loop is started:
+      -- the caller decides whether to re-issue the same frozen request.
+      -- Exact equality against the known message. No trimming, no prefix/pattern match: a
+      -- message that merely resembles the fence signal must not be converted.
+      if sqlerrm = 'FLOW_IDENTITY_ACTIVE_SCOPE_ACTOR_FENCE_BUSY' then
+        return jsonb_build_object(
+          'ok', false,
+          'code', 'result_publication_busy',
+          'status', 409,
+          'message',
+            'Another transaction is modifying this actor''s dataset rows. Retry the same request.'
+        );
+      end if;
+      raise;
+  end;
+
+  v_binding := jsonb_build_object(
+    'id', v_id, 'version', v_version, 'contentSha256', v_content_sha,
+    'candidateSetHash', v_source->>'candidateSetHash',
+    'sourceManifestHash', v_source->>'sourceManifestHash',
+    'executablePlanHash', v_source->>'executablePlanHash',
+    'approvalHash', v_source->>'approvalHash',
+    'reason', v_reason, 'expectedPreparationHash', v_expected_prep
+  );
+
+  -- Receipt, attestation audit and the row commit together. Any failure here RAISES so the
+  -- whole transaction rolls back: a returned error must never leave an orphan Process row.
+  insert into private.result_process_publications (
+    actor_user_id, dataset_id, dataset_version, state_code, role, target_state,
+    content_sha256, hash_domain, source_kind, candidate_set_hash, source_manifest_hash,
+    executable_plan_hash, approval_hash, preparation_hash, idempotency_key, reason,
+    request_binding
+  ) values (
+    v_actor, v_id, v_version, 120, 'result_process', 120,
+    v_content_sha, 'result-process-content.v1', 'manager_attestation',
+    v_source->>'candidateSetHash', v_source->>'sourceManifestHash',
+    v_source->>'executablePlanHash', v_source->>'approvalHash',
+    v_prep, v_key, v_reason, v_binding
+  )
+  returning id, published_at into v_receipt_id, v_published_at;
+
+  insert into private.command_audit_log (
+    command, actor_user_id, target_table, target_id, target_version, payload
+  ) values (
+    'cmd_result_process_publish_v1', v_actor, 'processes', v_id, v_version,
+    jsonb_build_object(
+      'reason', v_reason,
+      'receiptId', v_receipt_id,
+      'role', 'result_process',
+      'targetState', 120,
+      'contentSha256', v_content_sha,
+      'hashDomain', 'result-process-content.v1',
+      'sourceKind', 'manager_attestation',
+      'preparationHash', v_prep,
+      'candidateSetHash', v_source->>'candidateSetHash',
+      'sourceManifestHash', v_source->>'sourceManifestHash',
+      'executablePlanHash', v_source->>'executablePlanHash',
+      'approvalHash', v_source->>'approvalHash'
+    )
+  );
+
+  select * into v_existing
+  from private.result_process_publications as receipt
+  where receipt.id = v_receipt_id;
+
+  return jsonb_build_object('ok', true, 'reused', false,
+    'data', private.result_process_receipt_json_v1(v_existing));
+exception
+  when others then
+    -- Any unexpected failure after the row insert propagates: the transaction rolls back
+    -- the row, the receipt and the audit together. Never a partial commit or false success.
+    raise;
+end;
+$$;
+
+
+ALTER FUNCTION "api"."cmd_result_process_publish_v1"("p_request" "jsonb") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "api"."cmd_review_append_log"("p_review_json" "jsonb", "p_action" "text", "p_actor" "uuid", "p_extra" "jsonb" DEFAULT '{}'::"jsonb") RETURNS "jsonb"
@@ -17824,7 +18104,7 @@ CREATE OR REPLACE FUNCTION "api"."lcia_result_current_eligible_manifest"() RETUR
       version,
       state_code
     from public.processes
-    where state_code between 100 and 199
+    where state_code = 100
       and json ? 'processDataSet'
     order by id, version desc, modified_at desc
   ),
@@ -17835,7 +18115,7 @@ CREATE OR REPLACE FUNCTION "api"."lcia_result_current_eligible_manifest"() RETUR
         coalesce(
           string_agg(id::text || ':' || version, ',' order by id, version),
           ''
-        ) || '|published:100-199:latest-per-id:v1'
+        ) || '|published:100:latest-per-id:v2'
       ) as input_manifest_hash,
       coalesce(
         jsonb_agg(
@@ -17851,16 +18131,16 @@ CREATE OR REPLACE FUNCTION "api"."lcia_result_current_eligible_manifest"() RETUR
     from eligible
   )
   select jsonb_build_object(
-    'predicateVersion', 'published-state-code-100-199:latest-per-id:v1',
+    'predicateVersion', 'published-state-code-100:latest-per-id:v2',
     'inputStatusFilter', jsonb_build_object(
       'state_code',
-      jsonb_build_object('between', jsonb_build_array(100, 199))
+      jsonb_build_object('eq', 100)
     ),
     'eligibleInputCount', eligible_count,
     'includedInputCount', eligible_count,
     'inputManifestHash', input_manifest_hash,
     'inputManifest', jsonb_build_object(
-      'predicateVersion', 'published-state-code-100-199:latest-per-id:v1',
+      'predicateVersion', 'published-state-code-100:latest-per-id:v2',
       'selectionMode', 'all_eligible',
       'processes', processes
     )
@@ -21070,7 +21350,7 @@ CREATE TABLE IF NOT EXISTS "public"."processes" (
     "model_version" character(9),
     CONSTRAINT "processes_model_version_format_check" CHECK ((("model_version" IS NULL) OR (("model_version")::"text" ~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'::"text"))),
     CONSTRAINT "processes_model_version_requires_model_id_check" CHECK ((("model_version" IS NULL) OR ("model_id" IS NOT NULL))),
-    CONSTRAINT "processes_state_code_check" CHECK (("state_code" = ANY (ARRAY['-1'::integer, 0, 20, 100, 200])))
+    CONSTRAINT "processes_state_code_check" CHECK (("state_code" = ANY (ARRAY['-1'::integer, 0, 20, 100, 120, 200])))
 );
 
 
@@ -21827,6 +22107,197 @@ ALTER FUNCTION "api"."qry_reference_review_impacted_roots"("p_reference_review_i
 
 COMMENT ON FUNCTION "api"."qry_reference_review_impacted_roots"("p_reference_review_id" "uuid", "p_include_history" boolean) IS 'Returns current dynamically validated impacted roots from append-only target hints without evaluating unrelated roots. p_include_history is retained for signature compatibility and does not restore historical relationships.';
 
+
+
+CREATE OR REPLACE FUNCTION "api"."qry_result_process_publication_readback_v1"("p_request" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $_$
+declare
+  v_actor uuid := auth.uid();
+  v_allowed constant text[] := array['id', 'version', 'idempotencyKey'];
+  v_version_char character(9);
+  v_key text;
+  v_id uuid;
+  v_version text;
+  v_idem text;
+  v_receipt private.result_process_publications%rowtype;
+  v_state integer;
+  v_stored text;
+  v_live_sha text;
+begin
+  if v_actor is null then
+    return jsonb_build_object('ok', false, 'code', 'auth_required', 'status', 401,
+      'message', 'Authentication required');
+  end if;
+  if not private.lca_release_is_manager() then
+    return jsonb_build_object('ok', false, 'code', 'not_data_product_manager',
+      'status', 403, 'message', 'Data product manager role is required');
+  end if;
+
+  if jsonb_typeof(p_request) is distinct from 'object' then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+      'status', 400, 'message', 'Request must be a JSON object');
+  end if;
+  for v_key in select jsonb_object_keys(p_request) loop
+    if not (v_key = any(v_allowed)) then
+      return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+        'status', 400, 'message', 'Unknown request field: ' || v_key);
+    end if;
+  end loop;
+
+  -- Same exact scalar constraints as prepare and execute, so a malformed identity returns
+  -- the promised envelope rather than a raw 22P02 from the uuid cast.
+  if jsonb_typeof(p_request -> 'id') is distinct from 'string'
+     or (p_request ->> 'id') !~
+       '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+      'status', 400, 'message', 'id must be a lowercase UUID string');
+  end if;
+  if jsonb_typeof(p_request -> 'version') is distinct from 'string'
+     or (p_request ->> 'version') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$' then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+      'status', 400, 'message', 'version must be a NN.NN.NNN string');
+  end if;
+  if jsonb_typeof(p_request -> 'idempotencyKey') is distinct from 'string'
+     or length(p_request ->> 'idempotencyKey') not between 1 and 200
+     or (p_request ->> 'idempotencyKey') <> btrim(p_request ->> 'idempotencyKey') then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+      'status', 400,
+      'message', 'idempotencyKey must be 1..200 characters with no surrounding whitespace');
+  end if;
+
+  v_id := (p_request->>'id')::uuid;
+  v_version := p_request->>'version';
+  v_version_char := v_version::character(9);
+  v_idem := p_request->>'idempotencyKey';
+
+  select * into v_receipt
+  from private.result_process_publications as receipt
+  where receipt.actor_user_id = v_actor
+    and receipt.dataset_id = v_id
+    and receipt.dataset_version = v_version
+    and receipt.idempotency_key = v_idem;
+
+  if not found then
+    return jsonb_build_object('ok', false, 'code', 'result_publication_not_found',
+      'status', 404, 'message', 'No publication attestation matches this exact binding');
+  end if;
+
+  select process_row.state_code, process_row.json_ordered::text
+  into v_state, v_stored
+  from public.processes as process_row
+  where process_row.id = v_id
+    and process_row.version = v_version_char;
+
+  if not found then
+    return jsonb_build_object('ok', false, 'code', 'result_publication_not_found',
+      'status', 404, 'message', 'The attested row no longer exists');
+  end if;
+
+  v_live_sha := private.result_process_content_sha256_v1(v_stored);
+
+  return jsonb_build_object(
+    'ok', true,
+    'data', jsonb_build_object(
+      'receipt', private.result_process_receipt_json_v1(v_receipt),
+      'row', jsonb_build_object(
+        'stateCode', v_state,
+        'contentSha256', v_live_sha,
+        'contentText', v_stored
+      ),
+      'verified', jsonb_build_object(
+        'rowMatchesReceipt', (v_live_sha = v_receipt.content_sha256 and v_state = 120),
+        'receiptMatchesRequest', (v_receipt.idempotency_key = v_idem),
+        'liveManager', true
+      )
+    )
+  );
+end;
+$_$;
+
+
+ALTER FUNCTION "api"."qry_result_process_publication_readback_v1"("p_request" "jsonb") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "api"."qry_result_process_publish_prepare_v1"("p_request" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_actor uuid := auth.uid();
+  v_check jsonb;
+  v_id uuid;
+  v_version text;
+  v_source jsonb;
+  v_reason text;
+  v_content_sha text;
+  v_validation jsonb;
+  v_classification text;
+  v_state integer;
+  v_stored text;
+begin
+  if v_actor is null then
+    return jsonb_build_object('ok', false, 'code', 'auth_required', 'status', 401,
+      'message', 'Authentication required');
+  end if;
+  if not private.lca_release_is_manager() then
+    return jsonb_build_object('ok', false, 'code', 'not_data_product_manager',
+      'status', 403, 'message', 'Data product manager role is required');
+  end if;
+
+  v_check := private.result_process_publish_validate_v1(p_request, 'prepare');
+  if not (v_check->>'ok')::boolean then
+    return v_check;
+  end if;
+
+  v_id := (p_request->>'id')::uuid;
+  v_version := p_request->>'version';
+  v_source := p_request->'source';
+  v_reason := p_request#>>'{audit,reason}';
+
+  v_validation := private.result_process_content_validate_v1(
+    p_request->>'contentText', v_id, v_version
+  );
+  if not (v_validation->>'ok')::boolean then
+    return v_validation;
+  end if;
+
+  v_content_sha := private.result_process_content_sha256_v1(p_request->>'contentText');
+  if v_content_sha <> p_request->>'contentSha256' then
+    return jsonb_build_object('ok', false, 'code', 'result_content_hash_mismatch',
+      'status', 400,
+      'message', 'contentSha256 does not match the submitted content bytes');
+  end if;
+
+  select classified.classification, classified.state_code, classified.stored_sha256
+  into v_classification, v_state, v_stored
+  from private.result_process_publish_classify_v1(v_id, v_version, v_content_sha)
+    as classified;
+
+  return jsonb_build_object(
+    'ok', true,
+    'data', jsonb_build_object(
+      'schemaVersion', 'result-process.publish-prepare.v1',
+      'preparationHash', private.result_process_preparation_hash_v1(
+        v_actor, v_id, v_version, v_content_sha, v_source, v_reason,
+        v_classification, v_state
+      ),
+      'actorUserId', v_actor,
+      'id', v_id,
+      'version', v_version,
+      'contentSha256', v_content_sha,
+      'hashDomain', 'result-process-content.v1',
+      'sourceKind', 'manager_attestation',
+      'classification', v_classification,
+      'existingState', v_state
+    )
+  );
+end;
+$$;
+
+
+ALTER FUNCTION "api"."qry_result_process_publish_prepare_v1"("p_request" "jsonb") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "api"."qry_review_admin_queue_items_v2"("p_status" "text" DEFAULT NULL::"text", "p_page" integer DEFAULT 1, "p_page_size" integer DEFAULT 20) RETURNS TABLE("id" "uuid", "review_kind" "text", "target_table" "text", "data_id" "uuid", "data_version" "text", "state_code" integer, "target_owner_id" "uuid", "target_team_id" "uuid", "submitted_revision_checksum" "text", "reviewer_id" "jsonb", "deadline" timestamp with time zone, "reference_count" integer, "completed_reviewer_count" integer, "modified_at" timestamp with time zone, "total_count" bigint)
@@ -26169,9 +26640,13 @@ begin
     into v_exportable_count
     from requested
     join datasets using (table_name, id, version)
-    where datasets.user_id = p_requested_by
-       or datasets.state_code = -1
-       or datasets.state_code between 100 and 199;
+    where (
+        datasets.user_id = p_requested_by
+        or datasets.state_code = -1
+        or datasets.state_code between 100 and 199
+      )
+      -- A published Result Process is never an exportable root, for any requester.
+      and not (datasets.table_name = 'processes' and datasets.state_code = 120);
 
     if v_exportable_count <> v_root_count then
       return jsonb_build_object('ok', false, 'code', 'ROOT_EXPORT_FORBIDDEN', 'status', 403);
@@ -43655,6 +44130,36 @@ $$;
 ALTER FUNCTION "private"."lcia_scope_closure_artifact_write_set_json"("p_write_set_id" "uuid") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "private"."lcia_scope_closure_assert_candidate_cache_current"() RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+begin
+  if exists (
+    select 1
+    from private.lcia_scope_closure_candidate_document_hashes as cache
+    left join public.processes as process_row
+      on process_row.id = cache.source_locator_id
+     and btrim(process_row.version::text) = cache.dataset_version
+    where cache.dataset_type = 'processes'
+      and (
+        process_row.id is null
+        or process_row.state_code is distinct from 100
+        or process_row.json_ordered is null
+      )
+  ) then
+    raise exception using
+      errcode = '55000',
+      message = 'candidate_cache_not_current',
+      detail = 'Run private.maintain_lcia_scope_closure_candidate_cache(integer, integer) until moreRemaining is false.';
+  end if;
+end;
+$$;
+
+
+ALTER FUNCTION "private"."lcia_scope_closure_assert_candidate_cache_current"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "private"."lcia_scope_closure_build_admission_guard"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'private', 'api', 'public', 'util', 'extensions', 'pg_temp'
@@ -43737,9 +44242,14 @@ ALTER FUNCTION "private"."lcia_scope_closure_bundle_binding_matches"("p_check" "
 
 
 CREATE OR REPLACE FUNCTION "private"."lcia_scope_closure_candidate_dataset_manifest"() RETURNS "jsonb"
-    LANGUAGE "sql" STABLE SECURITY DEFINER
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
+declare
+  v_manifest jsonb;
+begin
+  perform private.lcia_scope_closure_assert_candidate_cache_current();
+
   select coalesce(jsonb_agg(
     jsonb_build_object(
       'datasetType', dataset_type,
@@ -43754,7 +44264,11 @@ CREATE OR REPLACE FUNCTION "private"."lcia_scope_closure_candidate_dataset_manif
     )
     order by dataset_type, dataset_id, dataset_version, role
   ), '[]'::jsonb)
-  from private.lcia_scope_closure_candidate_document_hashes
+  into v_manifest
+  from private.lcia_scope_closure_candidate_document_hashes;
+
+  return v_manifest;
+end;
 $$;
 
 
@@ -44114,7 +44628,7 @@ begin
       raise exception using errcode = '22023', message = 'lcia_method_not_in_current_public_release';
     end if;
   else
-    v_predicate := 'candidate-public-state-code-100-199:v1';
+    v_predicate := 'candidate-public-state-code-100:v2';
     if v_mode = 'global_eligible' then
       if jsonb_array_length(coalesce(p_requested_scope->'processes', '[]'::jsonb)) <> 0 then
         raise exception using errcode = '22023', message = 'global_eligible_scope_must_not_supply_processes';
@@ -44126,7 +44640,7 @@ begin
             order by btrim(p.version::text) desc, p.modified_at desc nulls last
           ) as rank
         from public.processes p
-        where p.state_code between 100 and 199
+        where p.state_code = 100
           and p.json_ordered is not null
       )
       select coalesce(jsonb_agg(
@@ -44150,7 +44664,7 @@ begin
         join public.processes p
           on p.id = r.id
          and btrim(p.version::text) = r.version
-         and p.state_code between 100 and 199
+         and p.state_code = 100
          and p.json_ordered is not null
       )
       select count(*), (select count(*) from requested),
@@ -44328,8 +44842,13 @@ begin
     v_role := 'support';
   else
     v_document := new.json_ordered::jsonb;
-    v_is_eligible :=
-      new.state_code between 100 and 199 and v_document is not null;
+    -- Only the processes numeric axis is narrowed to exactly 100. Every other
+    -- candidate dataset keeps its existing support eligibility predicate verbatim;
+    -- this slice does not redefine support data rules.
+    v_is_eligible := case
+      when tg_table_name = 'processes' then new.state_code = 100
+      else new.state_code between 100 and 199
+    end and v_document is not null;
     v_dataset_id := new.id;
     v_role := case
       when tg_table_name = 'processes' then 'unit_process'
@@ -44585,6 +45104,125 @@ $$;
 
 
 ALTER FUNCTION "private"."lifecyclemodels_sync_jsonb_version"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."maintain_lcia_scope_closure_candidate_cache"("p_max_rows" integer DEFAULT 2000, "p_lock_timeout_ms" integer DEFAULT 5000) RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_deleted integer := 0;
+  v_remaining bigint;
+  v_rows integer;
+  v_previous_lock_timeout text := pg_catalog.current_setting('lock_timeout');
+  v_result jsonb;
+begin
+  if p_max_rows is null or p_max_rows < 1 or p_max_rows > 10000 then
+    raise exception using
+      errcode = '22023',
+      message = 'invalid_candidate_cache_maintenance_batch';
+  end if;
+
+  if p_lock_timeout_ms is null
+     or p_lock_timeout_ms < 1
+     or p_lock_timeout_ms > 60000 then
+    raise exception using
+      errcode = '22023',
+      message = 'invalid_candidate_cache_maintenance_lock_timeout';
+  end if;
+
+  perform pg_catalog.set_config(
+    'lock_timeout',
+    p_lock_timeout_ms::text || 'ms',
+    true
+  );
+
+  begin
+    -- The fence. Any source write in flight either committed before this lock is
+    -- granted, in which case its cache effect is already present and accounted for,
+    -- or it starts after the batch completes.
+    lock table public.processes in share row exclusive mode;
+  exception
+    when lock_not_available then
+      perform pg_catalog.set_config('lock_timeout', v_previous_lock_timeout, true);
+      return jsonb_build_object(
+        'status', 'lock_timeout',
+        'removedCount', 0,
+        'remainingCount', null,
+        'batchLimit', p_max_rows,
+        'moreRemaining', true,
+        'lockTimeoutMs', p_lock_timeout_ms
+      );
+  end;
+
+  -- Candidate decision and delete are one statement, taken under the fence so the
+  -- decision cannot be invalidated before the delete. The nested LIMIT subquery
+  -- selects exactly p_max_rows identities in the same deterministic order used by
+  -- the residual probe below, and the delete re-evaluates each cache row's primary
+  -- key against that selection rather than deleting by a separately built key list.
+  delete from private.lcia_scope_closure_candidate_document_hashes as cache
+  where cache.dataset_type = 'processes'
+    and (cache.dataset_id, cache.dataset_version) in (
+      select target.dataset_id, target.dataset_version
+      from (
+        select cache_row.dataset_id, cache_row.dataset_version
+        from private.lcia_scope_closure_candidate_document_hashes as cache_row
+        left join public.processes as process_row
+          on process_row.id = cache_row.source_locator_id
+         and btrim(process_row.version::text) = cache_row.dataset_version
+        where cache_row.dataset_type = 'processes'
+          and (
+            process_row.id is null
+            or process_row.state_code is distinct from 100
+            or process_row.json_ordered is null
+          )
+        order by cache_row.dataset_id, cache_row.dataset_version
+        limit p_max_rows
+      ) as target
+    );
+  get diagnostics v_rows = row_count;
+  v_deleted := v_rows;
+
+  -- Residual after this batch: one row past the limit is enough to decide whether
+  -- more work remains; the exact total is never claimed.
+  select count(*)
+  into v_remaining
+  from (
+    select 1
+    from private.lcia_scope_closure_candidate_document_hashes as cache
+    left join public.processes as process_row
+      on process_row.id = cache.source_locator_id
+     and btrim(process_row.version::text) = cache.dataset_version
+    where cache.dataset_type = 'processes'
+      and (
+        process_row.id is null
+        or process_row.state_code is distinct from 100
+        or process_row.json_ordered is null
+      )
+    limit p_max_rows + 1
+  ) as probe;
+
+  v_result := jsonb_build_object(
+    'status', 'ok',
+    'removedCount', v_deleted,
+    'remainingCount',
+      case when v_remaining > p_max_rows then null else v_remaining end,
+    'batchLimit', p_max_rows,
+    'moreRemaining', (v_remaining > 0),
+    'lockTimeoutMs', p_lock_timeout_ms
+  );
+
+  perform pg_catalog.set_config('lock_timeout', v_previous_lock_timeout, true);
+  return v_result;
+exception
+  when others then
+    perform pg_catalog.set_config('lock_timeout', v_previous_lock_timeout, true);
+    raise;
+end;
+$$;
+
+
+ALTER FUNCTION "private"."maintain_lcia_scope_closure_candidate_cache"("p_max_rows" integer, "p_lock_timeout_ms" integer) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "private"."next_actor_lexical_version_candidates_v2"("p_kind" "text", "p_query" "text", "p_terms" "text"[], "p_residual_filter" "jsonb", "p_process_type" "text", "p_flow_types" "text"[], "p_as_input" boolean, "p_classification_codes" "text"[], "p_elementary_codes" "text"[], "p_data_source" "text", "p_state_code" integer, "p_team_id" "uuid") RETURNS TABLE("rank" bigint, "id" "uuid", "version" "text", "score" double precision)
@@ -52012,6 +52650,374 @@ $$;
 ALTER FUNCTION "private"."protect_example_dataset_write"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "private"."result_process_content_sha256_v1"("p_text" "text") RETURNS "text"
+    LANGUAGE "sql" IMMUTABLE
+    SET "search_path" TO ''
+    AS $$
+  select encode(extensions.digest(convert_to(p_text, 'UTF8'), 'sha256'), 'hex')
+$$;
+
+
+ALTER FUNCTION "private"."result_process_content_sha256_v1"("p_text" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."result_process_content_validate_v1"("p_text" "text", "p_id" "uuid", "p_version" "text") RETURNS "jsonb"
+    LANGUAGE "plpgsql" IMMUTABLE
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_document json;
+  v_root_uuid text;
+  v_root_version text;
+begin
+  begin
+    v_document := p_text::json;
+  exception when others then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_content_invalid',
+      'status', 400, 'message', 'contentText is not valid JSON');
+  end;
+
+  if not (v_document IS JSON OBJECT WITH UNIQUE KEYS) then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_content_invalid',
+      'status', 400, 'message',
+      'contentText must be a JSON object with no duplicate keys at any level');
+  end if;
+
+  if json_typeof(v_document -> 'processDataSet') is distinct from 'object' then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_content_invalid',
+      'status', 400, 'message', 'contentText must contain processDataSet');
+  end if;
+
+  v_root_uuid := v_document #>>
+    '{processDataSet,processInformation,dataSetInformation,common:UUID}';
+  v_root_version := v_document #>>
+    '{processDataSet,administrativeInformation,publicationAndOwnership,common:dataSetVersion}';
+
+  if json_typeof(v_document #> '{processDataSet,processInformation,dataSetInformation}') is distinct from 'object'
+     or json_typeof(v_document #> '{processDataSet,processInformation,dataSetInformation,common:UUID}') is distinct from 'string'
+     or lower(v_root_uuid) <> p_id::text then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_content_invalid',
+      'status', 400, 'message', 'processDataSet common:UUID must be a string equal to id');
+  end if;
+
+  if json_typeof(v_document #> '{processDataSet,administrativeInformation,publicationAndOwnership,common:dataSetVersion}') is distinct from 'string'
+     or v_root_version <> p_version then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_content_invalid',
+      'status', 400, 'message',
+      'publicationAndOwnership common:dataSetVersion must be a string equal to version');
+  end if;
+
+  return jsonb_build_object('ok', true, 'document', v_document);
+end;
+$$;
+
+
+ALTER FUNCTION "private"."result_process_content_validate_v1"("p_text" "text", "p_id" "uuid", "p_version" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."result_process_preparation_hash_v1"("p_actor" "uuid", "p_id" "uuid", "p_version" "text", "p_content_sha256" "text", "p_source" "jsonb", "p_reason" "text", "p_classification" "text", "p_state" integer) RETURNS "text"
+    LANGUAGE "sql" IMMUTABLE
+    SET "search_path" TO ''
+    AS $$
+  select encode(extensions.digest(convert_to(
+    private.lcia_scope_closure_worker_canonical_json_text(jsonb_build_object(
+      'domain', 'result-process-preparation.v1',
+      'actorUserId', p_actor,
+      'id', p_id,
+      'version', p_version,
+      'contentSha256', p_content_sha256,
+      'sourceKind', 'manager_attestation',
+      'candidateSetHash', p_source ->> 'candidateSetHash',
+      'sourceManifestHash', p_source ->> 'sourceManifestHash',
+      'reason', p_reason,
+      'classification', p_classification,
+      'existingState', p_state
+    )), 'UTF8'), 'sha256'), 'hex')
+$$;
+
+
+ALTER FUNCTION "private"."result_process_preparation_hash_v1"("p_actor" "uuid", "p_id" "uuid", "p_version" "text", "p_content_sha256" "text", "p_source" "jsonb", "p_reason" "text", "p_classification" "text", "p_state" integer) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."result_process_publications_immutable_v1"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO ''
+    AS $$
+begin
+  raise exception using
+    errcode = '55000',
+    message = 'RESULT_PROCESS_ATTESTATION_IMMUTABLE',
+    detail = 'A Result Process publication attestation is append-only.';
+end;
+$$;
+
+
+ALTER FUNCTION "private"."result_process_publications_immutable_v1"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."result_process_publish_classify_v1"("p_id" "uuid", "p_version" "text", "p_content_sha256" "text", OUT "classification" "text", OUT "state_code" integer, OUT "stored_sha256" "text") RETURNS "record"
+    LANGUAGE "plpgsql" STABLE
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_stored text;
+begin
+  select process_row.state_code, process_row.json_ordered::text
+  into state_code, v_stored
+  from public.processes as process_row
+  where process_row.id = p_id
+    and btrim(process_row.version::text) = p_version;
+
+  if not found then
+    classification := 'absent';
+    state_code := null;
+    stored_sha256 := null;
+    return;
+  end if;
+
+  stored_sha256 := private.result_process_content_sha256_v1(v_stored);
+
+  if state_code = 120 and stored_sha256 = p_content_sha256 then
+    -- Strictly content candidacy. It is not authorization, not actor/source matching, and
+    -- not a no-op: execute still resolves the exact receipt before anything else.
+    classification := 'candidate_content_matches_existing';
+  else
+    classification := 'conflict';
+  end if;
+end;
+$$;
+
+
+ALTER FUNCTION "private"."result_process_publish_classify_v1"("p_id" "uuid", "p_version" "text", "p_content_sha256" "text", OUT "classification" "text", OUT "state_code" integer, OUT "stored_sha256" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."result_process_publish_validate_v1"("p_request" "jsonb", "p_phase" "text") RETURNS "jsonb"
+    LANGUAGE "plpgsql" IMMUTABLE
+    SET "search_path" TO ''
+    AS $_$
+declare
+  v_hex constant text := '^[0-9a-f]{64}$';
+  v_common constant text[] := array[
+    'table', 'id', 'version', 'contentText', 'contentSha256', 'sourceKind', 'source', 'audit'
+  ];
+  v_prepare_source constant text[] := array['candidateSetHash', 'sourceManifestHash'];
+  v_execute_source constant text[] := array[
+    'candidateSetHash', 'sourceManifestHash', 'executablePlanHash', 'approvalHash'
+  ];
+  v_prepare_only constant text[] := array[]::text[];
+  v_execute_only constant text[] := array['expectedPreparationHash', 'idempotencyKey'];
+  v_allowed text[];
+  v_source_allowed text[];
+  v_key text;
+  v_reason text;
+  v_key_value text;
+begin
+  if p_phase not in ('prepare', 'execute') then
+    raise exception using errcode = '22023', message = 'invalid publication phase';
+  end if;
+
+  if jsonb_typeof(p_request) is distinct from 'object' then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+      'status', 400, 'message', 'Request must be a JSON object');
+  end if;
+
+  v_allowed := case when p_phase = 'prepare'
+    then v_common || v_prepare_only
+    else v_common || v_execute_only end;
+  v_source_allowed := case when p_phase = 'prepare'
+    then v_prepare_source else v_execute_source end;
+
+  for v_key in select jsonb_object_keys(p_request) loop
+    if not (v_key = any(v_allowed)) then
+      return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+        'status', 400,
+        'message', 'Field not allowed in ' || p_phase || ': ' || v_key);
+    end if;
+  end loop;
+
+  -- Server-derived authority fields are rejected outright.
+  if p_request ? 'role' or p_request ? 'targetState'
+     or p_request ? 'actorUserId' or p_request ? 'stateCode' then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+      'status', 400,
+      'message', 'role, targetState, stateCode and actorUserId are server-derived');
+  end if;
+
+  -- source is required in both phases, and its members are phase-specific.
+  if jsonb_typeof(p_request -> 'source') is distinct from 'object' then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+      'status', 400, 'message', 'source is required and must be an object');
+  end if;
+  for v_key in select jsonb_object_keys(p_request -> 'source') loop
+    if not (v_key = any(v_source_allowed)) then
+      return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+        'status', 400,
+        'message', 'Source field not allowed in ' || p_phase || ': ' || v_key);
+    end if;
+  end loop;
+  foreach v_key in array v_source_allowed loop
+    if jsonb_typeof(p_request -> 'source' -> v_key) is distinct from 'string'
+       or (p_request -> 'source' ->> v_key) !~ v_hex then
+      return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+        'status', 400,
+        'message', 'source.' || v_key || ' must be a lowercase SHA-256 hex string');
+    end if;
+  end loop;
+
+  if jsonb_typeof(p_request -> 'audit') is distinct from 'object'
+     or jsonb_typeof(p_request -> 'audit' -> 'reason') is distinct from 'string' then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+      'status', 400, 'message', 'audit.reason is required and must be a string');
+  end if;
+  for v_key in select jsonb_object_keys(p_request -> 'audit') loop
+    if v_key <> 'reason' then
+      return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+        'status', 400, 'message', 'Unknown audit field: ' || v_key);
+    end if;
+  end loop;
+  v_reason := p_request -> 'audit' ->> 'reason';
+  if length(v_reason) not between 1 and 1000
+     or octet_length(v_reason) > 4000
+     or v_reason ~ '[[:cntrl:]]' then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+      'status', 400, 'message', 'audit.reason must be 1..1000 printable characters');
+  end if;
+
+  if jsonb_typeof(p_request -> 'table') is distinct from 'string'
+     or p_request ->> 'table' <> 'processes' then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+      'status', 400, 'message', 'table must be the string processes');
+  end if;
+  if jsonb_typeof(p_request -> 'id') is distinct from 'string'
+     or (p_request ->> 'id') !~
+       '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+      'status', 400, 'message', 'id must be a lowercase UUID string');
+  end if;
+  if jsonb_typeof(p_request -> 'version') is distinct from 'string'
+     or (p_request ->> 'version') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$' then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+      'status', 400, 'message', 'version must be a NN.NN.NNN string');
+  end if;
+  if jsonb_typeof(p_request -> 'sourceKind') is distinct from 'string'
+     or p_request ->> 'sourceKind' <> 'manager_attestation' then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+      'status', 400, 'message', 'sourceKind must be the string manager_attestation');
+  end if;
+  if jsonb_typeof(p_request -> 'contentSha256') is distinct from 'string'
+     or (p_request ->> 'contentSha256') !~ v_hex then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+      'status', 400, 'message', 'contentSha256 must be a lowercase SHA-256 hex string');
+  end if;
+  if jsonb_typeof(p_request -> 'contentText') is distinct from 'string' then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+      'status', 400, 'message', 'contentText must be a string containing the JSON document');
+  end if;
+  if octet_length(p_request ->> 'contentText') not between 2 and 1048576 then
+    return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+      'status', 400, 'message', 'contentText must be between 2 bytes and 1 MiB');
+  end if;
+
+  if p_phase = 'execute' then
+    if jsonb_typeof(p_request -> 'expectedPreparationHash') is distinct from 'string'
+       or (p_request ->> 'expectedPreparationHash') !~ v_hex then
+      return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+        'status', 400,
+        'message', 'expectedPreparationHash must be a lowercase SHA-256 hex string');
+    end if;
+    if jsonb_typeof(p_request -> 'idempotencyKey') is distinct from 'string' then
+      return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+        'status', 400, 'message', 'idempotencyKey must be a string');
+    end if;
+    v_key_value := p_request ->> 'idempotencyKey';
+    if length(v_key_value) not between 1 and 200
+       or v_key_value <> btrim(v_key_value) then
+      return jsonb_build_object('ok', false, 'code', 'result_publish_request_invalid',
+        'status', 400,
+        'message', 'idempotencyKey must be 1..200 characters with no surrounding whitespace');
+    end if;
+  end if;
+
+  return jsonb_build_object('ok', true);
+end;
+$_$;
+
+
+ALTER FUNCTION "private"."result_process_publish_validate_v1"("p_request" "jsonb", "p_phase" "text") OWNER TO "postgres";
+
+
+CREATE TABLE IF NOT EXISTS "private"."result_process_publications" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "actor_user_id" "uuid" NOT NULL,
+    "dataset_id" "uuid" NOT NULL,
+    "dataset_version" "text" NOT NULL,
+    "state_code" integer NOT NULL,
+    "role" "text" NOT NULL,
+    "target_state" integer NOT NULL,
+    "content_sha256" "text" NOT NULL,
+    "hash_domain" "text" NOT NULL,
+    "source_kind" "text" NOT NULL,
+    "candidate_set_hash" "text" NOT NULL,
+    "source_manifest_hash" "text" NOT NULL,
+    "executable_plan_hash" "text" NOT NULL,
+    "approval_hash" "text" NOT NULL,
+    "preparation_hash" "text" NOT NULL,
+    "idempotency_key" "text" NOT NULL,
+    "reason" "text" NOT NULL,
+    "request_binding" "jsonb" NOT NULL,
+    "published_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "result_process_publications_approval_hash_chk" CHECK (("approval_hash" ~ '^[0-9a-f]{64}$'::"text")),
+    CONSTRAINT "result_process_publications_binding_chk" CHECK (("jsonb_typeof"("request_binding") = 'object'::"text")),
+    CONSTRAINT "result_process_publications_candidate_hash_chk" CHECK (("candidate_set_hash" ~ '^[0-9a-f]{64}$'::"text")),
+    CONSTRAINT "result_process_publications_content_hash_chk" CHECK (("content_sha256" ~ '^[0-9a-f]{64}$'::"text")),
+    CONSTRAINT "result_process_publications_domain_chk" CHECK (("hash_domain" = 'result-process-content.v1'::"text")),
+    CONSTRAINT "result_process_publications_key_chk" CHECK ((("length"("idempotency_key") >= 1) AND ("length"("idempotency_key") <= 200))),
+    CONSTRAINT "result_process_publications_manifest_hash_chk" CHECK (("source_manifest_hash" ~ '^[0-9a-f]{64}$'::"text")),
+    CONSTRAINT "result_process_publications_plan_hash_chk" CHECK (("executable_plan_hash" ~ '^[0-9a-f]{64}$'::"text")),
+    CONSTRAINT "result_process_publications_preparation_hash_chk" CHECK (("preparation_hash" ~ '^[0-9a-f]{64}$'::"text")),
+    CONSTRAINT "result_process_publications_reason_chk" CHECK ((("length"("reason") >= 1) AND ("length"("reason") <= 1000))),
+    CONSTRAINT "result_process_publications_role_chk" CHECK (("role" = 'result_process'::"text")),
+    CONSTRAINT "result_process_publications_source_kind_chk" CHECK (("source_kind" = 'manager_attestation'::"text")),
+    CONSTRAINT "result_process_publications_state_chk" CHECK (("state_code" = 120)),
+    CONSTRAINT "result_process_publications_target_chk" CHECK (("target_state" = 120)),
+    CONSTRAINT "result_process_publications_version_chk" CHECK (("dataset_version" ~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'::"text"))
+);
+
+
+ALTER TABLE "private"."result_process_publications" OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."result_process_receipt_json_v1"("p_receipt" "private"."result_process_publications") RETURNS "jsonb"
+    LANGUAGE "sql" IMMUTABLE
+    SET "search_path" TO ''
+    AS $$
+  select jsonb_build_object(
+    'schemaVersion', 'result-process.publication-receipt.v1',
+    'receiptId', p_receipt.id,
+    'actorUserId', p_receipt.actor_user_id,
+    'id', p_receipt.dataset_id,
+    'version', p_receipt.dataset_version,
+    'stateCode', p_receipt.state_code,
+    'role', p_receipt.role,
+    'targetState', p_receipt.target_state,
+    'contentSha256', p_receipt.content_sha256,
+    'hashDomain', p_receipt.hash_domain,
+    'sourceKind', p_receipt.source_kind,
+    'candidateSetHash', p_receipt.candidate_set_hash,
+    'sourceManifestHash', p_receipt.source_manifest_hash,
+    'executablePlanHash', p_receipt.executable_plan_hash,
+    'approvalHash', p_receipt.approval_hash,
+    'preparationHash', p_receipt.preparation_hash,
+    'idempotencyKey', p_receipt.idempotency_key,
+    'publishedAt', p_receipt.published_at,
+    'reason', p_receipt.reason
+  )
+$$;
+
+
+ALTER FUNCTION "private"."result_process_receipt_json_v1"("p_receipt" "private"."result_process_publications") OWNER TO "postgres";
+
+
 CREATE TABLE IF NOT EXISTS "private"."reviews" (
     "id" "uuid" NOT NULL,
     "data_id" "uuid",
@@ -53544,8 +54550,8 @@ begin
         where (
             ((($1 = 'tg' AND d.state_code = 100) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
             or ($1 = 'co' and d.state_code = 200 and ($3 is null or d.team_id = $3))
-            or ($1 = 'my' and $2 is not null and d.user_id = $2 and ($4 is null or d.state_code = $4))
-            or ($1 = 'te' and $3 is not null and $5 and d.team_id = $3 and ($4 is null or d.state_code = $4))
+            or ($1 = 'my' and $2 is not null and d.user_id = $2 and ($4 is null or d.state_code = $4) and d.state_code is distinct from 120)
+            or ($1 = 'te' and $3 is not null and $5 and d.team_id = $3 and ($4 is null or d.state_code = $4) and d.state_code is distinct from 120)
           )
         order by d.id, d.version desc, d.modified_at desc
       ) latest
@@ -54409,8 +55415,8 @@ begin
           and (
             (((normalized_data_source = 'tg' AND p.state_code = 100) OR (normalized_data_source = 'ex' AND p.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or p.team_id = team_id_filter))
             or (normalized_data_source = 'co' and p.state_code = 200 and (team_id_filter is null or p.team_id = team_id_filter))
-            or (normalized_data_source = 'my' and effective_user_id is not null and p.user_id = effective_user_id and (state_code_filter is null or p.state_code = state_code_filter) and (not owner_draft_only or (p.state_code = 0)))
-            or (normalized_data_source = 'te' and team_id_filter is not null and can_read_team_filter and p.team_id = team_id_filter and (state_code_filter is null or p.state_code = state_code_filter))
+            or (normalized_data_source = 'my' and effective_user_id is not null and p.user_id = effective_user_id and (state_code_filter is null or p.state_code = state_code_filter) and (not owner_draft_only or (p.state_code = 0)) and p.state_code is distinct from 120)
+            or (normalized_data_source = 'te' and team_id_filter is not null and can_read_team_filter and p.team_id = team_id_filter and (state_code_filter is null or p.state_code = state_code_filter) and p.state_code is distinct from 120)
           )
           and (
             coalesce(type_of_data_set_filter, 'all') = 'all'
@@ -54428,8 +55434,8 @@ begin
             and (
               (((normalized_data_source = 'tg' AND p2.state_code = 100) OR (normalized_data_source = 'ex' AND p2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or p2.team_id = team_id_filter))
               or (normalized_data_source = 'co' and p2.state_code = 200 and (team_id_filter is null or p2.team_id = team_id_filter))
-              or (normalized_data_source = 'my' and effective_user_id is not null and p2.user_id = effective_user_id and (state_code_filter is null or p2.state_code = state_code_filter) and (not owner_draft_only or (p2.state_code = 0)))
-              or (normalized_data_source = 'te' and team_id_filter is not null and can_read_team_filter and p2.team_id = team_id_filter and (state_code_filter is null or p2.state_code = state_code_filter))
+              or (normalized_data_source = 'my' and effective_user_id is not null and p2.user_id = effective_user_id and (state_code_filter is null or p2.state_code = state_code_filter) and (not owner_draft_only or (p2.state_code = 0)) and p2.state_code is distinct from 120)
+              or (normalized_data_source = 'te' and team_id_filter is not null and can_read_team_filter and p2.team_id = team_id_filter and (state_code_filter is null or p2.state_code = state_code_filter) and p2.state_code is distinct from 120)
             )
           order by p2.version desc, p2.modified_at desc
           limit 1
@@ -54471,8 +55477,8 @@ begin
       where (
           ((($5 = 'tg' AND p.state_code = 100) OR ($5 = 'ex' AND p.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or p.team_id = $7))
           or ($5 = 'co' and p.state_code = 200 and ($7 is null or p.team_id = $7))
-          or ($5 = 'my' and $6 is not null and p.user_id = $6 and ($8 is null or p.state_code = $8) and (not $12 or (p.state_code = 0)))
-          or ($5 = 'te' and $7 is not null and $9 and p.team_id = $7 and ($8 is null or p.state_code = $8))
+          or ($5 = 'my' and $6 is not null and p.user_id = $6 and ($8 is null or p.state_code = $8) and (not $12 or (p.state_code = 0)) and p.state_code is distinct from 120)
+          or ($5 = 'te' and $7 is not null and $9 and p.team_id = $7 and ($8 is null or p.state_code = $8) and p.state_code is distinct from 120)
         )
         %s
         and (
@@ -54491,8 +55497,8 @@ begin
           and (
             ((($5 = 'tg' AND p2.state_code = 100) OR ($5 = 'ex' AND p2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or p2.team_id = $7))
             or ($5 = 'co' and p2.state_code = 200 and ($7 is null or p2.team_id = $7))
-            or ($5 = 'my' and $6 is not null and p2.user_id = $6 and ($8 is null or p2.state_code = $8) and (not $12 or (p2.state_code = 0)))
-            or ($5 = 'te' and $7 is not null and $9 and p2.team_id = $7 and ($8 is null or p2.state_code = $8))
+            or ($5 = 'my' and $6 is not null and p2.user_id = $6 and ($8 is null or p2.state_code = $8) and (not $12 or (p2.state_code = 0)) and p2.state_code is distinct from 120)
+            or ($5 = 'te' and $7 is not null and $9 and p2.team_id = $7 and ($8 is null or p2.state_code = $8) and p2.state_code is distinct from 120)
           )
         order by p2.version desc, p2.modified_at desc
         limit 1
@@ -63439,6 +64445,53 @@ $$;
 
 
 ALTER FUNCTION "private"."worker_retry_job"("p_job_id" "uuid", "p_run_after" timestamp with time zone, "p_max_attempts" integer, "p_reason" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."zzz_guard_process_result_lifecycle"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_derivatives constant text[] :=
+    array['extracted_md', 'search_text', 'embedding_ft', 'embedding_ft_at'];
+begin
+  if tg_op = 'DELETE' then
+    if old.state_code = 120 then
+      raise exception using
+        errcode = '55000',
+        message = 'RESULT_PROCESS_LIFECYCLE_IMMUTABLE',
+        detail = 'A published Result Process row cannot be deleted.';
+    end if;
+    return old;
+  end if;
+
+  if old.state_code = 120 then
+    if new.json_ordered::text is distinct from old.json_ordered::text then
+      raise exception using
+        errcode = '55000',
+        message = 'RESULT_PROCESS_LIFECYCLE_IMMUTABLE',
+        detail = 'A published Result Process document cannot be modified.';
+    end if;
+
+    if (to_jsonb(new) - v_derivatives) is distinct from (to_jsonb(old) - v_derivatives)
+    then
+      raise exception using
+        errcode = '55000',
+        message = 'RESULT_PROCESS_LIFECYCLE_IMMUTABLE',
+        detail = 'Only extracted_md, search_text, embedding_ft and embedding_ft_at may change on a published Result Process.';
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "private"."zzz_guard_process_result_lifecycle"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "private"."zzz_guard_process_result_lifecycle"() IS 'Freezes a published Result Process (OLD state_code 120) except its four derivative columns.';
+
 
 
 CREATE OR REPLACE FUNCTION "util"."admit_dataset_derivative_rebuild_batch"("p_actor_user_id" "uuid", "p_batch_id" "uuid", "p_plan_sha256" "text", "p_operation_id" "text", "p_reason_code" "text", "p_targets" "jsonb") RETURNS "jsonb"
@@ -74260,6 +75313,11 @@ ALTER TABLE ONLY "private"."portal_sitemap_rows_v1"
 
 
 
+ALTER TABLE ONLY "private"."result_process_publications"
+    ADD CONSTRAINT "result_process_publications_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "private"."reviews"
     ADD CONSTRAINT "reviews_pkey" PRIMARY KEY ("id");
 
@@ -75163,6 +76221,14 @@ COMMENT ON INDEX "private"."portal_sitemap_rows_shard_v1_idx" IS 'Latest-version
 
 
 
+CREATE UNIQUE INDEX "result_process_publications_identity_uidx" ON "private"."result_process_publications" USING "btree" ("dataset_id", "dataset_version");
+
+
+
+CREATE UNIQUE INDEX "result_process_publications_key_uidx" ON "private"."result_process_publications" USING "btree" ("actor_user_id", "idempotency_key");
+
+
+
 CREATE INDEX "reviews_active_root_assignment_lookup_idx" ON "private"."reviews" USING "btree" ("target_table", "data_id", "data_version", "state_code" DESC, "modified_at" DESC, "id") WHERE (("review_kind" = 'root'::"text") AND ("state_code" = ANY (ARRAY[0, 1])));
 
 
@@ -75979,6 +77045,10 @@ COMMENT ON TRIGGER "portal_sitemap_rows_sync_v1" ON "private"."portal_catalog_fa
 
 
 
+CREATE OR REPLACE TRIGGER "result_process_publications_immutable" BEFORE DELETE OR UPDATE ON "private"."result_process_publications" FOR EACH ROW EXECUTE FUNCTION "private"."result_process_publications_immutable_v1"();
+
+
+
 CREATE OR REPLACE TRIGGER "reviews_v2_kind_guard" BEFORE INSERT OR UPDATE ON "private"."reviews" FOR EACH ROW EXECUTE FUNCTION "private"."review_v2_kind_guard"();
 
 
@@ -76344,6 +77414,10 @@ CREATE OR REPLACE TRIGGER "zz_next_hybrid_public_flow_candidate_v2" AFTER INSERT
 
 
 CREATE OR REPLACE TRIGGER "zz_next_hybrid_public_process_candidate_v2" AFTER INSERT OR DELETE OR UPDATE OF "id", "version", "state_code", "team_id", "json", "embedding_ft", "modified_at" ON "public"."processes" FOR EACH ROW EXECUTE FUNCTION "private"."sync_next_hybrid_public_process_candidate_v2"();
+
+
+
+CREATE OR REPLACE TRIGGER "zzz_guard_process_result_lifecycle" BEFORE DELETE OR UPDATE ON "public"."processes" FOR EACH ROW EXECUTE FUNCTION "private"."zzz_guard_process_result_lifecycle"();
 
 
 
@@ -77600,6 +78674,14 @@ COMMENT ON POLICY "portal_public_executor_select_unitgroups_v1" ON "public"."uni
 ALTER TABLE "public"."processes" ENABLE ROW LEVEL SECURITY;
 
 
+CREATE POLICY "result_process_no_generic_read" ON "public"."processes" AS RESTRICTIVE FOR SELECT TO "authenticated", "anon" USING (("state_code" IS DISTINCT FROM 120));
+
+
+
+CREATE POLICY "result_process_no_generic_read_public_executor" ON "public"."processes" AS RESTRICTIVE FOR SELECT TO "portal_public_executor", "next_public_search_executor" USING (("state_code" IS DISTINCT FROM 120));
+
+
+
 ALTER TABLE "public"."sources" ENABLE ROW LEVEL SECURITY;
 
 
@@ -77973,6 +79055,12 @@ GRANT ALL ON FUNCTION "api"."cmd_portal_lcia_projection_revoke_publication_v1"("
 
 REVOKE ALL ON FUNCTION "api"."cmd_portal_lcia_result_package_publish_v1"("p_package_id" "uuid", "p_display_default_impact_category" "text", "p_expected_publish_plan_hash" "text", "p_reason" "text", "p_audit" "jsonb") FROM PUBLIC;
 GRANT ALL ON FUNCTION "api"."cmd_portal_lcia_result_package_publish_v1"("p_package_id" "uuid", "p_display_default_impact_category" "text", "p_expected_publish_plan_hash" "text", "p_reason" "text", "p_audit" "jsonb") TO "authenticated";
+
+
+
+REVOKE ALL ON FUNCTION "api"."cmd_result_process_publish_v1"("p_request" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."cmd_result_process_publish_v1"("p_request" "jsonb") TO "api_internal_executor";
+GRANT ALL ON FUNCTION "api"."cmd_result_process_publish_v1"("p_request" "jsonb") TO "authenticated";
 
 
 
@@ -78969,6 +80057,18 @@ GRANT ALL ON FUNCTION "api"."qry_portal_lcia_result_package_publish_prepare_v1"(
 
 REVOKE ALL ON FUNCTION "api"."qry_reference_review_impacted_roots"("p_reference_review_id" "uuid", "p_include_history" boolean) FROM PUBLIC;
 GRANT ALL ON FUNCTION "api"."qry_reference_review_impacted_roots"("p_reference_review_id" "uuid", "p_include_history" boolean) TO "api_internal_executor";
+
+
+
+REVOKE ALL ON FUNCTION "api"."qry_result_process_publication_readback_v1"("p_request" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."qry_result_process_publication_readback_v1"("p_request" "jsonb") TO "api_internal_executor";
+GRANT ALL ON FUNCTION "api"."qry_result_process_publication_readback_v1"("p_request" "jsonb") TO "authenticated";
+
+
+
+REVOKE ALL ON FUNCTION "api"."qry_result_process_publish_prepare_v1"("p_request" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."qry_result_process_publish_prepare_v1"("p_request" "jsonb") TO "api_internal_executor";
+GRANT ALL ON FUNCTION "api"."qry_result_process_publish_prepare_v1"("p_request" "jsonb") TO "authenticated";
 
 
 
@@ -80079,6 +81179,11 @@ GRANT ALL ON FUNCTION "private"."lcia_scope_closure_artifact_write_set_json"("p_
 
 
 
+REVOKE ALL ON FUNCTION "private"."lcia_scope_closure_assert_candidate_cache_current"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "private"."lcia_scope_closure_assert_candidate_cache_current"() TO "api_internal_executor";
+
+
+
 REVOKE ALL ON FUNCTION "private"."lcia_scope_closure_build_admission_guard"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "private"."lcia_scope_closure_build_admission_guard"() TO "api_internal_executor";
 
@@ -80183,6 +81288,11 @@ REVOKE ALL ON FUNCTION "private"."lexical_version_candidates_v1"("p_kind" "text"
 REVOKE ALL ON FUNCTION "private"."lifecyclemodels_sync_jsonb_version"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "private"."lifecyclemodels_sync_jsonb_version"() TO "service_role";
 GRANT ALL ON FUNCTION "private"."lifecyclemodels_sync_jsonb_version"() TO "api_internal_executor";
+
+
+
+REVOKE ALL ON FUNCTION "private"."maintain_lcia_scope_closure_candidate_cache"("p_max_rows" integer, "p_lock_timeout_ms" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "private"."maintain_lcia_scope_closure_candidate_cache"("p_max_rows" integer, "p_lock_timeout_ms" integer) TO "api_internal_executor";
 
 
 
@@ -80629,6 +81739,44 @@ GRANT ALL ON FUNCTION "private"."processes_sync_jsonb_version"() TO "api_interna
 
 
 REVOKE ALL ON FUNCTION "private"."protect_example_dataset_write"() FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."result_process_content_sha256_v1"("p_text" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "private"."result_process_content_sha256_v1"("p_text" "text") TO "api_internal_executor";
+
+
+
+REVOKE ALL ON FUNCTION "private"."result_process_content_validate_v1"("p_text" "text", "p_id" "uuid", "p_version" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "private"."result_process_content_validate_v1"("p_text" "text", "p_id" "uuid", "p_version" "text") TO "api_internal_executor";
+
+
+
+REVOKE ALL ON FUNCTION "private"."result_process_preparation_hash_v1"("p_actor" "uuid", "p_id" "uuid", "p_version" "text", "p_content_sha256" "text", "p_source" "jsonb", "p_reason" "text", "p_classification" "text", "p_state" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "private"."result_process_preparation_hash_v1"("p_actor" "uuid", "p_id" "uuid", "p_version" "text", "p_content_sha256" "text", "p_source" "jsonb", "p_reason" "text", "p_classification" "text", "p_state" integer) TO "api_internal_executor";
+
+
+
+REVOKE ALL ON FUNCTION "private"."result_process_publications_immutable_v1"() FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."result_process_publish_classify_v1"("p_id" "uuid", "p_version" "text", "p_content_sha256" "text", OUT "classification" "text", OUT "state_code" integer, OUT "stored_sha256" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "private"."result_process_publish_classify_v1"("p_id" "uuid", "p_version" "text", "p_content_sha256" "text", OUT "classification" "text", OUT "state_code" integer, OUT "stored_sha256" "text") TO "api_internal_executor";
+
+
+
+REVOKE ALL ON FUNCTION "private"."result_process_publish_validate_v1"("p_request" "jsonb", "p_phase" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "private"."result_process_publish_validate_v1"("p_request" "jsonb", "p_phase" "text") TO "api_internal_executor";
+
+
+
+GRANT SELECT ON TABLE "private"."result_process_publications" TO "api_internal_executor";
+
+
+
+REVOKE ALL ON FUNCTION "private"."result_process_receipt_json_v1"("p_receipt" "private"."result_process_publications") FROM PUBLIC;
+GRANT ALL ON FUNCTION "private"."result_process_receipt_json_v1"("p_receipt" "private"."result_process_publications") TO "api_internal_executor";
 
 
 
@@ -81166,6 +82314,10 @@ GRANT ALL ON FUNCTION "private"."worker_record_job_result"("p_job_id" "uuid", "p
 REVOKE ALL ON FUNCTION "private"."worker_retry_job"("p_job_id" "uuid", "p_run_after" timestamp with time zone, "p_max_attempts" integer, "p_reason" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "private"."worker_retry_job"("p_job_id" "uuid", "p_run_after" timestamp with time zone, "p_max_attempts" integer, "p_reason" "text") TO "service_role";
 GRANT ALL ON FUNCTION "private"."worker_retry_job"("p_job_id" "uuid", "p_run_after" timestamp with time zone, "p_max_attempts" integer, "p_reason" "text") TO "api_internal_executor";
+
+
+
+REVOKE ALL ON FUNCTION "private"."zzz_guard_process_result_lifecycle"() FROM PUBLIC;
 
 
 

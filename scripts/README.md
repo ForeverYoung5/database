@@ -468,6 +468,15 @@ python scripts/build_database_types.py --environment local
 
 Use `--environment linked` only when the linked Supabase target is intentionally the source. CI regenerates the local contract and fails when `supabase/workspace/database.types.ts` drifts.
 
+This script resolves the repository's own Supabase target and accepts no workdir or database-URL
+override. To regenerate the same contract from an isolated task workdir, use the equivalent CLI
+form and install its output mechanically, preserving the generator's `rstrip()` + trailing
+newline handling:
+
+```bash
+supabase gen types typescript --local --workdir <isolated-workdir> --schema public --schema api
+```
+
 ### `build_portal_contract_types.py`
 
 Generates one committed TypeScript module per exhaustive Portal JSON Schema.

@@ -101,7 +101,7 @@ begin
       raise exception using errcode = '22023', message = 'lcia_method_not_in_current_public_release';
     end if;
   else
-    v_predicate := 'candidate-public-state-code-100-199:v1';
+    v_predicate := 'candidate-public-state-code-100:v2';
     if v_mode = 'global_eligible' then
       if jsonb_array_length(coalesce(p_requested_scope->'processes', '[]'::jsonb)) <> 0 then
         raise exception using errcode = '22023', message = 'global_eligible_scope_must_not_supply_processes';
@@ -113,7 +113,7 @@ begin
             order by btrim(p.version::text) desc, p.modified_at desc nulls last
           ) as rank
         from public.processes p
-        where p.state_code between 100 and 199
+        where p.state_code = 100
           and p.json_ordered is not null
       )
       select coalesce(jsonb_agg(
@@ -137,7 +137,7 @@ begin
         join public.processes p
           on p.id = r.id
          and btrim(p.version::text) = r.version
-         and p.state_code between 100 and 199
+         and p.state_code = 100
          and p.json_ordered is not null
       )
       select count(*), (select count(*) from requested),

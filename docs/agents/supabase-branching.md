@@ -24,7 +24,7 @@ checkPaths:
   - .env.supabase.main.local.example
 lastReviewedAt: 2026-09-13
 lastReviewedCommit: 784c64dd82e22fa8667e64dc94569fe68411d72c
-lastReviewedNote: "Database #644: updated the production Supabase GitHub integration repository identity to tiangong-lca/database; branch bindings, Vault rules, and persistent-Dev deployment steps unchanged."
+lastReviewedNote: "Database #646: reviewed against the added state-120 migrations and their suites. Branch bindings, Vault secret rules, preview classification inputs, and the persistent-Dev deployment path are unchanged; the new tests run in the existing local-contract job and no new deployable configuration input was introduced."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
