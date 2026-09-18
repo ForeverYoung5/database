@@ -22,9 +22,9 @@ checkPaths:
   - .github/workflows/supabase-dev.yml
   - .env.supabase.dev.local.example
   - .env.supabase.main.local.example
-lastReviewedAt: 2026-09-13
-lastReviewedCommit: 784c64dd82e22fa8667e64dc94569fe68411d72c
-lastReviewedNote: "Database #646: reviewed against the added state-120 migrations and their suites. Branch bindings, Vault secret rules, preview classification inputs, and the persistent-Dev deployment path are unchanged; the new tests run in the existing local-contract job and no new deployable configuration input was introduced."
+lastReviewedAt: "2026-09-18"
+lastReviewedCommit: "c606853ccb821c33bef4808da93a70698d39814e"
+lastReviewedNote: "Reviewed Database #654: new private whole-package staging/finalization and receipt snapshot generated from isolated complete migration replay; original root-group path retained. Local-contract workflow adds its targeted suite. Deployment boundaries, branch bindings, tooling and generated-source ownership remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

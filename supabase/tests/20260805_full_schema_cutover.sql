@@ -80,8 +80,8 @@ select is(
     where namespace.nspname = 'private'
       and routine.prokind = 'f'
   ),
-  351::bigint,
-  'private contains the active helpers, including the twenty-five exact-version, thirteen composite-name and one review-search internals, two partial-import helpers, the example write guard, the two state-120 candidate-cache helpers, the state-120 lifecycle guard, and the seven manager-attested Result publication helpers'
+  353::bigint,
+  'private contains the active helpers, including the twenty-five exact-version, thirteen composite-name and one review-search internals, two partial-import helpers, two whole-package helpers, the example write guard, the two state-120 candidate-cache helpers, the state-120 lifecycle guard, and the seven manager-attested Result publication helpers'
 );
 
 select ok(
@@ -224,8 +224,8 @@ select is(
       'util'::regnamespace
     )
   ),
-  613::bigint,
-  'all application, OAuth registry and twenty-two composite-name constraints plus ten partial-import constraints and the Result publication attestation constraints remain present'
+  617::bigint,
+  'all application, OAuth registry and twenty-two composite-name constraints plus ten partial-import and four whole-package constraints and the Result publication attestation constraints remain present'
 );
 
 select is(
@@ -253,8 +253,8 @@ select is(
       and class.relkind in ('r', 'p')
       and class.relrowsecurity
   ),
-  77::bigint,
-  'RLS covers existing tables plus four private composite-name relations and two private import receipt relations'
+  78::bigint,
+  'RLS covers existing tables plus four private composite-name relations and three private import plan/receipt relations'
 );
 
 select ok(

@@ -12,14 +12,16 @@ begin
   with identities as (
     select item ->> 'table' as tab, item ->> 'id' as id, item ->> 'version' as ver,
       bool_or(item ->> 'disposition' = 'inserted') as inserted
-    from private.tidas_import_groups_v2 g
+    from (select worker_job_id,receipt from private.tidas_import_groups_v2
+      union all select worker_job_id,receipt from private.tidas_import_packages_v2) g
     cross join lateral jsonb_array_elements(g.receipt -> 'items') item
     where g.worker_job_id = v_worker
     group by 1,2,3
   )
   select jsonb_build_object('imported_count', count(*) filter (where inserted),
     'existing_count', count(*) filter (where not inserted),
-    'successful_root_count', (select count(*) from private.tidas_import_groups_v2 where worker_job_id = v_worker),
+    'successful_root_count', (select count(*) from private.tidas_import_groups_v2 where worker_job_id = v_worker)
+      + coalesce((select (receipt->>'root_count')::bigint from private.tidas_import_packages_v2 where worker_job_id = v_worker),0),
     'source', 'committed_receipts') into v_progress from identities;
   return jsonb_set(v_result, '{data,importProgress}', v_progress);
 end $$;
