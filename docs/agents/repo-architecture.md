@@ -30,9 +30,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-13
-lastReviewedCommit: 784c64dd82e22fa8667e64dc94569fe68411d72c
-lastReviewedNote: "Database #644: reviewed workflow-contract script protection of three additional local-contract SQL suites; stable-versus-generated path map unchanged."
+lastReviewedAt: "2026-09-18"
+lastReviewedCommit: "c606853ccb821c33bef4808da93a70698d39814e"
+lastReviewedNote: "Reviewed Database #654: bounded temporary staging, atomic whole-package insert-only finalization and replay receipts, unchanged root-group API, owner-scoped receipt recovery. Migration inventories and local proof are updated; persistent Dev/production deployment is not performed."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -831,3 +831,5 @@ TIDAS v2 import adds private immutable input/plan bindings and committed root-gr
 ## Authenticated example datasets
 
 All seven public dataset tables accept `state_code=-1` for curated examples. The additive authenticated SELECT policies admit cross-owner reads only with a non-null actor. The `ex` list, lexical, UUID-reference, and hybrid branches fix that state before ranking, latest-version selection, counts, and pagination. Process/Flow matched-version V2 uses the existing actor candidate path with a fixed example state; public projection candidates retain their original scope. Ordinary actors cannot update or delete example originals, including through definer bundle commands; service curation with no user JWT remains available. Selected-root package export admits exact example roots for an authenticated requesting actor; global open-data package scope and Portal publication visibility remain unchanged.
+
+Database #654 adds `private.tidas_import_packages_v2` and two ACL-closed service helpers for all-record-valid imports. Worker stages bounded chunks in a definer-owned ON COMMIT DROP temporary relation without domain writes, then finalizes all records and one exact-input receipt atomically. The final lease fence runs after inserts; existing type/id/version rows are skipped without updates. Root-group APIs remain unchanged, while owner-scoped readback includes both receipt sources. No new public relation or browser RPC is exposed.

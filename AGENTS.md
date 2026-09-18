@@ -37,9 +37,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-15
-lastReviewedCommit: d76e078927308039791d7096eedeeadaf7e04c9d
-lastReviewedNote: "Database #646: reviewed against the state-120 foundation, lifecycle protection, product-read isolation and Result publication slices. Repo contract, schema boundary, ACL/capability manifest rules, branch policy, and hosted boundaries are unchanged; the new migration adds one private receipt table, ten private helpers, one append-only guard trigger and three actor-bound API RPCs within the existing api/private boundaries. The cutover trigger inventory now pins one aggregate count over api/private/public/util plus the exact identity and semantics of every authored trigger outside them, instead of a database-global non-internal total that also counted triggers created by whichever platform services are enabled for the environment."
+lastReviewedAt: "2026-09-18"
+lastReviewedCommit: "c606853ccb821c33bef4808da93a70698d39814e"
+lastReviewedNote: "Reviewed Database #654: new private whole-package staging/finalization and receipt snapshot generated from isolated complete migration replay; original root-group path retained. Local-contract workflow adds its targeted suite. Deployment boundaries, branch bindings, tooling and generated-source ownership remain unchanged."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md

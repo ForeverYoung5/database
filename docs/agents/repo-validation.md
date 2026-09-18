@@ -32,9 +32,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-13
-lastReviewedCommit: 784c64dd82e22fa8667e64dc94569fe68411d72c
-lastReviewedNote: "Database #644: documented the review-queue full-text-search, TIDAS partial-import, and example-dataset-scope suites as always-run local-contract coverage; proof matrix and hosted boundaries unchanged."
+lastReviewedAt: "2026-09-18"
+lastReviewedCommit: "c606853ccb821c33bef4808da93a70698d39814e"
+lastReviewedNote: "Reviewed Database #654: bounded temporary staging, atomic whole-package insert-only finalization and replay receipts, unchanged root-group API, owner-scoped receipt recovery. Migration inventories and local proof are updated; persistent Dev/production deployment is not performed."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -489,3 +489,5 @@ For authenticated example scope changes, run `supabase/tests/20260910_example_da
 The trigger inventory in `20260805_full_schema_cutover.sql` is asserted over the schemas this repository owns, never as a database-global `not tgisinternal` total. A global total also counts the triggers created by whichever platform services are enabled for the environment — `realtime.subscription.tr_check_filters` exists only where the Realtime service runs, and `storage`, `cron`, and `pgsodium` add their own — so a global total is a property of the deployed service set, not of this repository. The discriminator is the schema, not extension ownership: those platform triggers are not `pg_depend` extension members, so `deptype='e'` cannot separate them. The suite pins one aggregate non-internal count across `api`, `private`, `public`, and `util`, plus the exact identity and semantics of every authored trigger in the remaining schemas except the platform-service-owned `realtime`, `storage`, `cron`, and `pgsodium`. It does not pin per-schema counts for the four application schemas, so a redistribution of the same total would pass; extending the inventory means adding an explicit assertion, not raising the aggregate. The two Result guards are pinned by exact trigger name, enabled state, non-deferred state, empty column list, and exact `tgtype` 27 (`ROW|BEFORE|DELETE|UPDATE`), so a trigger with different timing or events fails, and their firing functions are bound to `private.zzz_guard_process_result_lifecycle()` and `private.result_process_publications_immutable_v1()`.
 
 The example-scope migration intentionally changes four private raw Hybrid/semantic definitions. Update only their definition fingerprints in the two `20260826` Portal Hybrid/candidate suites and run both (64 and 83 assertions respectively); all eight routine owners, security modes, configs and ACLs remain pinned. This baseline refresh does not modify the immutable Portal projection helper closure or authorize Portal visibility changes.
+
+For Database #654, run `supabase/tests/20260918_tidas_full_package_import.sql` and existing partial-import/API/full-schema suites after clean migration replay. Prove orphan/rootless and all-existing packages, per-record skips, cross-type identity, cross-chunk rollback, exact replay, missing chunks, expiry and lease loss during inserts, and receipt ACLs. Regenerate the five-schema workspace and Data API types from the qualified migration state.
