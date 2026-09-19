@@ -100,9 +100,10 @@ alter table private.portal_navigation_membership_v1 owner to postgres;
 alter table private.portal_navigation_membership_v1 enable row level security;
 alter table private.portal_navigation_membership_v1 force row level security;
 
--- One grouped read per branch page: the primary key already starts with
--- (dimension, node_id), and this covering index keeps the count aggregation
--- index-only.
+-- One grouped read per branch page. The primary key starts with version
+-- identity; this separate branch index starts with (dimension, node_id) and
+-- includes direct so the planner can choose an index-only count when visibility
+-- permits. Freshly inserted fixtures may legitimately use a bitmap heap scan.
 create index portal_navigation_membership_branch_v1_idx
   on private.portal_navigation_membership_v1
   (dimension, node_id, dataset_kind, id, version) include (direct);
