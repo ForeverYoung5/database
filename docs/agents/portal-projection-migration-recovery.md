@@ -993,3 +993,11 @@ representative query plans. All timings and storage sizes are synthetic evidence
 Keep deployed exact-source readback, migration/index readiness, DTO agreement and
 cache-expiry evidence in the delivery Issue. Installing helpers alone does not
 complete deployment.
+
+## Navigation projection rollout
+
+Database #656 adds an independent navigation vocabulary, narrow version facts and ancestor memberships. The expand migration attaches writers to the existing public-safe Flow V1 and Process V2 projections, leaving the raw source writers and frozen manifests intact. Four UUID-quarter backfills claim only missing versions; a concurrent writer wins its existing claim, and foreign keys prevent withdrawn parents from surviving as navigation rows. A failed quarter rolls back and can be replayed; it must not be marked applied manually. The read cutover refuses incomplete version coverage. The capability manifest and literal derivation guard complete exposure.
+
+Do not delete or rewrite existing public projections to recover this child. Inspect the exact failed migration, its source/child coverage and constraint evidence, correct the owning forward migration and resume through the supported migration workflow. Temporary local fixture rollback does not prove a hosted populated upgrade. Runtime unknown nodes must disappear from public navigation when their last public member is withdrawn; their retained private identities are not permission to disclose retired codes.
+
+The navigation shard migrations set both version-parent constraints to immediate for the backfill transaction. A withdrawal after the cursor snapshot is caught and skipped inside the per-version savepoint; the FK cannot defer that error until the whole quarter commits. `scripts/test_portal_navigation_backfill.py` proves populated replay and deterministic concurrent withdrawal/update against the exact migration text. Runtime source writers retain the original deferred constraints.

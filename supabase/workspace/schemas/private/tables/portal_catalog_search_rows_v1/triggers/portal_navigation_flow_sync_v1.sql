@@ -1,0 +1,1 @@
+CREATE OR REPLACE TRIGGER "portal_navigation_flow_sync_v1" AFTER INSERT OR UPDATE OF "card" ON "private"."portal_catalog_search_rows_v1" FOR EACH ROW WHEN (("new"."dataset_kind" = 'flow'::"text")) EXECUTE FUNCTION "private"."sync_portal_navigation_row_v1"();

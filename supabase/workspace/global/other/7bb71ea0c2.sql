@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "private"."assert_portal_navigation_contract_v1"() IS 'Fails closed when the Portal navigation manifest row, its seeded vocabulary baseline, or a required taxonomy root is missing.';

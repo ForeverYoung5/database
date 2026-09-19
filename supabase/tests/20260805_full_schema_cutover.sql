@@ -68,8 +68,8 @@ select is(
     where namespace.nspname = 'api'
       and routine.prokind = 'f'
   ),
-  293::bigint,
-  'api contains the active cutover and consumer facades, including eight additive Portal/Next version-search APIs, two V4 review queues, two partial-import APIs, and the three manager-attested Result publication RPCs'
+  297::bigint,
+  'Four Portal navigation/V3 facades plus: api contains the active cutover and consumer facades, including eight additive Portal/Next version-search APIs, two V4 review queues, two partial-import APIs, and the three manager-attested Result publication RPCs'
 );
 
 select is(
@@ -80,8 +80,8 @@ select is(
     where namespace.nspname = 'private'
       and routine.prokind = 'f'
   ),
-  351::bigint,
-  'private contains the active helpers, including the twenty-five exact-version, thirteen composite-name and one review-search internals, two partial-import helpers, the example write guard, the two state-120 candidate-cache helpers, the state-120 lifecycle guard, and the seven manager-attested Result publication helpers'
+  378::bigint,
+  'Twenty-five navigation helpers plus: private contains the active helpers, including the twenty-five exact-version, thirteen composite-name and one review-search internals, two partial-import helpers, two whole-package helpers, the example write guard, the two state-120 candidate-cache helpers, the state-120 lifecycle guard, and the seven manager-attested Result publication helpers'
 );
 
 select ok(
@@ -122,8 +122,8 @@ select is(
     where not trigger_record.tgisinternal
       and namespace.nspname in ('api', 'private', 'public', 'util')
   ),
-  120::bigint,
-  'all active application triggers and two Process composite-name sync triggers plus seven example write guards remain present, including the Result lifecycle guard and the append-only Result attestation guard'
+  123::bigint,
+  'Two private navigation writers and one seed guard plus: all active application triggers and two Process composite-name sync triggers plus seven example write guards remain present, including the Result lifecycle guard and the append-only Result attestation guard'
 );
 
 -- Two authored triggers live outside those four schemas: the guarded dataset derivative rebuild
@@ -209,8 +209,8 @@ select is(
     select count(*)
     from pg_policy
   ),
-  105::bigint,
-  'all RLS policies, nine OAuth guards and five composite-name policies plus seven authenticated example policies and the two restrictive Result read-isolation policies remain present'
+  114::bigint,
+  'Nine navigation policies plus: all RLS policies, nine OAuth guards and five composite-name policies plus seven authenticated example policies and the two restrictive Result read-isolation policies remain present'
 );
 
 select is(
@@ -224,8 +224,8 @@ select is(
       'util'::regnamespace
     )
   ),
-  613::bigint,
-  'all application, OAuth registry and twenty-two composite-name constraints plus ten partial-import constraints and the Result publication attestation constraints remain present'
+  646::bigint,
+  'Twenty-nine navigation constraints plus: all application, OAuth registry and twenty-two composite-name constraints plus ten partial-import and four whole-package constraints and the Result publication attestation constraints remain present'
 );
 
 select is(
@@ -253,8 +253,8 @@ select is(
       and class.relkind in ('r', 'p')
       and class.relrowsecurity
   ),
-  77::bigint,
-  'RLS covers existing tables plus four private composite-name relations and two private import receipt relations'
+  83::bigint,
+  'RLS covers five new private navigation relations and existing tables plus four private composite-name relations and three private import plan/receipt relations'
 );
 
 select ok(

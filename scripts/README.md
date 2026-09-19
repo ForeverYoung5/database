@@ -20,9 +20,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-13
-lastReviewedCommit: 784c64dd82e22fa8667e64dc94569fe68411d72c
-lastReviewedNote: "Database #644: reviewed the workflow-contract script's added required invocations for three local-contract SQL suites; script entrypoints and workspace refresh behavior unchanged."
+lastReviewedAt: "2026-09-18"
+lastReviewedCommit: "c606853ccb821c33bef4808da93a70698d39814e"
+lastReviewedNote: "Reviewed Database #654: new private whole-package staging/finalization and receipt snapshot generated from isolated complete migration replay; original root-group path retained. Local-contract workflow adds its targeted suite. Deployment boundaries, branch bindings, tooling and generated-source ownership remain unchanged."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml
@@ -660,3 +660,11 @@ python3 -m unittest scripts/test_scope_closure_provider_qualification.py
 ## Local Docpact Push Gate
 
 The repository now includes a local pre-push docpact gate in `scripts/docpact-gate.sh`. The gate resolves the CLI through `scripts/docpact`. It is documentation-governance tooling and does not change database schema workspace behavior.
+
+## Portal navigation tooling
+
+`python3 scripts/generate_portal_navigation_vocabulary.py --check` verifies the offline, receipted vocabulary without modifying generated artifacts. Omit `--check` and pass `--seed-dir supabase/migrations` to regenerate an intentionally reviewed source change. `--vendor --platform-root <path> --archive-locations <path>` refreshes source copies only after exact platform-commit verification; this is separate from ordinary builds. Source receipts, schemas, types and seed migrations must be reviewed together.
+
+`python3 scripts/benchmark_portal_summary_bounded.py --help` describes the explicitly local, rollback-only performance fixture. It refuses remote Docker contexts and nonempty public projections. Read-scale results do not qualify production latency or source-writer throughput.
+
+`python3 scripts/check_portal_json_schemas.py` compiles every Portal schema in strict Draft 2020-12 mode with all sibling references registered. It uses the pinned existing AJV CLI/format versions and excludes each root from its own reference list, avoiding both filename-order dependency and duplicate IDs. It changes no schemas.

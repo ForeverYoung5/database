@@ -20,9 +20,9 @@ checkPaths:
   - .githooks/pre-push
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-13
-lastReviewedCommit: 784c64dd82e22fa8667e64dc94569fe68411d72c
-lastReviewedNote: "Database #646: reviewed against the state-120 foundation, lifecycle protection, product-read isolation and Result publication slices. No fact owned by this document changed: refresh behavior, stable-overlay rules, and generated-path ownership are unaffected by the added migration, suites and regenerated workspace."
+lastReviewedAt: 2026-09-19
+lastReviewedCommit: 623acc63b977f50ccf26bc23e291b967c2270157
+lastReviewedNote: "Reviewed Database #654: new private whole-package staging/finalization and receipt snapshot generated from isolated complete migration replay; original root-group path retained. Local-contract workflow adds its targeted suite. Deployment boundaries, branch bindings, tooling and generated-source ownership remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
