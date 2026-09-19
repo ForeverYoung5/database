@@ -998,7 +998,10 @@ revoke all on function api.portal_search_processes_v3(text, jsonb, text, text, i
 revoke all on function api.portal_search_flows_v3(text, jsonb, text, text, integer) from public;
 revoke all on function api.portal_facets_v3(text, text, jsonb) from public;
 
-grant execute on function private.portal_validate_search_v3(text, text, jsonb, text, integer) to api_internal_executor;
+-- The v3 facades run as the public executor, so it needs the same execute bit
+-- that the internal executor has; browser roles stay revoked.
+grant execute on function private.portal_validate_search_v3(text, text, jsonb, text, integer)
+  to api_internal_executor, portal_public_executor;
 grant execute on function private.portal_search_v3(text, text, jsonb, text, text, integer) to portal_public_executor;
 grant all on function api.portal_search_processes_v3(text, jsonb, text, text, integer) to anon, authenticated;
 grant all on function api.portal_search_flows_v3(text, jsonb, text, text, integer) to anon, authenticated;

@@ -592,6 +592,12 @@ begin
 end
 $function$;
 
+-- `postgres` runs the projection writer and the backfill; every browser-facing
+-- role is explicitly revoked because a new function still carries PUBLIC's
+-- default execute grant until it is taken away.
+revoke all on function private.sync_portal_navigation_membership_v1(text, uuid, text, jsonb)
+  from public, anon, authenticated, service_role, portal_public_executor;
+
 comment on function private.sync_portal_navigation_membership_v1(text, uuid, text, jsonb) is
   'Rebuilds one public version''s navigation placements from its already public-safe Portal card; unknown or ambiguous authored codes are retained as their own nodes.';
 
