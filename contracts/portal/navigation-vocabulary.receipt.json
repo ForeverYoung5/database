@@ -1,0 +1,233 @@
+{
+  "asset": {
+    "byteLength": 4004491,
+    "path": "navigation-vocabulary.json",
+    "sha256": "7db533ac3a0a8401ada2c8f2857019524319710a6390b274b10a36b326142477"
+  },
+  "counts": {
+    "classification": 5475,
+    "geography": 1008,
+    "ilcdLocationCodes": 646,
+    "nodes": 6483
+  },
+  "schemaVersion": "portal.navigation-vocabulary.v1",
+  "sourceReceipt": {
+    "archiveSnapshotNote": "tiangong-lca/database-era TianGong LCA snapshot, retained as a historical unmaintained public snapshot since 2026-06-21",
+    "generator": "scripts/generate_portal_navigation_vocabulary.py",
+    "platformCommit": "aca2d4f2a905e97867942a78be75c5daea4fde5e",
+    "platformRepository": "tiangong-lca/platform",
+    "sources": [
+      {
+        "byteLength": 151092,
+        "overlays": [
+          {
+            "byteLength": 141013,
+            "locale": "zh",
+            "path": "src/services/referenceResources/data/isic/overlays/zh.json",
+            "sha256": "cc255458d5def3dfed7f7300a5c5583af2e573300085290a370a05e4aeab79bb"
+          },
+          {
+            "byteLength": 154693,
+            "locale": "de",
+            "path": "src/services/referenceResources/data/isic/overlays/de.json",
+            "sha256": "83e913e32e411d90d57b5c942bab54a1ddf6a1ce456d295269fbc55167e49dc3"
+          },
+          {
+            "byteLength": 159121,
+            "locale": "fr",
+            "path": "src/services/referenceResources/data/isic/overlays/fr.json",
+            "sha256": "d5eacb27a235b0ef37c6d6a7e4d20344de7db5e6c8ef20c5bb87c432bb79efd6"
+          }
+        ],
+        "path": "src/services/referenceResources/data/isic/base.json",
+        "resourceId": "isic",
+        "runtimeAssets": {
+          "de": {
+            "byteLength": 11387,
+            "fileName": "ISICClassification.c87a6025d12803b1_de.min.json.gz",
+            "jsonDigest": "c87a6025d12803b1380da0ba511717442aef89e7e381f44e37d9b9a3d261bdd2"
+          },
+          "en": {
+            "byteLength": 10392,
+            "fileName": "ISICClassification.852053b3e1692408.min.json.gz",
+            "jsonDigest": "852053b3e16924083891e85d6d30af4a0fb681b6718291cf21bb5d37ce894ffb"
+          },
+          "fr": {
+            "byteLength": 11318,
+            "fileName": "ISICClassification.5d9f08d11bb7028a_fr.min.json.gz",
+            "jsonDigest": "5d9f08d11bb7028a97fb28b2517d976b4300cfac29dc8ba1a6454dd77da5c880"
+          },
+          "zh": {
+            "byteLength": 10251,
+            "fileName": "ISICClassification.6455c8b1a0747aed_zh.min.json.gz",
+            "jsonDigest": "6455c8b1a0747aed6bfc27d87ac3171167d55f8a5e22bc8b7c341da6cfa3e861"
+          }
+        },
+        "scope": "classification",
+        "sha256": "76c50381dbd8495c0ae4cf4a712d3a1041c978258ff2c549d8c1b916c431751d"
+      },
+      {
+        "byteLength": 1010038,
+        "overlays": [
+          {
+            "byteLength": 927604,
+            "locale": "zh",
+            "path": "src/services/referenceResources/data/cpc/overlays/zh.json",
+            "sha256": "f21eb3c7c72e343944d2b0e31da6c07b6b567f1218520cc74b2134bd6da0449a"
+          },
+          {
+            "byteLength": 1035388,
+            "locale": "de",
+            "path": "src/services/referenceResources/data/cpc/overlays/de.json",
+            "sha256": "da5e4a7e72c0f70897c3d4573577e1bd239d56ebface86652d1d6916540c7585"
+          },
+          {
+            "byteLength": 1050822,
+            "locale": "fr",
+            "path": "src/services/referenceResources/data/cpc/overlays/fr.json",
+            "sha256": "871b5ee436ab9bc25210e69e2b6e0785a8136d98fa8e2d17bf5391857316993e"
+          }
+        ],
+        "path": "src/services/referenceResources/data/cpc/base.json",
+        "resourceId": "cpc",
+        "runtimeAssets": {
+          "de": {
+            "byteLength": 78391,
+            "fileName": "CPCClassification.623e9b86917a5f7d_de.min.json.gz",
+            "jsonDigest": "623e9b86917a5f7df356fd72efdbff9add15e4b6092492c2e65a301089654fc9"
+          },
+          "en": {
+            "byteLength": 72262,
+            "fileName": "CPCClassification.ed784ea38b85fc5b.min.json.gz",
+            "jsonDigest": "ed784ea38b85fc5b416fa5984e02481eadf0e877e8b46bd36d1c0db35bfe6851"
+          },
+          "fr": {
+            "byteLength": 77716,
+            "fileName": "CPCClassification.9d45ad0a5395f2dd_fr.min.json.gz",
+            "jsonDigest": "9d45ad0a5395f2dde4fbd13986a8d98855af3c6c7c8efb048ac86c75d42b9437"
+          },
+          "zh": {
+            "byteLength": 71239,
+            "fileName": "CPCClassification.27c6fd06261f6e06_zh.min.json.gz",
+            "jsonDigest": "27c6fd06261f6e06c99507de38fb5cbbb6a6f69a2f3343eb90150d2fe3b9776b"
+          }
+        },
+        "scope": "classification",
+        "sha256": "1f815c001c677360203f3c5ddd83833412d2d9fe25822204c561eaec75c6fc7f"
+      },
+      {
+        "byteLength": 8006,
+        "overlays": [
+          {
+            "byteLength": 9190,
+            "locale": "zh",
+            "path": "src/services/referenceResources/data/ilcd-flow-categorization/overlays/zh.json",
+            "sha256": "14b08335a068eb1192f920b8521c0283d824462632f00d6e7d043df6c3f11aeb"
+          },
+          {
+            "byteLength": 10037,
+            "locale": "de",
+            "path": "src/services/referenceResources/data/ilcd-flow-categorization/overlays/de.json",
+            "sha256": "e2a0bd72f85a0544eb46a66238cf4ad7a0c19021178f3f9eeddd861748e47aaa"
+          },
+          {
+            "byteLength": 10086,
+            "locale": "fr",
+            "path": "src/services/referenceResources/data/ilcd-flow-categorization/overlays/fr.json",
+            "sha256": "0a26632938636f5184c0072bf7f2fcc4522fb15cd420789bf5a4fbe23c6972fc"
+          }
+        ],
+        "path": "src/services/referenceResources/data/ilcd-flow-categorization/base.json",
+        "resourceId": "ilcd-flow-categorization",
+        "runtimeAssets": {
+          "de": {
+            "byteLength": 794,
+            "fileName": "ILCDFlowCategorization.ae503754e77e5b19_de.min.json.gz",
+            "jsonDigest": "ae503754e77e5b194abe65196edb7ccb8a58bbc957e2842f9b3ac220551acb11"
+          },
+          "en": {
+            "byteLength": 718,
+            "fileName": "ILCDFlowCategorization.519b7ec408131c56.min.json.gz",
+            "jsonDigest": "519b7ec408131c5620a4b0c29cc195786698c2d045b459d302fe5cdcd06565c9"
+          },
+          "fr": {
+            "byteLength": 772,
+            "fileName": "ILCDFlowCategorization.cf2bf4be7fc6ab91_fr.min.json.gz",
+            "jsonDigest": "cf2bf4be7fc6ab918e1215233147157c03cb2e6eb3bfbe941646967583ebfab9"
+          },
+          "zh": {
+            "byteLength": 762,
+            "fileName": "ILCDFlowCategorization.dbc4de4506d39a2e_zh.min.json.gz",
+            "jsonDigest": "dbc4de4506d39a2ea8aecce78fab6fb0a0b7c87b8b2d69d8d4d799c2c39dbd5d"
+          }
+        },
+        "scope": "classification",
+        "sha256": "9ee9464497336b890ffbd46576687309880ac4476704d1d8f28375332d30f271"
+      },
+      {
+        "byteLength": 57553,
+        "overlays": [
+          {
+            "byteLength": 90639,
+            "locale": "zh",
+            "path": "src/services/referenceResources/data/ilcd-locations/overlays/zh.json",
+            "sha256": "0531986caa5293c5582b2ac1176ba5da8dd95a2b8fa42aea1a1b739330579f3e"
+          },
+          {
+            "byteLength": 93952,
+            "locale": "de",
+            "path": "src/services/referenceResources/data/ilcd-locations/overlays/de.json",
+            "sha256": "305a5b4cc10cd5a4c1e87175e1bc0aac6180432e936968e74ab6b96056ab465a"
+          },
+          {
+            "byteLength": 90699,
+            "locale": "fr",
+            "path": "src/services/referenceResources/data/ilcd-locations/overlays/fr.json",
+            "sha256": "c3d23283d9115608929f0ca914b110883b292a9f4ce63558be733531599c05bb"
+          }
+        ],
+        "path": "src/services/referenceResources/data/ilcd-locations/base.json",
+        "resourceId": "ilcd-locations",
+        "runtimeAssets": {
+          "de": {
+            "byteLength": 6868,
+            "fileName": "ILCDLocations.7048b701b1dfacb4_de.min.json.gz",
+            "jsonDigest": "7048b701b1dfacb4d06d6d779fdf1135ad0c8e8bb1e92f09d64e7ada303d44cb"
+          },
+          "en": {
+            "byteLength": 6688,
+            "fileName": "ILCDLocations.b65e8d45de515726.min.json.gz",
+            "jsonDigest": "b65e8d45de515726c86deffd794d719e6c4f7e16af4864bff80a6b20168a3417"
+          },
+          "fr": {
+            "byteLength": 6750,
+            "fileName": "ILCDLocations.3fdd552e27dca310_fr.min.json.gz",
+            "jsonDigest": "3fdd552e27dca31048fba2ea4586cafe464c6612bc222f2682803386f6c429a8"
+          },
+          "zh": {
+            "byteLength": 7568,
+            "fileName": "ILCDLocations.c406f6ae5aa30ef1_zh.min.json.gz",
+            "jsonDigest": "c406f6ae5aa30ef18c705c9ff63432be929725d178c00b7e098070d8533d86a3"
+          }
+        },
+        "scope": "location",
+        "sha256": "2efa6365e14215296ab418ac5f20af90d75052e4c6f6564682b738bdd51a7950"
+      },
+      {
+        "byteLength": 47683,
+        "note": "tiangong-lca/database-era TianGong LCA snapshot, retained as a historical unmaintained public snapshot since 2026-06-21",
+        "path": "data/tiangong_lca_data/ILCDLocations.xml",
+        "resourceId": "tiangong-lca-archive-locations-v1",
+        "scope": "location",
+        "sha256": "0e6c14cff52b8af26b48f85e684760a80ec963ceaff738bf65b0c5e205841c26"
+      },
+      {
+        "byteLength": 2061,
+        "path": "data/portal-navigation-china-mapping.json",
+        "resourceId": "portal-navigation-china-mapping-v1",
+        "scope": "location",
+        "sha256": "a3828129fc78f2c0881b6cf35a4b5085fa52fea99094d51e5d37a7219d147395"
+      }
+    ]
+  }
+}
