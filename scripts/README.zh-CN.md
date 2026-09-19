@@ -593,8 +593,10 @@ python3 -m unittest scripts/test_scope_closure_provider_qualification.py
 
 The repository now includes a local pre-push docpact gate in `scripts/docpact-gate.sh`. The gate resolves the CLI through `scripts/docpact`. It is documentation-governance tooling and does not change database schema workspace behavior.
 
-## Portal navigation tooling
+## Portal 导航工具
 
-`python3 scripts/generate_portal_navigation_vocabulary.py --check` verifies the offline, receipted vocabulary without modifying generated artifacts. Omit `--check` and pass `--seed-dir supabase/migrations` to regenerate an intentionally reviewed source change. `--vendor --platform-root <path> --archive-locations <path>` refreshes source copies only after exact platform-commit verification; this is separate from ordinary builds. Source receipts, schemas, types and seed migrations must be reviewed together.
+`python3 scripts/generate_portal_navigation_vocabulary.py --check` 只读验证离线词表及来源收据。只有经过审阅的来源变更才应省略 `--check` 并传入 `--seed-dir supabase/migrations` 重新生成。`--vendor --platform-root <path> --archive-locations <path>` 在核对平台精确提交后刷新来源副本；普通构建不联网刷新。来源收据、schema、类型与 seed migration 必须一起审阅。
 
-`python3 scripts/benchmark_portal_summary_bounded.py --help` describes the explicitly local, rollback-only performance fixture. It refuses remote Docker contexts and nonempty public projections. Read-scale results do not qualify production latency or source-writer throughput.
+`python3 scripts/benchmark_portal_summary_bounded.py --help` 说明本地、回滚式性能夹具。它拒绝远端 Docker context 和非空公开投影。读取规模测试不能替代生产延迟或源数据写入吞吐验证。
+
+`python3 scripts/check_portal_json_schemas.py` 先注册关联文件，再以严格 Draft 2020-12 模式逐个编译 Portal schema。它沿用已固定的 AJV CLI 与格式插件版本，并将当前编译文件排除在引用注册列表外，避免依赖文件顺序和重复 ID；不会改写 schema。

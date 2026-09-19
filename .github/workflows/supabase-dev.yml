@@ -90,11 +90,7 @@ jobs:
 
       - name: Verify Portal JSON Schemas
         run: |
-          npx --yes \
-            --package ajv-cli@5.0.0 \
-            --package ajv-formats@3.0.1 \
-            ajv compile --spec=draft2020 --strict=true -c ajv-formats \
-            -s 'contracts/portal/*.schema.json'
+          python3 scripts/check_portal_json_schemas.py
           python3 scripts/build_portal_contract_types.py --check
 
       - name: Stop local Supabase
