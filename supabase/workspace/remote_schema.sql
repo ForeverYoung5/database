@@ -43164,7 +43164,9 @@ CREATE OR REPLACE FUNCTION "private"."guard_portal_navigation_seed_v1"() RETURNS
     SET "search_path" TO ''
     AS $$
 begin
-  if old.source_file is not null or old.node_id in ('class:isic','class:cpc','class:elementary','geo:unmapped') then
+  -- Every node identity is immutable, including runtime virtual/raw nodes.
+  -- Source writers only INSERT ... ON CONFLICT DO NOTHING.
+  if tg_op in ('UPDATE','DELETE') then
     raise exception 'Seeded navigation vocabulary is immutable' using errcode='55000';
   end if;
   if tg_op='DELETE' then return old; end if;
@@ -51337,16 +51339,7 @@ begin
       and (not (p_filters ? 'referenceYearTo') or v.reference_year <= (p_filters->>'referenceYearTo')::integer)
       and (not (p_filters ? 'processSubtype') or v.process_subtype=p_filters->>'processSubtype')
       and (not (p_filters ? 'source') or v.source=p_filters->>'source')
-      and (not (p_filters ? 'classificationNodeId') or exists (
-        select 1 from private.portal_navigation_membership_v1 m
-        where (m.dataset_kind,m.id,m.version)=(v.dataset_kind,v.id,v.version)
-          and m.dimension='classification' and m.node_id=p_filters->>'classificationNodeId'
-          and (coalesce(p_filters->>'classificationScope','subtree')='subtree' or m.direct)))
-      and (not (p_filters ? 'geographyNodeId') or exists (
-        select 1 from private.portal_navigation_membership_v1 m
-        where (m.dataset_kind,m.id,m.version)=(v.dataset_kind,v.id,v.version)
-          and m.dimension='geography' and m.node_id=p_filters->>'geographyNodeId'
-          and (coalesce(p_filters->>'geographyScope','subtree')='subtree' or m.direct)))
+      and private.portal_navigation_version_matches_v3(v.dataset_kind,p_filters,v.id,v.version)
 ;
   else
     if p_query ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then v_exact:=p_query::uuid; end if;
@@ -51364,16 +51357,7 @@ begin
       and (not (p_filters ? 'referenceYearTo') or v.reference_year <= (p_filters->>'referenceYearTo')::integer)
       and (not (p_filters ? 'processSubtype') or v.process_subtype=p_filters->>'processSubtype')
       and (not (p_filters ? 'source') or v.source=p_filters->>'source')
-      and (not (p_filters ? 'classificationNodeId') or exists (
-        select 1 from private.portal_navigation_membership_v1 m
-        where (m.dataset_kind,m.id,m.version)=(v.dataset_kind,v.id,v.version)
-          and m.dimension='classification' and m.node_id=p_filters->>'classificationNodeId'
-          and (coalesce(p_filters->>'classificationScope','subtree')='subtree' or m.direct)))
-      and (not (p_filters ? 'geographyNodeId') or exists (
-        select 1 from private.portal_navigation_membership_v1 m
-        where (m.dataset_kind,m.id,m.version)=(v.dataset_kind,v.id,v.version)
-          and m.dimension='geography' and m.node_id=p_filters->>'geographyNodeId'
-          and (coalesce(p_filters->>'geographyScope','subtree')='subtree' or m.direct)))
+      and private.portal_navigation_version_matches_v3(v.dataset_kind,p_filters,v.id,v.version)
 ;
   end if;
 end;
@@ -51545,7 +51529,6 @@ ALTER FUNCTION "private"."portal_navigation_v1"("p_kind" "text", "p_query" "text
 
 CREATE OR REPLACE FUNCTION "private"."portal_navigation_version_matches_v3"("p_kind" "text", "p_filters" "jsonb", "p_id" "uuid", "p_version" "text") RETURNS boolean
     LANGUAGE "sql" STABLE PARALLEL SAFE
-    SET "search_path" TO ''
     AS $$
   select
     (

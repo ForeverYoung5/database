@@ -3,7 +3,9 @@ CREATE OR REPLACE FUNCTION "private"."guard_portal_navigation_seed_v1"() RETURNS
     SET "search_path" TO ''
     AS $$
 begin
-  if old.source_file is not null or old.node_id in ('class:isic','class:cpc','class:elementary','geo:unmapped') then
+  -- Every node identity is immutable, including runtime virtual/raw nodes.
+  -- Source writers only INSERT ... ON CONFLICT DO NOTHING.
+  if tg_op in ('UPDATE','DELETE') then
     raise exception 'Seeded navigation vocabulary is immutable' using errcode='55000';
   end if;
   if tg_op='DELETE' then return old; end if;

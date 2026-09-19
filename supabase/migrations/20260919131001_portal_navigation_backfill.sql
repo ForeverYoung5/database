@@ -3,6 +3,9 @@
 begin;
 set local lock_timeout='5s';
 set local statement_timeout='15min';
+-- Catch withdrawals inside the per-version savepoint, not at COMMIT.
+set constraints private.portal_navigation_versions_v1_dataset_kind_id_version_fkey,
+  private.portal_navigation_versions_v1_dataset_kind_process_id_proc_fkey immediate;
 do $backfill$
 declare v record; inserted integer;
 begin

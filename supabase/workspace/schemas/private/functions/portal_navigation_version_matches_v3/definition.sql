@@ -1,6 +1,5 @@
 CREATE OR REPLACE FUNCTION "private"."portal_navigation_version_matches_v3"("p_kind" "text", "p_filters" "jsonb", "p_id" "uuid", "p_version" "text") RETURNS boolean
     LANGUAGE "sql" STABLE PARALLEL SAFE
-    SET "search_path" TO ''
     AS $$
   select
     (

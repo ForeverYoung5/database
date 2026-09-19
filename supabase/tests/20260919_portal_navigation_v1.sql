@@ -107,6 +107,7 @@ select ok(not exists(select 1 from jsonb_array_elements(api.portal_navigation_v1
 select throws_ok(format('select api.portal_navigation_v1(%L,%L,%L,%L,%L)', 'process','','{}','geography',(select node_id from retired_node)),'22023','invalid portal request','known old locator cannot disclose a fully withdrawn custom code');
 select lives_ok('select private.assert_portal_navigation_projection_v1()','independent navigation derivation guard passes');
 select throws_ok($$update private.portal_navigation_node_v1 set code='changed' where node_id='geo:cn'$$,'55000','Seeded navigation vocabulary is immutable','runtime cannot alter reviewed geography meanings');
+select throws_ok($$update private.portal_navigation_node_v1 set code='changed' where code='CN-AH-ZX'$$,'55000','Seeded navigation vocabulary is immutable','runtime-derived identities are immutable too');
 -- A definition drift is rejected independently of the old source manifests.
 create temp table original_navigation_helper as select pg_get_functiondef('private.portal_navigation_raw_taxonomy_v1(jsonb)'::regprocedure) as definition;
 create or replace function private.portal_navigation_raw_taxonomy_v1(p_system jsonb) returns text language sql immutable set search_path='' as $$select 'unclassified'::text$$;

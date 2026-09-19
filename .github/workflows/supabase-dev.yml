@@ -85,6 +85,7 @@ jobs:
           supabase test db supabase/tests/20260905_next_hybrid_filter_adaptive_v2.sql
           supabase test db supabase/tests/20260623_data_product_publication_mvp.sql
           supabase test db supabase/tests/20260716_lci_lcia_release_control_plane.sql
+          python3 scripts/test_portal_navigation_backfill.py --container supabase_db_database-engine --report /tmp/portal-navigation-backfill.json
           scripts/test_full_schema_cutover_upgrade.sh
 
       - name: Verify Portal JSON Schemas
