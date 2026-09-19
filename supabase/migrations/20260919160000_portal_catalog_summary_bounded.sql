@@ -10,10 +10,14 @@
 -- handler converted the cancellation into the sanitized error.
 --
 -- The fix keeps the response byte-identical and removes the repeated scans:
---   * each candidate block reads only the exact base table its kind lives in;
---   * the "latest visible version of this id" test becomes an index-backed
---     EXISTS against the materialized `latest` set instead of a semi-join that
---     forced a sequential scan;
+--   * each candidate block reads only the exact base table its kind lives in,
+--     instead of the `private.portal_catalog_search_current_v2` view;
+--   * the "latest visible version of this id" test becomes an existence probe
+--     against the materialized `latest` set instead of a semi-join. The probe is
+--     a hash probe into that CTE, not an index lookup: a CTE has no indexes. The
+--     cost it removes is the repeated sequential re-scan of both projection
+--     tables that the semi-join forced, which the earlier plan showed as a
+--     parallel seq scan feeding an unindexed join;
 --   * the object type, the facet projection and the response budget are
 --     unchanged, and the statement budget stays at 2 seconds.
 --
@@ -363,7 +367,7 @@ exception
     raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
   when others then
     raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
-end
+end;
 $function$;
 
 reset role;

@@ -1,33 +1,84 @@
--- Database #656: Portal navigation RPC (api.portal_navigation_v1).
---
--- One page of one branch. Immediate children are returned completely for the
--- requested page: the response is bounded at 65536 UTF-8 bytes and fails closed
--- instead of silently truncating a flat tree.
---
--- Count basis is `public_versions`: distinct exact `(dataset_kind, id, version)`
--- identities matching `p_query` + `p_filters`. `count` is the node's subtree
--- (self included); `directCount` is the subset that authored exactly that node.
--- Duplicate authored paths inside one version, and repeated versions of one id,
--- never double count.
+-- Database #656: bounded, version-aware hierarchy aggregation.
+-- No per-node reads of the result universe; query candidates and filters are
+-- shared with V3, and empty browse reads only the narrow public projection.
 begin;
+set local lock_timeout='5s';
+set local statement_timeout='60s';
+grant portal_public_executor,api_internal_executor to postgres;
+grant create on schema private,api to portal_public_executor;
+grant select(contract_version,asset_sha256) on private.portal_navigation_contract_v1 to portal_public_executor;
+create policy portal_navigation_contract_reader_v1 on private.portal_navigation_contract_v1
+  for select to portal_public_executor using (contract_version=1);
+-- Exposure is the cutover: require full public-version coverage after the four
+-- backfills. Normal projection writers already maintain all subsequent changes.
+do $coverage$
+begin
+  if exists(select 1 from private.portal_catalog_search_current_v2 p
+    where not exists(select 1 from private.portal_navigation_versions_v1 n
+      where (n.dataset_kind,n.id,n.version)=(p.dataset_kind,p.id,p.version))) then
+    raise exception 'Portal navigation backfill is incomplete' using errcode='55000';
+  end if;
+end;
+$coverage$;
 
-set local lock_timeout = '5s';
-set local statement_timeout = '60s';
+create function private.portal_navigation_version_matches_v3(
+  p_kind text,
+  p_filters jsonb,
+  p_id uuid,
+  p_version text
+)
+returns boolean
+language sql
+stable
+parallel safe
+set search_path = ''
+as $function$
+  select
+    (
+      not (p_filters ? 'classificationNodeId')
+      or exists (
+        select 1
+        from private.portal_navigation_membership_v1 as member
+        where member.dataset_kind = p_kind
+          and member.id = p_id
+          and member.version = p_version
+          and member.dimension = 'classification'
+          and (
+            case coalesce(p_filters ->> 'classificationScope', 'subtree')
+              when 'direct' then
+                member.node_id = p_filters ->> 'classificationNodeId'
+                and member.direct
+              else member.node_id = p_filters ->> 'classificationNodeId'
+            end
+          )
+      )
+    )
+    and (
+      not (p_filters ? 'geographyNodeId')
+      or exists (
+        select 1
+        from private.portal_navigation_membership_v1 as member
+        where member.dataset_kind = p_kind
+          and member.id = p_id
+          and member.version = p_version
+          and member.dimension = 'geography'
+          and (
+            case coalesce(p_filters ->> 'geographyScope', 'subtree')
+              when 'direct' then
+                member.node_id = p_filters ->> 'geographyNodeId'
+                and member.direct
+              else member.node_id = p_filters ->> 'geographyNodeId'
+            end
+          )
+      )
+    )
+$function$;
 
-grant portal_public_executor, api_internal_executor to postgres;
-grant create on schema private, api to portal_public_executor, api_internal_executor;
-
--- The navigation cursor uses the same opaque encoder as search. The internal
--- executor writes the page, so it needs exactly that one helper's execute bit;
--- nothing else about the existing grants changes.
-grant execute on function private.portal_cursor_encode_v1(jsonb) to api_internal_executor;
-
-create function private.portal_navigation_validate_v1(
+create function private.portal_validate_search_v3(
   p_kind text,
   p_query text,
   p_filters jsonb,
-  p_dimension text,
-  p_parent_node_id text,
+  p_sort text,
   p_limit integer
 )
 returns void
@@ -37,457 +88,312 @@ parallel safe
 set search_path = ''
 as $function$
 declare
+  v_base jsonb;
   v_key text;
-  v_allowed text[] := array[
-    'accessLevel', 'geography', 'classification', 'referenceYearFrom',
-    'referenceYearTo', 'source'
-  ];
+  v_node_pattern constant text := '^[a-z][a-z0-9-]*:[!-~]{1,96}$';
 begin
-  if p_kind not in ('process', 'flow', 'all')
-     or p_query is null
-     or pg_catalog.length(p_query) > 512
-     or pg_catalog.octet_length(p_query) > 2048
-     or p_query ~ '[[:cntrl:]]'
-     or p_dimension not in ('classification', 'geography')
-     or p_parent_node_id is not null and (
-       pg_catalog.length(p_parent_node_id) > 128
-       or p_parent_node_id !~ '^[a-z][a-z0-9-]*:[!-~]{1,96}$'
-     )
-     or p_limit is null
-     or p_limit < 1
-     or p_limit > 500
-     or p_filters is null
-     or pg_catalog.jsonb_typeof(p_filters) <> 'object'
-     or pg_catalog.pg_column_size(p_filters) > 4096
-     or (select pg_catalog.count(*) from pg_catalog.jsonb_object_keys(p_filters)) > 7 then
+  perform private.assert_portal_navigation_projection_v1();
+  if p_kind is null or p_kind not in ('process','flow','all') or p_filters is null or pg_catalog.jsonb_typeof(p_filters) <> 'object' or octet_length(p_filters::text)>4096 then
     raise exception using errcode = '22023', message = 'invalid portal request';
-  end if;
-  if p_kind in ('process', 'all') then
-    v_allowed := pg_catalog.array_append(v_allowed, 'processSubtype');
   end if;
   for v_key in select pg_catalog.jsonb_object_keys(p_filters)
   loop
-    if not (v_key = any (v_allowed)) then
+    if v_key not in (
+      'accessLevel', 'geography', 'classification', 'referenceYearFrom',
+      'referenceYearTo', 'source', 'processSubtype',
+      'classificationNodeId', 'classificationScope',
+      'geographyNodeId', 'geographyScope'
+    ) then
       raise exception using errcode = '22023', message = 'invalid portal request';
     end if;
   end loop;
-  if p_filters ? 'accessLevel'
-     and (
-       pg_catalog.jsonb_typeof(p_filters -> 'accessLevel') <> 'string'
-       or p_filters ->> 'accessLevel' not in ('open', 'metadata_only')
-     ) then
+
+  for v_key in select unnest(array['classificationNodeId', 'geographyNodeId'])
+  loop
+    if p_filters ? v_key then
+      if pg_catalog.jsonb_typeof(p_filters -> v_key) <> 'string'
+         or (p_filters ->> v_key) !~ v_node_pattern then
+        raise exception using errcode = '22023', message = 'invalid portal request';
+      end if;
+      -- The node must exist in the vocabulary and belong to the right axis.
+      if not exists (
+        select 1
+        from private.portal_navigation_node_v1 as node
+        where node.node_id = p_filters ->> v_key
+          and node.dimension = case v_key
+            when 'classificationNodeId' then 'classification'
+            else 'geography'
+          end
+      ) then
+        raise exception using errcode = '22023', message = 'invalid portal request';
+      end if;
+    end if;
+  end loop;
+
+  for v_key in select unnest(array['classificationScope', 'geographyScope'])
+  loop
+    if p_filters ? v_key and (
+      pg_catalog.jsonb_typeof(p_filters -> v_key) <> 'string'
+      or p_filters ->> v_key not in ('subtree', 'direct')
+    ) then
+      raise exception using errcode = '22023', message = 'invalid portal request';
+    end if;
+  end loop;
+
+  -- A scope without its node is invalid, and a classification node that the
+  -- dataset kind can never carry is refused rather than silently empty.
+  if p_filters ? 'classificationScope' and not (p_filters ? 'classificationNodeId') then
     raise exception using errcode = '22023', message = 'invalid portal request';
   end if;
-  if p_filters ? 'processSubtype' and p_kind = 'flow' then
+  if p_filters ? 'geographyScope' and not (p_filters ? 'geographyNodeId') then
     raise exception using errcode = '22023', message = 'invalid portal request';
   end if;
-  if p_filters ? 'referenceYearFrom' and p_filters ? 'referenceYearTo'
-     and (p_filters ->> 'referenceYearFrom')::integer
-       > (p_filters ->> 'referenceYearTo')::integer then
-    raise exception using errcode = '22023', message = 'invalid portal request';
-  end if;
-end
+
+  select pg_catalog.jsonb_object_agg(filter.key, filter.value)
+  into v_base
+  from pg_catalog.jsonb_each(p_filters) as filter(key, value)
+  where filter.key in (
+    'accessLevel', 'geography', 'classification', 'referenceYearFrom',
+    'referenceYearTo', 'source', 'processSubtype'
+  );
+
+  perform private.portal_validate_search_v1(
+    p_kind, p_query, coalesce(v_base, '{}'::jsonb), p_sort, p_limit
+  );
+end;
 $function$;
 
--- Aggregate the public-version counts a branch page needs in two grouped reads:
--- once for the page's own branch and once for the requested parent.
-create function private.portal_navigation_node_count_v1(
-  p_dimension text,
-  p_node_id text,
-  p_kind text,
-  p_query text,
-  p_filters jsonb
-)
-returns table(node_count bigint, direct_count bigint)
-language sql
-stable
-security definer
-parallel restricted
-set search_path = ''
-set statement_timeout = '8s'
-set plan_cache_mode = 'force_custom_plan'
-set row_security = 'on'
+create function private.portal_navigation_matched_versions_v1(p_kind text,p_query text,p_filters jsonb)
+returns table(dataset_kind text,id uuid,version text)
+language plpgsql stable security definer parallel restricted
+set search_path='' set row_security='on' set plan_cache_mode='force_custom_plan'
 as $function$
-  with matched_versions as materialized (
-    select projection.dataset_kind,
-      projection.id,
-      projection.version
-    from private.portal_catalog_search_rows_v2 as projection
-    where projection.dataset_kind = 'process'
-      and (p_kind = 'all' or p_kind = 'process')
-      and private.portal_card_matches_filters_v2(projection.card, p_filters)
-    union all
-    select projection.dataset_kind,
-      projection.id,
-      projection.version
-    from private.portal_catalog_search_rows_v1 as projection
-    where projection.dataset_kind = 'flow'
-      and (p_kind = 'all' or p_kind = 'flow')
-      and private.portal_card_matches_filters_v2(projection.card, p_filters)
-  ), branch as materialized (
-    select member.dataset_kind,
-      member.id,
-      member.version,
-      member.direct
-    from private.portal_navigation_membership_v1 as member
-    join matched_versions
-      on matched_versions.dataset_kind = member.dataset_kind
-     and matched_versions.id = member.id
-     and matched_versions.version = member.version
-    where member.dimension = p_dimension
-      and member.node_id = p_node_id
-  )
-  select pg_catalog.count(distinct (branch.dataset_kind, branch.id, branch.version)),
-    pg_catalog.count(distinct (branch.dataset_kind, branch.id, branch.version))
-      filter (where branch.direct)
-  from branch
+declare
+  v_exact uuid;
+  v_pattern text;
+begin
+  if p_query='' then
+    -- Empty/query-free navigation never detoasts public cards or raw source JSON.
+    return query select v.dataset_kind,v.id,v.version
+    from private.portal_navigation_versions_v1 v
+    where (p_kind='all' or v.dataset_kind=p_kind) and
+      (not (p_filters ? 'accessLevel') or v.access_level=p_filters->>'accessLevel')
+      and (not (p_filters ? 'geography') or v.geography_code=p_filters->>'geography')
+      and (not (p_filters ? 'classification') or v.classification_codes @> array[p_filters->>'classification'])
+      and (not (p_filters ? 'referenceYearFrom') or v.reference_year >= (p_filters->>'referenceYearFrom')::integer)
+      and (not (p_filters ? 'referenceYearTo') or v.reference_year <= (p_filters->>'referenceYearTo')::integer)
+      and (not (p_filters ? 'processSubtype') or v.process_subtype=p_filters->>'processSubtype')
+      and (not (p_filters ? 'source') or v.source=p_filters->>'source')
+      and (not (p_filters ? 'classificationNodeId') or exists (
+        select 1 from private.portal_navigation_membership_v1 m
+        where (m.dataset_kind,m.id,m.version)=(v.dataset_kind,v.id,v.version)
+          and m.dimension='classification' and m.node_id=p_filters->>'classificationNodeId'
+          and (coalesce(p_filters->>'classificationScope','subtree')='subtree' or m.direct)))
+      and (not (p_filters ? 'geographyNodeId') or exists (
+        select 1 from private.portal_navigation_membership_v1 m
+        where (m.dataset_kind,m.id,m.version)=(v.dataset_kind,v.id,v.version)
+          and m.dimension='geography' and m.node_id=p_filters->>'geographyNodeId'
+          and (coalesce(p_filters->>'geographyScope','subtree')='subtree' or m.direct)))
+;
+  else
+    if p_query ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then v_exact:=p_query::uuid; end if;
+    v_pattern := '%' || replace(replace(replace(p_query,chr(92),chr(92)||chr(92)),'%',chr(92)||'%'),'_',chr(92)||'_') || '%';
+    -- Reuse the exact UUID/CAS/literal/one-character candidate contract of V2.
+    return query select v.dataset_kind,v.id,v.version
+    from private.catalog_portal_facet_candidate_rows_v2(p_kind,p_query,v_exact,v_pattern) c
+    join private.portal_navigation_versions_v1 v
+      on (v.dataset_kind,v.id,v.version)=(c.dataset_kind,c.id,c.version)
+    where
+      (not (p_filters ? 'accessLevel') or v.access_level=p_filters->>'accessLevel')
+      and (not (p_filters ? 'geography') or v.geography_code=p_filters->>'geography')
+      and (not (p_filters ? 'classification') or v.classification_codes @> array[p_filters->>'classification'])
+      and (not (p_filters ? 'referenceYearFrom') or v.reference_year >= (p_filters->>'referenceYearFrom')::integer)
+      and (not (p_filters ? 'referenceYearTo') or v.reference_year <= (p_filters->>'referenceYearTo')::integer)
+      and (not (p_filters ? 'processSubtype') or v.process_subtype=p_filters->>'processSubtype')
+      and (not (p_filters ? 'source') or v.source=p_filters->>'source')
+      and (not (p_filters ? 'classificationNodeId') or exists (
+        select 1 from private.portal_navigation_membership_v1 m
+        where (m.dataset_kind,m.id,m.version)=(v.dataset_kind,v.id,v.version)
+          and m.dimension='classification' and m.node_id=p_filters->>'classificationNodeId'
+          and (coalesce(p_filters->>'classificationScope','subtree')='subtree' or m.direct)))
+      and (not (p_filters ? 'geographyNodeId') or exists (
+        select 1 from private.portal_navigation_membership_v1 m
+        where (m.dataset_kind,m.id,m.version)=(v.dataset_kind,v.id,v.version)
+          and m.dimension='geography' and m.node_id=p_filters->>'geographyNodeId'
+          and (coalesce(p_filters->>'geographyScope','subtree')='subtree' or m.direct)))
+;
+  end if;
+end;
 $function$;
 
 create function private.portal_navigation_impl_v1(
-  p_kind text,
-  p_query text,
-  p_filters jsonb,
-  p_dimension text,
-  p_parent_node_id text,
-  p_cursor_node_id text,
-  p_limit integer,
-  p_fingerprint text
-)
-returns jsonb
-language plpgsql
-stable
-security definer
-parallel restricted
-set search_path = ''
-set statement_timeout = '8s'
-set plan_cache_mode = 'force_custom_plan'
-set row_security = 'on'
+  p_kind text,p_query text,p_filters jsonb,p_dimension text,p_parent_node_id text,
+  p_cursor_node_id text,p_limit integer,p_fingerprint text
+) returns jsonb language plpgsql stable security definer parallel restricted
+set search_path='' set row_security='on' set plan_cache_mode='force_custom_plan'
+set statement_timeout='8s' set work_mem='32MB'
 as $function$
 declare
-  v_parent record;
-  v_ancestors jsonb := '[]'::jsonb;
-  v_nodes jsonb := '[]'::jsonb;
+  v_parent jsonb;
+  v_ancestors jsonb:='[]';
+  v_nodes jsonb;
   v_totals jsonb;
   v_next text;
-  v_parent_id text;
-  v_parent_parent_id text;
-  v_parent_code text;
-  v_parent_taxonomy text;
-  v_parent_count bigint := 0;
-  v_parent_direct bigint := 0;
-  v_guard text;
   v_result jsonb;
+  v_after_code text;
+  v_trimmed boolean:=false;
 begin
   perform private.assert_portal_navigation_contract_v1();
-
-  if p_parent_node_id is not null then
-    select node.node_id, node.parent_node_id
-    into v_parent
-    from private.portal_navigation_node_v1 as node
-    where node.node_id = p_parent_node_id
-      and node.dimension = p_dimension;
-    if v_parent.node_id is null then
-      raise exception using errcode = '22023', message = 'invalid portal request';
-    end if;
-    v_parent_id := v_parent.node_id;
-
-    with recursive chain as (
-      select node.node_id,
-        node.parent_node_id,
-        node.code,
-        node.taxonomy,
-        1 as depth
-      from private.portal_navigation_node_v1 as node
-      where node.node_id = v_parent.parent_node_id
-        and node.dimension = p_dimension
-      union all
-      select parent.node_id,
-        parent.parent_node_id,
-        parent.code,
-        parent.taxonomy,
-        chain.depth + 1
-      from private.portal_navigation_node_v1 as parent
-      join chain on parent.node_id = chain.parent_node_id
-      where parent.dimension = p_dimension
-        and chain.depth < 32
-    )
-    select coalesce(pg_catalog.jsonb_agg(
-      pg_catalog.jsonb_build_object(
-        'nodeId', chain.node_id,
-        'parentNodeId', chain.parent_node_id,
-        'code', chain.code,
-        'taxonomy', chain.taxonomy
-      ) order by chain.depth desc
-    ), '[]'::jsonb)
-    into v_ancestors
-    from chain;
+  if p_parent_node_id is not null and not exists (
+    select 1 from private.portal_navigation_node_v1 n
+    where n.node_id=p_parent_node_id and n.dimension=p_dimension
+      and (n.source_file is not null or n.node_id in ('class:isic','class:cpc','class:elementary','geo:unmapped')
+        or exists(select 1 from private.portal_navigation_membership_v1 m where m.node_id=n.node_id))
+  ) then raise exception using errcode='22023',message='invalid portal request'; end if;
+  if p_cursor_node_id is not null then
+    select n.code into v_after_code from private.portal_navigation_node_v1 n
+    where n.node_id=p_cursor_node_id and n.dimension=p_dimension
+      and n.parent_node_id is not distinct from p_parent_node_id;
+    if not found then raise exception using errcode='22023',message='invalid portal request'; end if;
   end if;
 
-  with matched_versions as materialized (
-    select projection.dataset_kind,
-      projection.id,
-      projection.version
-    from private.portal_catalog_search_rows_v2 as projection
-    where projection.dataset_kind = 'process'
-      and private.portal_card_matches_filters_v2(projection.card, p_filters)
+  with matched as materialized (
+    select * from private.portal_navigation_matched_versions_v1('all',p_query,p_filters)
+  ), children as materialized (
+    select n.* from private.portal_navigation_node_v1 n
+    where n.dimension=p_dimension and n.parent_node_id is not distinct from p_parent_node_id
+      and (n.source_file is not null or n.node_id in ('class:isic','class:cpc','class:elementary','geo:unmapped') or exists (
+        select 1 from private.portal_navigation_membership_v1 m join matched v using(dataset_kind,id,version)
+        where m.node_id=n.node_id and (p_kind='all' or m.dataset_kind=p_kind)))
+      and (p_dimension<>'classification' or p_kind='all' or n.taxonomy not in ('isic','cpc','elementary')
+        or (p_kind='process' and n.taxonomy='isic') or (p_kind='flow' and n.taxonomy in ('cpc','elementary')))
+      and (p_cursor_node_id is null or (n.code collate "C",n.node_id collate "C")>(v_after_code collate "C",p_cursor_node_id collate "C"))
+    order by n.code collate "C",n.node_id collate "C" limit p_limit+1
+  ), targets as materialized (
+    select * from children
     union all
-    select projection.dataset_kind,
-      projection.id,
-      projection.version
-    from private.portal_catalog_search_rows_v1 as projection
-    where projection.dataset_kind = 'flow'
-      and private.portal_card_matches_filters_v2(projection.card, p_filters)
-  ), totals as (
-    select pg_catalog.jsonb_build_object(
-        'process', pg_catalog.count(distinct (matched_versions.id, matched_versions.version))
-          filter (where matched_versions.dataset_kind = 'process'),
-        'flow', pg_catalog.count(distinct (matched_versions.id, matched_versions.version))
-          filter (where matched_versions.dataset_kind = 'flow')
-      ) as value
-    from matched_versions
-  ), visible_versions as materialized (
-    select matched_versions.dataset_kind,
-      matched_versions.id,
-      matched_versions.version
-    from matched_versions
-    where p_kind = 'all' or matched_versions.dataset_kind = p_kind
-  ), leaf_nodes as materialized (
-    select node.node_id, node.parent_node_id, node.code, node.taxonomy
-    from private.portal_navigation_node_v1 as node
-    where node.dimension = p_dimension
-      and node.parent_node_id is not distinct from p_parent_node_id
-      and (p_cursor_node_id is null or node.node_id > p_cursor_node_id)
-    order by node.node_id
-    limit p_limit + 1
-  ), branch_counts as (
-    select member.node_id,
-      pg_catalog.count(distinct (member.dataset_kind, member.id, member.version)) as node_count,
-      pg_catalog.count(distinct (member.dataset_kind, member.id, member.version))
-        filter (where member.direct) as direct_count
-    from private.portal_navigation_membership_v1 as member
-    join visible_versions
-      on visible_versions.dataset_kind = member.dataset_kind
-     and visible_versions.id = member.id
-     and visible_versions.version = member.version
-    where member.dimension = p_dimension
-      and member.node_id in (select leaf.node_id from leaf_nodes as leaf)
-    group by member.node_id
-  ), page as (
-    select leaf.node_id,
-      leaf.parent_node_id,
-      leaf.code,
-      leaf.taxonomy,
-      coalesce(branch_counts.node_count, 0) as node_count,
-      coalesce(branch_counts.direct_count, 0) as direct_count,
-      exists (
-        select 1
-        from private.portal_navigation_node_v1 as child
-        where child.parent_node_id = leaf.node_id
-      ) as has_children,
-      pg_catalog.row_number() over (order by leaf.node_id) as page_rank
-    from leaf_nodes as leaf
-    left join branch_counts on branch_counts.node_id = leaf.node_id
-  )
-  select coalesce(pg_catalog.jsonb_agg(
-    pg_catalog.jsonb_build_object(
-      'nodeId', page.node_id,
-      'parentNodeId', page.parent_node_id,
-      'code', page.code,
-      'taxonomy', page.taxonomy,
-      'count', page.node_count,
-      'directCount', page.direct_count,
-      'hasChildren', page.has_children
-    ) order by page.page_rank
-  ) filter (where page.page_rank <= p_limit), '[]'::jsonb),
-  case when pg_catalog.max(page.page_rank) > p_limit then
-    (pg_catalog.jsonb_agg(page.node_id order by page.page_rank)
-      filter (where page.page_rank = p_limit)) -> 0
-  else null end,
-  (select totals.value from totals)
-  into v_nodes, v_next, v_totals
-  from page;
+    select n.* from private.portal_navigation_node_v1 n where n.node_id=p_parent_node_id
+  ), counted as materialized (
+    select m.node_id,count(*) as count,count(*) filter(where m.direct) as direct_count
+    from private.portal_navigation_membership_v1 m
+    join matched v on (v.dataset_kind,v.id,v.version)=(m.dataset_kind,m.id,m.version)
+    where m.dimension=p_dimension and (p_kind='all' or m.dataset_kind=p_kind)
+      and m.node_id in(select n.node_id from targets n)
+    group by m.node_id
+  ), decorated as materialized (
+    select n.node_id,n.code,jsonb_build_object(
+      'nodeId',n.node_id,'parentNodeId',n.parent_node_id,'code',n.code,'taxonomy',n.taxonomy,
+      'count',coalesce(c.count,0),'directCount',coalesce(c.direct_count,0),
+      'hasChildren',exists(select 1 from private.portal_navigation_node_v1 child where child.parent_node_id=n.node_id
+        and (child.source_file is not null or exists(select 1 from private.portal_navigation_membership_v1 m where m.node_id=child.node_id)))
+    ) as value from targets n left join counted c on c.node_id=n.node_id
+  ), paged as (
+    select d.*,row_number() over(order by d.code collate "C",d.node_id collate "C") as rn
+    from decorated d where d.node_id is distinct from p_parent_node_id
+  ) select
+    coalesce((select jsonb_agg(value order by rn) from paged where rn<=p_limit),'[]'::jsonb),
+    (select case when count(*)>p_limit then (array_agg(node_id order by rn))[p_limit] else null end from paged),
+    (select value from decorated where node_id=p_parent_node_id),
+    (select jsonb_build_object('process',count(*) filter(where dataset_kind='process'),'flow',count(*) filter(where dataset_kind='flow')) from matched)
+  into v_nodes,v_next,v_parent,v_totals;
 
-  v_parent_id := case when p_parent_node_id is null then null else v_parent_id end;
+  with recursive ancestors as (
+    select n.node_id,n.parent_node_id,n.code,n.taxonomy,1 as depth
+    from private.portal_navigation_node_v1 n
+    where n.node_id=(select p.parent_node_id from private.portal_navigation_node_v1 p where p.node_id=p_parent_node_id)
+    union all
+    select n.node_id,n.parent_node_id,n.code,n.taxonomy,a.depth+1
+    from ancestors a join private.portal_navigation_node_v1 n on n.node_id=a.parent_node_id
+    where a.depth<32
+  ) select coalesce(jsonb_agg(jsonb_build_object('nodeId',node_id,'parentNodeId',parent_node_id,'code',code,'taxonomy',taxonomy) order by depth desc),'[]'::jsonb)
+    into v_ancestors from ancestors;
 
-  if v_parent_id is not null then
-    select node.parent_node_id, node.code, node.taxonomy
-    into v_parent_parent_id, v_parent_code, v_parent_taxonomy
-    from private.portal_navigation_node_v1 as node
-    where node.node_id = v_parent_id;
-
-    select parent_count.node_count, parent_count.direct_count
-    into v_parent_count, v_parent_direct
-    from private.portal_navigation_node_count_v1(
-      p_dimension, v_parent_id, p_kind, p_query, p_filters
-    ) as parent_count;
-    v_parent_count := coalesce(v_parent_count, 0);
-    v_parent_direct := coalesce(v_parent_direct, 0);
-  end if;
-
-  v_result := pg_catalog.jsonb_build_object(
-    'schemaVersion', 'portal.public-navigation.v1',
-    'countBasis', 'public_versions',
-    'dimension', p_dimension,
-    'kind', p_kind,
-    'totals', coalesce(v_totals, pg_catalog.jsonb_build_object('process', 0, 'flow', 0)),
-    'parent', case when p_parent_node_id is null then null else
-      pg_catalog.jsonb_build_object(
-        'nodeId', v_parent_id,
-        'parentNodeId', v_parent_parent_id,
-        'code', v_parent_code,
-        'taxonomy', v_parent_taxonomy,
-        'count', v_parent_count,
-        'directCount', v_parent_direct,
-        'hasChildren', exists (
-          select 1 from private.portal_navigation_node_v1 as child
-          where child.parent_node_id = v_parent_id
-        )
-      ) end,
-    'ancestors', v_ancestors,
-    'nodes', v_nodes,
-    'nextCursor', case when v_next is null then null
-      else private.portal_cursor_encode_v1(pg_catalog.jsonb_build_object(
-        'v', 1,
-        'fp', p_fingerprint,
-        'dimension', p_dimension,
-        'kind', p_kind,
-        'parent', p_parent_node_id,
-        'node', v_next
-      ))
-    end
-  );
-
-  if pg_catalog.octet_length(v_result::text) > 65536 then
-    raise exception using
-      errcode = '54000',
-      message = 'Portal navigation page exceeded its response budget';
-  end if;
+  loop
+    v_result:=jsonb_build_object('schemaVersion','portal.public-navigation.v1','countBasis','public_versions',
+      'dimension',p_dimension,'kind',p_kind,'totals',v_totals,'parent',v_parent,'ancestors',v_ancestors,'nodes',v_nodes,
+      'nextCursor',case when v_next is null then null else private.portal_cursor_encode_v1(jsonb_build_object(
+        'v',1,'fp',p_fingerprint,'dimension',p_dimension,'kind',p_kind,'parent',p_parent_node_id,'node',v_next)) end);
+    exit when octet_length(v_result::text)<=65536;
+    if jsonb_array_length(v_nodes)<=1 then
+      raise exception using errcode='54000',message='Portal navigation response exceeds its byte budget';
+    end if;
+    v_nodes:=v_nodes-(jsonb_array_length(v_nodes)-1);
+    v_next:=v_nodes->(jsonb_array_length(v_nodes)-1)->>'nodeId';
+  end loop;
   return v_result;
-end
+end;
 $function$;
 
 create function private.portal_navigation_v1(
-  p_kind text,
-  p_query text,
-  p_filters jsonb,
-  p_dimension text,
-  p_parent_node_id text,
-  p_cursor text,
-  p_limit integer
-)
-returns jsonb
-language plpgsql
-stable
-parallel restricted
-set search_path = ''
+  p_kind text,p_query text,p_filters jsonb,p_dimension text,p_parent_node_id text,p_cursor text,p_limit integer
+) returns jsonb language plpgsql stable parallel restricted set search_path=''
 as $function$
 declare
-  v_query text;
+  v_query text:=lower(btrim(coalesce(p_query,'')));
   v_filters jsonb;
-  v_limit integer := coalesce(p_limit, 100);
+  v_limit integer:=coalesce(p_limit,100);
   v_fingerprint text;
   v_cursor jsonb;
   v_cursor_node text;
 begin
-  perform private.portal_navigation_validate_v1(
-    p_kind,
-    coalesce(p_query, ''),
-    coalesce(p_filters, '{}'::jsonb),
-    p_dimension,
-    p_parent_node_id,
-    v_limit
-  );
-  v_query := pg_catalog.lower(pg_catalog.btrim(coalesce(p_query, '')));
-  v_filters := private.portal_normalize_filters_v1(p_filters);
-  v_fingerprint := pg_catalog.encode(extensions.digest(
-    pg_catalog.convert_to(
-      'portal-navigation-v1:' || private.portal_query_fingerprint_v1(
-        p_kind, v_query, v_filters, p_dimension || ':' || coalesce(p_parent_node_id, '')
-      ),
-      'UTF8'
-    ),
-    'sha256'
-  ), 'hex');
-
-  if p_cursor is not null then
-    v_cursor := private.portal_cursor_decode_v1(p_cursor);
-    if v_cursor is null
-       or (select pg_catalog.count(*) from pg_catalog.jsonb_object_keys(v_cursor)) <> 6
-       or v_cursor ->> 'v' <> '1'
-       or v_cursor ->> 'fp' <> v_fingerprint
-       or v_cursor ->> 'dimension' <> p_dimension
-       or v_cursor ->> 'kind' <> p_kind
-       or v_cursor ->> 'parent' is distinct from p_parent_node_id
-       or coalesce(v_cursor ->> 'node', '') !~ '^[a-z][a-z0-9-]*:[!-~]{1,96}$' then
-      raise exception using errcode = '22023', message = 'invalid portal request';
-    end if;
-    v_cursor_node := v_cursor ->> 'node';
+  if p_dimension is null or p_dimension not in ('classification','geography')
+    or v_limit<1 or v_limit>500 then
+    raise exception using errcode='22023',message='invalid portal request';
   end if;
-
-  return private.portal_navigation_impl_v1(
-    p_kind, v_query, v_filters, p_dimension, p_parent_node_id,
-    v_cursor_node, v_limit, v_fingerprint
-  );
-end
+  perform private.portal_validate_search_v3(p_kind,coalesce(p_query,''),coalesce(p_filters,'{}'::jsonb),'relevance',1);
+  v_filters:=private.portal_normalize_filters_v1(p_filters);
+  v_fingerprint:=encode(extensions.digest(convert_to(
+    'portal-navigation-v1:' || (select asset_sha256 from private.portal_navigation_contract_v1 where contract_version=1) || ':' ||
+    private.portal_query_fingerprint_v1(p_kind,v_query,v_filters,p_dimension || ':' || coalesce(p_parent_node_id,'')),
+    'UTF8'),'sha256'),'hex');
+  if p_cursor is not null then
+    v_cursor:=private.portal_cursor_decode_v1(p_cursor);
+    if v_cursor is null or jsonb_typeof(v_cursor)<>'object'
+      or (select count(*) from jsonb_object_keys(v_cursor))<>6
+      or v_cursor->>'v' is distinct from '1' or v_cursor->>'fp' is distinct from v_fingerprint
+      or v_cursor->>'kind' is distinct from p_kind or v_cursor->>'dimension' is distinct from p_dimension
+      or v_cursor->>'parent' is distinct from p_parent_node_id
+      or coalesce(v_cursor->>'node','') !~ '^[a-z][a-z0-9-]*:[!-~]{1,96}$'
+    then raise exception using errcode='22023',message='invalid portal request'; end if;
+    v_cursor_node:=v_cursor->>'node';
+  end if;
+  return private.portal_navigation_impl_v1(p_kind,v_query,v_filters,p_dimension,p_parent_node_id,v_cursor_node,v_limit,v_fingerprint);
+end;
 $function$;
 
-create function api.portal_navigation_v1(
-  p_kind text,
-  p_query text default '',
-  p_filters jsonb default '{}'::jsonb,
-  p_dimension text default 'classification',
-  p_parent_node_id text default null,
-  p_cursor text default null,
-  p_limit integer default 100
-)
-returns jsonb
-language plpgsql
-stable
-security definer
-set search_path = ''
-set statement_timeout = '8s'
+create function api.portal_navigation_v1(p_kind text,p_query text default '',p_filters jsonb default '{}',
+  p_dimension text default 'classification',p_parent_node_id text default null,p_cursor text default null,p_limit integer default 100)
+returns jsonb language plpgsql stable security definer
+set search_path='' set statement_timeout='8s' set row_security='on'
 as $function$
 begin
-  return private.portal_navigation_v1(
-    p_kind, p_query, p_filters, p_dimension, p_parent_node_id, p_cursor, p_limit
-  );
+  return private.portal_navigation_v1(p_kind,p_query,p_filters,p_dimension,p_parent_node_id,p_cursor,p_limit);
 exception
-  when sqlstate '22023' then
-    raise exception using errcode = '22023', message = 'invalid portal request';
-  when query_canceled then
-    raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
-  when others then
-    raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
-end
+  when sqlstate '22023' then raise exception using errcode='22023',message='invalid portal request';
+  when query_canceled then raise exception using errcode='P0001',message='portal catalog unavailable';
+  when others then raise exception using errcode='P0001',message='portal catalog unavailable';
+end;
 $function$;
-
-comment on function api.portal_navigation_v1(text, text, jsonb, text, text, text, integer) is
-  'Anonymous, locator-free navigation page: one branch of the classification or geography vocabulary with public-version counts and complete keyset pagination.';
-
-alter function private.portal_navigation_node_count_v1(text, text, text, text, jsonb) owner to portal_public_executor;
-alter function private.portal_navigation_validate_v1(text, text, jsonb, text, text, integer) owner to api_internal_executor;
-alter function private.portal_navigation_impl_v1(text, text, jsonb, text, text, text, integer, text) owner to api_internal_executor;
-alter function private.portal_navigation_v1(text, text, jsonb, text, text, text, integer) owner to portal_public_executor;
-alter function api.portal_navigation_v1(text, text, jsonb, text, text, text, integer) owner to portal_public_executor;
-
-revoke all on function private.portal_navigation_validate_v1(text, text, jsonb, text, text, integer) from public, anon, authenticated, service_role;
-revoke all on function private.portal_navigation_node_count_v1(text, text, text, text, jsonb) from public, anon, authenticated, service_role;
-revoke all on function private.portal_navigation_impl_v1(text, text, jsonb, text, text, text, integer, text) from public, anon, authenticated, service_role;
-revoke all on function private.portal_navigation_v1(text, text, jsonb, text, text, text, integer) from public, anon, authenticated, service_role;
-revoke all on function api.portal_navigation_v1(text, text, jsonb, text, text, text, integer) from public;
-revoke all on function api.portal_navigation_v1(text, text, jsonb, text, text, text, integer) from anon, authenticated;
-
-grant execute on function private.portal_navigation_validate_v1(text, text, jsonb, text, text, integer)
-  to api_internal_executor, portal_public_executor;
-grant execute on function private.portal_navigation_node_count_v1(text, text, text, text, jsonb) to api_internal_executor;
-grant execute on function private.portal_navigation_impl_v1(text, text, jsonb, text, text, text, integer, text)
-  to api_internal_executor, portal_public_executor;
-grant execute on function private.portal_navigation_v1(text, text, jsonb, text, text, text, integer) to portal_public_executor;
-grant all on function api.portal_navigation_v1(text, text, jsonb, text, text, text, integer) to anon;
-grant all on function api.portal_navigation_v1(text, text, jsonb, text, text, text, integer) to authenticated;
-
-reset role;
-revoke create on schema private, api from api_internal_executor, portal_public_executor;
-revoke api_internal_executor, portal_public_executor from postgres;
-
+alter function private.portal_navigation_version_matches_v3(text,jsonb,uuid,text) owner to portal_public_executor;
+revoke all on function private.portal_navigation_version_matches_v3(text,jsonb,uuid,text) from public,anon,authenticated,service_role;
+grant execute on function private.portal_navigation_version_matches_v3(text,jsonb,uuid,text) to portal_public_executor;
+alter function private.portal_validate_search_v3(text,text,jsonb,text,integer) owner to portal_public_executor;
+revoke all on function private.portal_validate_search_v3(text,text,jsonb,text,integer) from public,anon,authenticated,service_role;
+grant execute on function private.portal_validate_search_v3(text,text,jsonb,text,integer) to portal_public_executor;
+alter function private.portal_navigation_matched_versions_v1(text,text,jsonb) owner to portal_public_executor;
+revoke all on function private.portal_navigation_matched_versions_v1(text,text,jsonb) from public,anon,authenticated,service_role;
+grant execute on function private.portal_navigation_matched_versions_v1(text,text,jsonb) to portal_public_executor;
+alter function private.portal_navigation_impl_v1(text,text,jsonb,text,text,text,integer,text) owner to portal_public_executor;
+revoke all on function private.portal_navigation_impl_v1(text,text,jsonb,text,text,text,integer,text) from public,anon,authenticated,service_role;
+grant execute on function private.portal_navigation_impl_v1(text,text,jsonb,text,text,text,integer,text) to portal_public_executor;
+alter function private.portal_navigation_v1(text,text,jsonb,text,text,text,integer) owner to portal_public_executor;
+revoke all on function private.portal_navigation_v1(text,text,jsonb,text,text,text,integer) from public,anon,authenticated,service_role;
+grant execute on function private.portal_navigation_v1(text,text,jsonb,text,text,text,integer) to portal_public_executor;
+alter function api.portal_navigation_v1(text,text,jsonb,text,text,text,integer) owner to portal_public_executor;
+revoke all on function api.portal_navigation_v1(text,text,jsonb,text,text,text,integer) from public,anon,authenticated,service_role;
+grant execute on function api.portal_navigation_v1(text,text,jsonb,text,text,text,integer) to portal_public_executor;
+grant execute on function private.assert_portal_navigation_contract_v1() to portal_public_executor;
+grant execute on function api.portal_navigation_v1(text,text,jsonb,text,text,text,integer) to anon,authenticated;
+revoke create on schema private,api from portal_public_executor,api_internal_executor;
+revoke portal_public_executor,api_internal_executor from postgres;
 commit;

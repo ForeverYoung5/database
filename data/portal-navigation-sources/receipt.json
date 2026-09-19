@@ -1,0 +1,80 @@
+{
+  "platformCommit": "aca2d4f2a905e97867942a78be75c5daea4fde5e",
+  "archiveRepository": "tiangong-lca/data",
+  "archiveCommit": "2e163304adb9357cd7a17facfc8e5b426ed74a93",
+  "archivePath": "tiangong_lca_data/ILCDLocations.xml",
+  "files": [
+    {
+      "path": "platform/src/services/referenceResources/reference-resource-manifest.json.gz",
+      "sha256": "f4905a73cd7aa6cc2414533bdf432d0f4b420879d2251e3751ffbead9dab5f8a"
+    },
+    {
+      "path": "platform/src/services/referenceResources/data/isic/base.json.gz",
+      "sha256": "76c50381dbd8495c0ae4cf4a712d3a1041c978258ff2c549d8c1b916c431751d"
+    },
+    {
+      "path": "platform/src/services/referenceResources/data/isic/overlays/zh.json.gz",
+      "sha256": "cc255458d5def3dfed7f7300a5c5583af2e573300085290a370a05e4aeab79bb"
+    },
+    {
+      "path": "platform/src/services/referenceResources/data/isic/overlays/de.json.gz",
+      "sha256": "83e913e32e411d90d57b5c942bab54a1ddf6a1ce456d295269fbc55167e49dc3"
+    },
+    {
+      "path": "platform/src/services/referenceResources/data/isic/overlays/fr.json.gz",
+      "sha256": "d5eacb27a235b0ef37c6d6a7e4d20344de7db5e6c8ef20c5bb87c432bb79efd6"
+    },
+    {
+      "path": "platform/src/services/referenceResources/data/cpc/base.json.gz",
+      "sha256": "1f815c001c677360203f3c5ddd83833412d2d9fe25822204c561eaec75c6fc7f"
+    },
+    {
+      "path": "platform/src/services/referenceResources/data/cpc/overlays/zh.json.gz",
+      "sha256": "f21eb3c7c72e343944d2b0e31da6c07b6b567f1218520cc74b2134bd6da0449a"
+    },
+    {
+      "path": "platform/src/services/referenceResources/data/cpc/overlays/de.json.gz",
+      "sha256": "da5e4a7e72c0f70897c3d4573577e1bd239d56ebface86652d1d6916540c7585"
+    },
+    {
+      "path": "platform/src/services/referenceResources/data/cpc/overlays/fr.json.gz",
+      "sha256": "871b5ee436ab9bc25210e69e2b6e0785a8136d98fa8e2d17bf5391857316993e"
+    },
+    {
+      "path": "platform/src/services/referenceResources/data/ilcd-flow-categorization/base.json.gz",
+      "sha256": "9ee9464497336b890ffbd46576687309880ac4476704d1d8f28375332d30f271"
+    },
+    {
+      "path": "platform/src/services/referenceResources/data/ilcd-flow-categorization/overlays/zh.json.gz",
+      "sha256": "14b08335a068eb1192f920b8521c0283d824462632f00d6e7d043df6c3f11aeb"
+    },
+    {
+      "path": "platform/src/services/referenceResources/data/ilcd-flow-categorization/overlays/de.json.gz",
+      "sha256": "e2a0bd72f85a0544eb46a66238cf4ad7a0c19021178f3f9eeddd861748e47aaa"
+    },
+    {
+      "path": "platform/src/services/referenceResources/data/ilcd-flow-categorization/overlays/fr.json.gz",
+      "sha256": "0a26632938636f5184c0072bf7f2fcc4522fb15cd420789bf5a4fbe23c6972fc"
+    },
+    {
+      "path": "platform/src/services/referenceResources/data/ilcd-locations/base.json.gz",
+      "sha256": "2efa6365e14215296ab418ac5f20af90d75052e4c6f6564682b738bdd51a7950"
+    },
+    {
+      "path": "platform/src/services/referenceResources/data/ilcd-locations/overlays/zh.json.gz",
+      "sha256": "0531986caa5293c5582b2ac1176ba5da8dd95a2b8fa42aea1a1b739330579f3e"
+    },
+    {
+      "path": "platform/src/services/referenceResources/data/ilcd-locations/overlays/de.json.gz",
+      "sha256": "305a5b4cc10cd5a4c1e87175e1bc0aac6180432e936968e74ab6b96056ab465a"
+    },
+    {
+      "path": "platform/src/services/referenceResources/data/ilcd-locations/overlays/fr.json.gz",
+      "sha256": "c3d23283d9115608929f0ca914b110883b292a9f4ce63558be733531599c05bb"
+    },
+    {
+      "path": "archive/ILCDLocations.xml.gz",
+      "sha256": "0e6c14cff52b8af26b48f85e684760a80ec963ceaff738bf65b0c5e205841c26"
+    }
+  ]
+}

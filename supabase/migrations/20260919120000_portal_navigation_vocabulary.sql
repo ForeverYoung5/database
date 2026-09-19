@@ -42,7 +42,7 @@ begin
     raise exception 'Portal navigation executor prerequisite is unsafe'
       using errcode = '42501';
   end if;
-end
+end;
 $portal_navigation_role_guard$;
 
 create table private.portal_navigation_contract_v1 (
@@ -77,7 +77,7 @@ create table private.portal_navigation_node_v1 (
     references private.portal_navigation_node_v1(node_id)
     on update restrict on delete restrict,
   code text not null
-    check (pg_catalog.length(code) between 1 and 64),
+    check (pg_catalog.length(code) >= 1),
   taxonomy text not null
     check (taxonomy ~ '^[a-z][a-z0-9-]{1,48}$'),
   dimension text not null
@@ -116,7 +116,10 @@ alter table private.portal_navigation_node_v1 force row level security;
 create index portal_navigation_node_parent_v1_idx
   on private.portal_navigation_node_v1 (dimension, parent_node_id, node_id);
 create index portal_navigation_node_taxonomy_v1_idx
-  on private.portal_navigation_node_v1 (dimension, taxonomy, code);
+  on private.portal_navigation_node_v1 (dimension, taxonomy, lower(code)) where source_file is not null;
+
+create index portal_navigation_node_alias_v1_idx
+  on private.portal_navigation_node_v1 using gin(alias_codes) where cardinality(alias_codes)>0;
 
 create policy portal_navigation_node_portal_select_v1
 on private.portal_navigation_node_v1
@@ -209,7 +212,7 @@ begin
         using errcode = '55000';
     end if;
   end loop;
-end
+end;
 $function$;
 
 comment on function private.assert_portal_navigation_contract_v1() is

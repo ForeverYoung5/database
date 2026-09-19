@@ -660,3 +660,9 @@ python3 -m unittest scripts/test_scope_closure_provider_qualification.py
 ## Local Docpact Push Gate
 
 The repository now includes a local pre-push docpact gate in `scripts/docpact-gate.sh`. The gate resolves the CLI through `scripts/docpact`. It is documentation-governance tooling and does not change database schema workspace behavior.
+
+## Portal navigation tooling
+
+`python3 scripts/generate_portal_navigation_vocabulary.py --check` verifies the offline, receipted vocabulary without modifying generated artifacts. Omit `--check` and pass `--seed-dir supabase/migrations` to regenerate an intentionally reviewed source change. `--vendor --platform-root <path> --archive-locations <path>` refreshes source copies only after exact platform-commit verification; this is separate from ordinary builds. Source receipts, schemas, types and seed migrations must be reviewed together.
+
+`python3 scripts/benchmark_portal_summary_bounded.py --help` describes the explicitly local, rollback-only performance fixture. It refuses remote Docker contexts and nonempty public projections. Read-scale results do not qualify production latency or source-writer throughput.

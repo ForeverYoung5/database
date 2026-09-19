@@ -1,0 +1,1 @@
+CREATE OR REPLACE TRIGGER "portal_navigation_seed_guard_v1" BEFORE DELETE OR UPDATE ON "private"."portal_navigation_node_v1" FOR EACH ROW EXECUTE FUNCTION "private"."guard_portal_navigation_seed_v1"();

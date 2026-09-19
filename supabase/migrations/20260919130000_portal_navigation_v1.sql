@@ -35,8 +35,45 @@ begin
     raise exception 'Portal navigation executor prerequisite is unsafe'
       using errcode = '42501';
   end if;
-end
+end;
 $portal_navigation_role_guard$;
+
+-- Narrow, public-safe exact-version facts. The existing V1 parent retains both
+-- kinds (Process V2 supplies the current Process card); the FK withdraws both
+-- this row and its memberships whenever the authoritative public parent leaves.
+create table private.portal_navigation_versions_v1 (
+  dataset_kind text not null check (dataset_kind in ('process','flow')),
+  id uuid not null,
+  version text not null,
+  process_id uuid generated always as (case when dataset_kind='process' then id end) stored,
+  process_version text generated always as (case when dataset_kind='process' then version end) stored,
+  access_level text not null,
+  geography_code text,
+  classification_codes text[] not null,
+  reference_year integer,
+  process_subtype text,
+  source text,
+  primary key (dataset_kind,id,version),
+  foreign key (dataset_kind,id,version)
+    references private.portal_catalog_search_rows_v1(dataset_kind,id,version)
+    on update cascade on delete cascade deferrable initially deferred,
+  foreign key (dataset_kind,process_id,process_version)
+    references private.portal_catalog_search_rows_v2(dataset_kind,id,version)
+    on update no action on delete cascade deferrable initially deferred
+);
+alter table private.portal_navigation_versions_v1 enable row level security;
+alter table private.portal_navigation_versions_v1 force row level security;
+create policy portal_navigation_versions_read_v1 on private.portal_navigation_versions_v1
+  for select to portal_public_executor using (true);
+create policy portal_navigation_versions_writer_v1 on private.portal_navigation_versions_v1
+  for all to api_internal_executor using (true) with check (true);
+revoke all on private.portal_navigation_versions_v1 from public,anon,authenticated,service_role;
+grant select(dataset_kind,id,version,access_level,geography_code,classification_codes,reference_year,process_subtype,source) on private.portal_navigation_versions_v1 to portal_public_executor;
+grant select,insert,update,delete on private.portal_navigation_versions_v1 to api_internal_executor;
+create index portal_navigation_versions_process_parent_v1_idx
+  on private.portal_navigation_versions_v1(dataset_kind,process_id,process_version) where process_id is not null;
+create index portal_navigation_versions_geography_v1_idx
+  on private.portal_navigation_versions_v1 (geography_code,dataset_kind,id,version);
 
 create table private.portal_navigation_membership_v1 (
   dataset_kind text not null
@@ -53,15 +90,16 @@ create table private.portal_navigation_membership_v1 (
   -- materialised for the same version is false, so a branch never counts a
   -- version it does not directly contain.
   direct boolean not null,
-  primary key (dimension, node_id, dataset_kind, id, version)
+  primary key (dataset_kind,id,version,dimension,node_id),
+  foreign key (dataset_kind,id,version)
+    references private.portal_navigation_versions_v1(dataset_kind,id,version)
+    on update cascade on delete cascade
 );
 
 alter table private.portal_navigation_membership_v1 owner to postgres;
 alter table private.portal_navigation_membership_v1 enable row level security;
 alter table private.portal_navigation_membership_v1 force row level security;
 
-create index portal_navigation_membership_version_v1_idx
-  on private.portal_navigation_membership_v1 (dataset_kind, id, version);
 -- One grouped read per branch page: the primary key already starts with
 -- (dimension, node_id), and this covering index keeps the count aggregation
 -- index-only.
@@ -84,7 +122,7 @@ with check (true);
 
 revoke all on table private.portal_navigation_membership_v1
   from public, anon, authenticated, service_role;
-grant select on table private.portal_navigation_membership_v1
+grant select(dataset_kind,id,version,dimension,node_id,direct) on table private.portal_navigation_membership_v1
   to portal_public_executor;
 grant select, insert, update, delete on table private.portal_navigation_membership_v1
   to api_internal_executor;
@@ -163,8 +201,9 @@ as $function$
     when 'cpc' then array['cpc']::text[]
     when 'elementary-flow' then array['elementary']::text[]
     when 'ilcd-flow-categorization' then array['elementary']::text[]
-    else array['isic', 'cpc', 'elementary']::text[]
-  end
+    when 'ilcd' then array['isic','cpc']::text[]
+    else '{}'::text[]
+  end;
 $function$;
 
 -- Resolve one authored classification entry to exactly one vocabulary node.
@@ -189,7 +228,9 @@ declare
   v_node text;
   v_hits integer;
 begin
-  v_taxonomies := private.portal_navigation_classification_taxonomy_v1(p_system);
+  select coalesce(array_agg(taxonomy), '{}'::text[]) into v_taxonomies
+  from unnest(private.portal_navigation_classification_taxonomy_v1(p_system)) taxonomy
+  where (p_kind='process' and taxonomy='isic') or (p_kind='flow' and taxonomy in ('cpc','elementary'));
   v_code := private.portal_navigation_classification_code_v1(p_value);
   v_label := private.portal_navigation_classification_label_v1(p_value);
   v_depth := coalesce(
@@ -202,35 +243,8 @@ begin
     end
   );
 
-  -- Elementary-flow categorisation carries human labels rather than codes, so
-  -- the authored `level` sequence is matched against the vocabulary's own
-  -- ordered child chain at that depth.
-  if 'elementary' = any (v_taxonomies) and v_label is not null and v_depth is not null then
-    select pg_catalog.count(*)::integer, pg_catalog.min(node.node_id)
-    into v_hits, v_node
-    from private.portal_navigation_node_v1 as node
-    where node.dimension = 'classification'
-      and node.taxonomy = 'elementary'
-      and node.labels ->> 'en' = v_label
-      and pg_catalog.array_length(
-        pg_catalog.string_to_array(
-          pg_catalog.substr(node.node_id, pg_catalog.length('class:elementary:') + 1),
-          '.'
-        ),
-        1
-      ) - 1 = v_depth;
-    if v_hits = 1 then
-      return v_node;
-    end if;
-  end if;
-
   if v_code is null then
     return null;
-  end if;
-
-  v_node := private.portal_navigation_resolve_alias_v1('classification', v_code);
-  if v_node is not null then
-    return v_node;
   end if;
 
   select pg_catalog.count(*)::integer, pg_catalog.min(node.node_id)
@@ -239,46 +253,37 @@ begin
   where node.dimension = 'classification'
     and node.taxonomy = any (v_taxonomies)
     and node.taxonomy <> 'database-virtual'
-    and pg_catalog.upper(node.code) = pg_catalog.upper(v_code);
+    and node.source_file is not null
+    and pg_catalog.lower(node.code) = pg_catalog.lower(v_code);
 
   -- Two applicable taxonomies can share a spelling (ISIC and CPC share 337
   -- codes), so an ambiguous hit is never guessed.
-  if v_hits = 1 then
-    return v_node;
+  if v_hits = 1 then return v_node; end if;
+  -- Some authored elementary categories contain a name instead of an id. Only
+  -- a unique source label is admissible; array position is never a tree depth.
+  if v_hits=0 and v_taxonomies = array['elementary']::text[] then
+    select count(*), min(node.node_id) into v_hits,v_node
+    from private.portal_navigation_node_v1 node
+    where node.taxonomy='elementary' and exists (
+      select 1 from jsonb_each_text(node.labels) label
+      where lower(label.value)=lower(v_code)
+    );
+    if v_hits=1 then return v_node; end if;
   end if;
   return null;
-end
+end;
 $function$;
 
 -- Codes that address a node under a different spelling. The datasets author the
 -- Chinese administrative layer as `SD-CN` while the pinned vocabulary spells the
 -- same province `CN-SD`; an alias row is what makes both spellings reach one node.
-create function private.portal_navigation_resolve_alias_v1(
-  p_dimension text,
-  p_code text
-)
-returns text
-language sql
-stable
-parallel safe
-set search_path = ''
+create function private.portal_navigation_resolve_alias_v1(p_dimension text,p_code text)
+returns text language sql stable parallel safe set search_path=''
 as $function$
-  select pg_catalog.min(node.node_id)
-  from private.portal_navigation_node_v1 as node
-  where node.dimension = p_dimension
-    and pg_catalog.upper(p_code) = any (
-      select pg_catalog.upper(alias)
-      from pg_catalog.unnest(node.alias_codes) as alias
-    )
-    and (
-      select pg_catalog.count(*)
-      from private.portal_navigation_node_v1 as other
-      where other.dimension = p_dimension
-        and pg_catalog.upper(p_code) = any (
-          select pg_catalog.upper(other_alias)
-          from pg_catalog.unnest(other.alias_codes) as other_alias
-        )
-    ) = 1
+  select case when count(*)=1 then min(n.node_id) else null end
+  from private.portal_navigation_node_v1 n
+  where n.dimension=p_dimension and cardinality(n.alias_codes)>0
+    and n.alias_codes @> array[upper(btrim(p_code))]
 $function$;
 
 create function private.portal_navigation_raw_node_id_v1(p_scope text, p_code text)
@@ -321,7 +326,7 @@ as $function$
     when 'elementary-flow' then 'elementary'
     when 'ilcd-flow-categorization' then 'elementary'
     else 'unclassified'
-  end
+  end;
 $function$;
 
 comment on function private.portal_navigation_classification_code_v1(jsonb) is
@@ -342,7 +347,7 @@ as $function$
       'en', 'Unmapped locations', 'zh-CN', '未映射地区',
       'de', 'Nicht zugeordnete Standorte', 'fr', 'Localisations non mappées'
     )
-  end
+  end;
 $function$;
 
 -- Every public version lands in at least one node, so node counts always sum
@@ -403,7 +408,30 @@ declare
   v_raw_root text;
   v_geography text;
   v_matched integer := 0;
+  v_raw_parent text;
 begin
+  insert into private.portal_navigation_versions_v1 (
+    dataset_kind,id,version,access_level,geography_code,classification_codes,
+    reference_year,process_subtype,source
+  ) values (
+    p_kind,p_id,p_version,p_card->>'accessLevel',
+    lower(btrim(p_card#>>'{geography,code}')),
+    array(select distinct lower(btrim(entry->>'code'))
+      from jsonb_array_elements(coalesce(p_card->'classifications','[]'::jsonb)) entry
+      where nullif(btrim(entry->>'code'),'') is not null),
+    (p_card->>'referenceYear')::integer,
+    lower(btrim(p_card->>'processSubtype')),lower(btrim(p_card->>'source'))
+  ) on conflict (dataset_kind,id,version) do update set
+    access_level=excluded.access_level,geography_code=excluded.geography_code,
+    classification_codes=excluded.classification_codes,reference_year=excluded.reference_year,
+    process_subtype=excluded.process_subtype,source=excluded.source
+  where (portal_navigation_versions_v1.access_level,portal_navigation_versions_v1.geography_code,
+    portal_navigation_versions_v1.classification_codes,portal_navigation_versions_v1.reference_year,
+    portal_navigation_versions_v1.process_subtype,portal_navigation_versions_v1.source)
+    is distinct from (excluded.access_level,excluded.geography_code,excluded.classification_codes,
+      excluded.reference_year,excluded.process_subtype,excluded.source);
+  delete from private.portal_navigation_membership_v1
+    where dataset_kind=p_kind and id=p_id and version=p_version;
   for v_entry, v_entry_level in
     select distinct entry.value, (entry.ordinality - 1)::integer as level
     from pg_catalog.jsonb_array_elements(
@@ -425,11 +453,14 @@ begin
         continue;
       end if;
       v_taxonomy := private.portal_navigation_raw_taxonomy_v1(v_entry -> 'system');
+      if (p_kind='flow' and v_taxonomy='isic') or (p_kind='process' and v_taxonomy in ('cpc','elementary')) then
+        v_taxonomy := 'unclassified';
+      end if;
       v_raw_root := 'class:' || v_taxonomy || ':~raw';
       perform private.portal_navigation_ensure_virtual_v1(
         v_raw_root, 'classification', v_taxonomy, 'unmapped'
       );
-      v_node := private.portal_navigation_raw_node_id_v1('class:' || v_taxonomy, v_code);
+      v_node := private.portal_navigation_raw_node_id_v1('class:' || v_taxonomy, p_kind || '|' || coalesce(v_entry->>'system','') || '|' || v_code);
       insert into private.portal_navigation_node_v1 (
         node_id, parent_node_id, code, taxonomy, dimension,
         source_index_path, source_file, labels, label_strategy
@@ -458,9 +489,9 @@ begin
 
   v_geography := private.portal_navigation_geography_code_v1(p_kind, p_card);
   if v_geography is not null then
-    v_node := private.portal_navigation_resolve_alias_v1('geography', v_geography);
-    if v_node is null then
-      v_node := 'geo:' || pg_catalog.lower(v_geography);
+    v_node := 'geo:' || pg_catalog.lower(v_geography);
+    if not exists(select 1 from private.portal_navigation_node_v1 n where n.node_id=v_node and n.dimension='geography') then
+      v_node := coalesce(private.portal_navigation_resolve_alias_v1('geography',v_geography),v_node);
     end if;
     if not exists (
       select 1
@@ -470,12 +501,21 @@ begin
       perform private.portal_navigation_ensure_virtual_v1(
         'geo:unmapped', 'geography', 'database-virtual', 'unmapped'
       );
+      v_raw_parent := 'geo:unmapped';
+      -- This verified code family is only a containing province, never proof of
+      -- a particular city boundary or geographic precision.
+      if upper(v_geography) ~ '^CN-[A-Z]{2}-[A-Z0-9-]+$' then
+        select node.node_id into v_raw_parent from private.portal_navigation_node_v1 node
+        where node.node_id='geo:' || lower(split_part(v_geography,'-',1)||'-'||split_part(v_geography,'-',2))
+          and node.parent_node_id='geo:cn';
+      end if;
+      v_raw_parent := coalesce(v_raw_parent,'geo:unmapped');
       v_node := private.portal_navigation_raw_node_id_v1('geo', v_geography);
       insert into private.portal_navigation_node_v1 (
         node_id, parent_node_id, code, taxonomy, dimension,
         source_index_path, source_file, labels, label_strategy
       ) values (
-        v_node, 'geo:unmapped', pg_catalog.upper(v_geography), 'unmapped', 'geography',
+        v_node, v_raw_parent, pg_catalog.upper(v_geography), 'unmapped', 'geography',
         null, null,
         pg_catalog.jsonb_build_object(
           'en', pg_catalog.upper(v_geography), 'zh-CN', pg_catalog.upper(v_geography),
@@ -499,6 +539,17 @@ begin
   -- Materialise every ancestor of every authored placement, so a branch count is
   -- one grouped read instead of a per-node descendant search. A closure row is
   -- `direct` only when the authored placement is exactly that node.
+  with recursive ancestors as (
+    select n.node_id as leaf,n.parent_node_id as ancestor
+    from private.portal_navigation_node_v1 n where n.node_id=any(v_placements)
+    union all
+    select a.leaf,n.parent_node_id from ancestors a
+    join private.portal_navigation_node_v1 n on n.node_id=a.ancestor
+    where a.ancestor is not null
+  ) select coalesce(array_agg(distinct placement), '{}'::text[]) into v_placements
+    from unnest(v_placements) placement
+    where not exists(select 1 from ancestors a where a.ancestor=placement);
+
   foreach v_placement in array v_placements
   loop
     insert into private.portal_navigation_membership_v1 (
@@ -520,9 +571,10 @@ begin
     select p_kind, p_id, p_version, chain.dimension, chain.node_id,
       chain.node_id = v_placement
     from chain
-    on conflict do nothing;
+    on conflict (dataset_kind,id,version,dimension,node_id) do update
+      set direct=private.portal_navigation_membership_v1.direct or excluded.direct;
   end loop;
-end
+end;
 $function$;
 
 -- ---------------------------------------------------------------------------
@@ -532,64 +584,20 @@ $function$;
 -- ---------------------------------------------------------------------------
 
 create function private.sync_portal_navigation_row_v1()
-returns trigger
-language plpgsql
-volatile
-security definer
-set search_path = ''
-set row_security = 'on'
+returns trigger language plpgsql volatile security definer
+set search_path='' set row_security='on'
 as $function$
-declare
-  v_kind text := case tg_table_name
-    when 'processes' then 'process'
-    when 'flows' then 'flow'
-    else null
-  end;
-  v_root_key text := case v_kind
-    when 'process' then 'processDataSet'
-    when 'flow' then 'flowDataSet'
-    else null
-  end;
-  v_card jsonb;
 begin
-  if v_kind is null then
-    raise exception 'unsupported Portal navigation trigger source'
-      using errcode = '55000';
-  end if;
-
-  if tg_op = 'DELETE' then
-    delete from private.portal_navigation_membership_v1 as member
-    where member.dataset_kind = v_kind
-      and member.id = old.id
-      and member.version = old.version::text;
+  if tg_op='DELETE' then
+    delete from private.portal_navigation_versions_v1 where dataset_kind=old.dataset_kind and id=old.id and version=old.version;
     return old;
   end if;
-
-  if tg_op = 'UPDATE'
-     and (old.id, old.version::text) is distinct from (new.id, new.version::text) then
-    delete from private.portal_navigation_membership_v1 as member
-    where member.dataset_kind = v_kind
-      and member.id = old.id
-      and member.version = old.version::text;
+  if tg_op='UPDATE' and (old.dataset_kind,old.id,old.version) is distinct from (new.dataset_kind,new.id,new.version) then
+    delete from private.portal_navigation_versions_v1 where dataset_kind=old.dataset_kind and id=old.id and version=old.version;
   end if;
-
-  delete from private.portal_navigation_membership_v1 as member
-  where member.dataset_kind = v_kind
-    and member.id = new.id
-    and member.version = new.version::text;
-
-  if new.state_code in (100, 200)
-     and pg_catalog.jsonb_typeof(new.json) = 'object'
-     and pg_catalog.jsonb_typeof(new.json -> v_root_key) = 'object' then
-    v_card := private.portal_catalog_card_v1(v_kind, new.state_code, new.json);
-    if pg_catalog.jsonb_typeof(v_card) = 'object' then
-      perform private.sync_portal_navigation_membership_v1(
-        v_kind, new.id, new.version::text, v_card
-      );
-    end if;
-  end if;
+  perform private.sync_portal_navigation_membership_v1(new.dataset_kind,new.id,new.version,new.card);
   return new;
-end
+end;
 $function$;
 
 -- `postgres` runs the projection writer and the backfill; every browser-facing
@@ -601,77 +609,28 @@ revoke all on function private.sync_portal_navigation_membership_v1(text, uuid, 
 comment on function private.sync_portal_navigation_membership_v1(text, uuid, text, jsonb) is
   'Rebuilds one public version''s navigation placements from its already public-safe Portal card; unknown or ambiguous authored codes are retained as their own nodes.';
 
-create function private.backfill_portal_navigation_membership_v1(p_limit integer default 500)
-returns integer
-language plpgsql
-volatile
-security definer
-set search_path = ''
-set row_security = 'on'
-as $function$
-declare
-  v_row record;
-  v_batch integer := pg_catalog.greatest(1, pg_catalog.least(p_limit, 5000));
-  v_done integer := 0;
-begin
-  for v_row in
-    select projection.dataset_kind,
-      projection.id,
-      projection.version,
-      projection.card
-    from (
-      select source.dataset_kind, source.id, source.version, source.card
-      from private.portal_catalog_search_rows_v2 as source
-      where not exists (
-        select 1
-        from private.portal_navigation_membership_v1 as member
-        where member.dataset_kind = source.dataset_kind
-          and member.id = source.id
-          and member.version = source.version
-      )
-      limit v_batch
-    ) as projection
-  loop
-    delete from private.portal_navigation_membership_v1 as member
-    where member.dataset_kind = v_row.dataset_kind
-      and member.id = v_row.id
-      and member.version = v_row.version;
-    perform private.sync_portal_navigation_membership_v1(
-      v_row.dataset_kind, v_row.id, v_row.version, v_row.card
-    );
-    v_done := v_done + 1;
-  end loop;
-  return v_done;
-end
-$function$;
-
-grant execute on function private.sync_portal_navigation_membership_v1(text, uuid, text, jsonb)
-  to postgres;
-
+-- Existing populated parents are backfilled by separate bounded migrations.
+grant execute on function private.sync_portal_navigation_membership_v1(text,uuid,text,jsonb) to postgres;
 reset role;
-
-drop trigger if exists portal_navigation_membership_sync_v1
-on public.processes;
-create trigger portal_navigation_membership_sync_v1
-after insert or delete or update of
-  id, version, json, json_ordered, state_code, modified_at
-on public.processes
-for each row execute function private.sync_portal_navigation_row_v1();
-
-drop trigger if exists portal_navigation_membership_sync_v1
-on public.flows;
-create trigger portal_navigation_membership_sync_v1
-after insert or delete or update of
-  id, version, json, json_ordered, state_code, modified_at
-on public.flows
-for each row execute function private.sync_portal_navigation_row_v1();
-
-set role api_internal_executor;
-comment on function private.sync_portal_navigation_row_v1() is
-  'NOLOGIN/NOBYPASSRLS writer that keeps the navigation membership projection next to the public-card projection; it never reads raw dataset JSON beyond the already public-safe card.';
-reset role;
-
+create trigger portal_navigation_flow_sync_v1
+  after insert or update of card on private.portal_catalog_search_rows_v1
+  for each row when (new.dataset_kind='flow') execute function private.sync_portal_navigation_row_v1();
+create trigger portal_navigation_process_sync_v1
+  after insert or delete or update of card on private.portal_catalog_search_rows_v2
+  for each row execute function private.sync_portal_navigation_row_v1();
+-- No source-table trigger and no new raw-card derivation. Deletion cascades
+-- through the pre-existing V1 public projection, then through the narrow row.
+revoke all on function private.sync_portal_navigation_row_v1() from public,anon,authenticated,service_role,portal_public_executor;
+revoke all on function private.portal_navigation_classification_code_v1(jsonb) from public,anon,authenticated,service_role,portal_public_executor;
+revoke all on function private.portal_navigation_classification_label_v1(jsonb) from public,anon,authenticated,service_role,portal_public_executor;
+revoke all on function private.portal_navigation_geography_code_v1(text,jsonb) from public,anon,authenticated,service_role,portal_public_executor;
+revoke all on function private.portal_navigation_classification_taxonomy_v1(jsonb) from public,anon,authenticated,service_role,portal_public_executor;
+revoke all on function private.portal_navigation_resolve_classification_v1(text,jsonb,jsonb,integer) from public,anon,authenticated,service_role,portal_public_executor;
+revoke all on function private.portal_navigation_resolve_alias_v1(text,text) from public,anon,authenticated,service_role,portal_public_executor;
+revoke all on function private.portal_navigation_raw_node_id_v1(text,text) from public,anon,authenticated,service_role,portal_public_executor;
+revoke all on function private.portal_navigation_raw_taxonomy_v1(jsonb) from public,anon,authenticated,service_role,portal_public_executor;
+revoke all on function private.portal_navigation_virtual_labels_v1(text) from public,anon,authenticated,service_role,portal_public_executor;
+revoke all on function private.portal_navigation_ensure_virtual_v1(text,text,text,text) from public,anon,authenticated,service_role,portal_public_executor;
 revoke create on schema private from api_internal_executor;
 revoke api_internal_executor from postgres;
-
 commit;

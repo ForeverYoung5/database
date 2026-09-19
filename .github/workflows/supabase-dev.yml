@@ -29,7 +29,7 @@ jobs:
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v2
         with:
-          version: 2.116.0
+          version: 2.117.0
 
       - name: Verify deployment workflow contract
         run: |
@@ -37,6 +37,8 @@ jobs:
           python scripts/test_supabase_dev_workflow_contract.py
           python scripts/check_portal_projection_manifest.py
           python3 scripts/check_portal_card_schema_parity.py
+          python3 scripts/generate_portal_navigation_vocabulary.py --check
+          python3 scripts/build_portal_contract_types.py --check
 
       - name: Rebuild migration history
         run: supabase start && supabase db reset --no-seed
@@ -61,6 +63,8 @@ jobs:
           supabase test db supabase/tests/20260909_review_queue_full_text_search.sql
           supabase test db supabase/tests/20260909_tidas_partial_import.sql
           supabase test db supabase/tests/20260918_tidas_full_package_import.sql
+          supabase test db supabase/tests/20260919_portal_navigation_v1.sql
+          supabase test db supabase/tests/20260919_portal_catalog_summary_bounded.sql
           supabase test db supabase/tests/20260910_example_dataset_scope.sql
           supabase test db supabase/tests/20260915_result_process_state_120.sql
           supabase test db supabase/tests/20260915_result_process_lifecycle_protection.sql
@@ -116,7 +120,7 @@ jobs:
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v2
         with:
-          version: 2.116.0
+          version: 2.117.0
 
       - name: Link Supabase Dev branch
         run: supabase link --project-ref "$SUPABASE_PROJECT_ID"
@@ -303,7 +307,7 @@ jobs:
         if: steps.preview_authority.outputs.available == 'true'
         uses: supabase/setup-cli@v2
         with:
-          version: 2.116.0
+          version: 2.117.0
 
       - name: Wait for exact Supabase Preview check
         if: steps.preview_authority.outputs.available == 'true'

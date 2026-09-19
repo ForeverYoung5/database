@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "portal.public-facet-input.v3.schema.json",
+  "title": "TianGong portal.public-facet-input.v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "query",
+    "filters"
+  ],
+  "properties": {
+    "kind": {
+      "enum": [
+        "all",
+        "process",
+        "flow"
+      ]
+    },
+    "query": {
+      "type": "string",
+      "maxLength": 512,
+      "description": "At most 2048 UTF-8 bytes; C0/C1 control characters are rejected."
+    },
+    "filters": {
+      "$ref": "./portal.public-search-input.v3.schema.json#/$defs/NavigationSearchFiltersV3"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "flow"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "processSubtype": false
+            }
+          }
+        }
+      }
+    }
+  ]
+}

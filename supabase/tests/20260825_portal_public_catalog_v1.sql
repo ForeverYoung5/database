@@ -285,8 +285,8 @@ select extensions.is(
     from private.api_capability_grants as manifest
     where manifest.capability_id = 'PORTAL-CATALOG-01'
   ),
-  13::bigint,
-  'PORTAL-CATALOG-01 contains ten frozen v1 routines and three additive version-aware v2 routines'
+  17::bigint,
+  'PORTAL-CATALOG-01 contains ten frozen v1, three v2, and four navigation/V3 routines'
 );
 
 select extensions.is(
@@ -394,6 +394,7 @@ select extensions.is(
       on namespace.oid = routine.pronamespace
     where namespace.nspname = 'private'
       and routine.proname like 'portal\_%\_v1' escape '\'
+      and routine.proname not in ('portal_navigation_v1','portal_navigation_impl_v1','portal_navigation_matched_versions_v1')
       and routine.proowner = 'portal_public_executor'::regrole
   ),
   50::bigint,
@@ -576,6 +577,7 @@ select extensions.is(
       on namespace.oid = routine.pronamespace
     where namespace.nspname = 'private'
       and routine.proname like 'portal\_%\_v1' escape '\'
+      and routine.proname not in ('portal_navigation_v1','portal_navigation_impl_v1','portal_navigation_matched_versions_v1')
       and routine.proowner = 'portal_public_executor'::regrole
       and not routine.prosecdef
       and routine.proconfig @> array['search_path=""']::text[]
@@ -595,6 +597,7 @@ select extensions.is(
     ) as acl
     where namespace.nspname = 'private'
       and routine.proname like 'portal\_%\_v1' escape '\'
+      and routine.proname not in ('portal_navigation_v1','portal_navigation_impl_v1','portal_navigation_matched_versions_v1')
       and routine.proowner = 'portal_public_executor'::regrole
       and (
         acl.grantee <> routine.proowner

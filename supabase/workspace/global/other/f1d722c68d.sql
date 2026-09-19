@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "private"."sync_portal_navigation_membership_v1"("p_kind" "text", "p_id" "uuid", "p_version" "text", "p_card" "jsonb") IS 'Rebuilds one public version''s navigation placements from its already public-safe Portal card; unknown or ambiguous authored codes are retained as their own nodes.';

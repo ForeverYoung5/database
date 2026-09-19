@@ -6150,7 +6150,7 @@ insert into private.portal_navigation_contract_v1 (contract_version,manifest_sch
 do $portal_navigation_seed_check$
 begin
   perform private.assert_portal_navigation_contract_v1();
-end
+end;
 $portal_navigation_seed_check$;
 
 commit;

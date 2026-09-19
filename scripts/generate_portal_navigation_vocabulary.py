@@ -38,6 +38,8 @@ import hashlib
 import json
 import re
 import sys
+import tempfile
+from portal_navigation_sources import materialize, verify_live, vendor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -756,7 +758,7 @@ def emit_seed_migration(
         "do $portal_navigation_seed_check$\n"
         "begin\n"
         "  perform private.assert_portal_navigation_contract_v1();\n"
-        "end\n"
+        "end;\n"
         "$portal_navigation_seed_check$;"
     )
 
@@ -792,11 +794,12 @@ def emit_seed_migration(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--platform-root", required=True, type=Path)
-    parser.add_argument("--archive-locations", required=True, type=Path)
+    parser.add_argument("--platform-root", type=Path)
+    parser.add_argument("--archive-locations", type=Path)
+    parser.add_argument("--vendor", action="store_true", help="Freeze exact upstream bytes for offline generation")
     parser.add_argument(
         "--china-mapping",
-        required=True,
+        default="data/portal-navigation-china-mapping.json",
         type=Path,
         help="controlled parent mapping for the Chinese province/city layer",
     )
@@ -804,7 +807,7 @@ def main() -> int:
     parser.add_argument(
         "--seed-dir",
         type=Path,
-        default=None,
+        default=Path("supabase/migrations"),
         help="emit the SQL seed migrations here (default: <repo>/supabase/migrations)",
     )
     parser.add_argument(
@@ -820,12 +823,19 @@ def main() -> int:
     parser.add_argument("--pretty", action="store_true", help="pretty-print the asset (larger)")
     arguments = parser.parse_args()
 
-    platform_root: Path = arguments.platform_root.resolve()
-    archive_locations: Path = arguments.archive_locations.resolve()
-    if not platform_root.is_dir():
-        raise SystemExit(f"platform root {platform_root} is not a directory")
-    if not archive_locations.is_file():
-        raise SystemExit(f"archive locations {archive_locations} is not a file")
+    vendored = Path(__file__).resolve().parents[1] / "data/portal-navigation-sources"
+    if arguments.vendor:
+        if not arguments.platform_root or not arguments.archive_locations:
+            parser.error("--vendor requires both live source paths")
+        vendor(vendored, arguments.platform_root.resolve(), arguments.archive_locations.resolve())
+    temporary = tempfile.TemporaryDirectory(prefix="portal-navigation-source-")
+    if arguments.platform_root or arguments.archive_locations:
+        if not arguments.platform_root or not arguments.archive_locations:
+            parser.error("Pass both live source paths or use the vendored defaults")
+        platform_root, archive_locations = arguments.platform_root.resolve(), arguments.archive_locations.resolve()
+        verify_live(platform_root)
+    else:
+        platform_root, archive_locations = materialize(vendored, Path(temporary.name))
 
     manifest = load_manifest(platform_root)
     classification_nodes, classification_receipts = build_classification_nodes(
@@ -861,13 +871,6 @@ def main() -> int:
     contracts_dir.mkdir(parents=True, exist_ok=True)
     asset_path = contracts_dir / "navigation-vocabulary.json"
     receipt_path = contracts_dir / "navigation-vocabulary.receipt.json"
-    if arguments.pretty:
-        asset_path.write_text(
-            json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-    else:
-        asset_path.write_text(serialized + "\n", encoding="utf-8")
     receipt = {
         "asset": {
             "byteLength": len(serialized.encode("utf-8")),
@@ -878,29 +881,6 @@ def main() -> int:
         "schemaVersion": document["schemaVersion"],
         "sourceReceipt": document["sourceReceipt"],
     }
-
-    if arguments.check:
-        committed = asset_path.read_text(encoding="utf-8").rstrip("\n")
-        if committed != serialized:
-            print(
-                "committed navigation-vocabulary.json is stale; re-run the generator",
-                file=sys.stderr,
-            )
-            return 1
-        committed_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-        if committed_receipt != receipt:
-            print(
-                "committed navigation-vocabulary.receipt.json is stale; re-run the generator",
-                file=sys.stderr,
-            )
-            return 1
-        print(f"navigation vocabulary is current: sha256={asset_digest}")
-        return 0
-
-    asset_path.write_text(serialized + "\n", encoding="utf-8")
-    receipt_path.write_text(
-        json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
 
     seed_digest = sha256_bytes(
         "\n".join(
@@ -922,6 +902,37 @@ def main() -> int:
             for node in sorted(nodes, key=lambda item: item.node_id)
         ).encode("utf-8")
     )
+    if arguments.check:
+        committed = asset_path.read_text(encoding="utf-8").rstrip("\n")
+        if committed != serialized:
+            print(
+                "committed navigation-vocabulary.json is stale; re-run the generator",
+                file=sys.stderr,
+            )
+            return 1
+        committed_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        if committed_receipt != receipt:
+            print(
+                "committed navigation-vocabulary.receipt.json is stale; re-run the generator",
+                file=sys.stderr,
+            )
+            return 1
+        with tempfile.TemporaryDirectory(prefix="portal-navigation-seed-") as temporary_seed:
+            expected = emit_seed_migration(seed_dir=Path(temporary_seed), stamp=arguments.seed_stamp or "20260919121000",
+                nodes=sorted(nodes,key=lambda item:item.node_id),asset_digest=asset_digest,
+                seed_digest=seed_digest,node_count=document["counts"]["nodes"])
+            actual=arguments.seed_dir / expected.name
+            if not actual.exists() or actual.read_bytes()!=expected.read_bytes():
+                print("navigation seed migration drifted",file=sys.stderr)
+                return 1
+        print(f"navigation vocabulary is current: sha256={asset_digest}")
+        return 0
+
+    asset_path.write_text(serialized + "\n", encoding="utf-8")
+    receipt_path.write_text(
+        json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
     if arguments.seed_dir is not None:
         emit_seed_migration(
             seed_dir=arguments.seed_dir,

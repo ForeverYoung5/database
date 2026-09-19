@@ -21,59 +21,6 @@ grant create on schema private, api to portal_public_executor, api_internal_exec
 -- The closure already materialises every ancestor of every authored placement,
 -- so a subtree scope is one node equality and a direct scope adds the authored
 -- flag. No prefix or path arithmetic is involved.
-create function private.portal_navigation_version_matches_v3(
-  p_kind text,
-  p_filters jsonb,
-  p_id uuid,
-  p_version text
-)
-returns boolean
-language sql
-stable
-parallel safe
-set search_path = ''
-as $function$
-  select
-    (
-      not (p_filters ? 'classificationNodeId')
-      or exists (
-        select 1
-        from private.portal_navigation_membership_v1 as member
-        where member.dataset_kind = p_kind
-          and member.id = p_id
-          and member.version = p_version
-          and member.dimension = 'classification'
-          and (
-            case coalesce(p_filters ->> 'classificationScope', 'subtree')
-              when 'direct' then
-                member.node_id = p_filters ->> 'classificationNodeId'
-                and member.direct
-              else member.node_id = p_filters ->> 'classificationNodeId'
-            end
-          )
-      )
-    )
-    and (
-      not (p_filters ? 'geographyNodeId')
-      or exists (
-        select 1
-        from private.portal_navigation_membership_v1 as member
-        where member.dataset_kind = p_kind
-          and member.id = p_id
-          and member.version = p_version
-          and member.dimension = 'geography'
-          and (
-            case coalesce(p_filters ->> 'geographyScope', 'subtree')
-              when 'direct' then
-                member.node_id = p_filters ->> 'geographyNodeId'
-                and member.direct
-              else member.node_id = p_filters ->> 'geographyNodeId'
-            end
-          )
-      )
-    )
-$function$;
-
 create function private.catalog_portal_candidate_rows_v3(
   p_kind text,
   p_query text,
@@ -125,116 +72,27 @@ $function$;
 
 -- V2 accepts only its own filter keys, so V3 validates the extended set itself
 -- and hands the plain subset to the unchanged V2 validator and kernels.
-create function private.portal_validate_search_v3(
-  p_kind text,
-  p_query text,
-  p_filters jsonb,
-  p_sort text,
-  p_limit integer
-)
-returns void
-language plpgsql
-stable
-parallel safe
-set search_path = ''
-as $function$
-declare
-  v_base jsonb;
-  v_key text;
-  v_node_pattern constant text := '^[a-z][a-z0-9-]*:[!-~]{1,96}$';
-begin
-  if p_filters is null or pg_catalog.jsonb_typeof(p_filters) <> 'object' then
-    raise exception using errcode = '22023', message = 'invalid portal request';
-  end if;
-  for v_key in select pg_catalog.jsonb_object_keys(p_filters)
-  loop
-    if v_key not in (
-      'accessLevel', 'geography', 'classification', 'referenceYearFrom',
-      'referenceYearTo', 'source', 'processSubtype',
-      'classificationNodeId', 'classificationScope',
-      'geographyNodeId', 'geographyScope'
-    ) then
-      raise exception using errcode = '22023', message = 'invalid portal request';
-    end if;
-  end loop;
-
-  for v_key in select unnest(array['classificationNodeId', 'geographyNodeId'])
-  loop
-    if p_filters ? v_key then
-      if pg_catalog.jsonb_typeof(p_filters -> v_key) <> 'string'
-         or (p_filters ->> v_key) !~ v_node_pattern then
-        raise exception using errcode = '22023', message = 'invalid portal request';
-      end if;
-      -- The node must exist in the vocabulary and belong to the right axis.
-      if not exists (
-        select 1
-        from private.portal_navigation_node_v1 as node
-        where node.node_id = p_filters ->> v_key
-          and node.dimension = case v_key
-            when 'classificationNodeId' then 'classification'
-            else 'geography'
-          end
-      ) then
-        raise exception using errcode = '22023', message = 'invalid portal request';
-      end if;
-    end if;
-  end loop;
-
-  for v_key in select unnest(array['classificationScope', 'geographyScope'])
-  loop
-    if p_filters ? v_key and (
-      pg_catalog.jsonb_typeof(p_filters -> v_key) <> 'string'
-      or p_filters ->> v_key not in ('subtree', 'direct')
-    ) then
-      raise exception using errcode = '22023', message = 'invalid portal request';
-    end if;
-  end loop;
-
-  -- A scope without its node is invalid, and a classification node that the
-  -- dataset kind can never carry is refused rather than silently empty.
-  if p_filters ? 'classificationScope' and not (p_filters ? 'classificationNodeId') then
-    raise exception using errcode = '22023', message = 'invalid portal request';
-  end if;
-  if p_filters ? 'geographyScope' and not (p_filters ? 'geographyNodeId') then
-    raise exception using errcode = '22023', message = 'invalid portal request';
-  end if;
-
-  select pg_catalog.jsonb_object_agg(filter.key, filter.value)
-  into v_base
-  from pg_catalog.jsonb_each(p_filters) as filter(key, value)
-  where filter.key in (
-    'accessLevel', 'geography', 'classification', 'referenceYearFrom',
-    'referenceYearTo', 'source', 'processSubtype'
-  );
-
-  perform private.portal_validate_search_v1(
-    p_kind, p_query, coalesce(v_base, '{}'::jsonb), p_sort, p_limit
-  );
-end
-$function$;
-
-create function private.portal_search_v3(
-  p_kind text,
-  p_query text,
-  p_filters jsonb,
-  p_sort text,
-  p_cursor text,
-  p_limit integer
-)
-returns jsonb
-language plpgsql
-stable
-parallel restricted
-set search_path = ''
-as $function$
+CREATE OR REPLACE FUNCTION private.portal_search_v3(p_kind text, p_query text, p_filters jsonb, p_sort text, p_cursor text, p_limit integer)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE PARALLEL RESTRICTED
+ SET search_path TO ''
+AS $function$
 declare
   v_query text;
   v_filters jsonb;
   v_sort text;
   v_limit integer := coalesce(p_limit, 20);
   v_fingerprint text;
-  v_result jsonb;
+  v_cursor jsonb;
+  v_cursor_rank text;
+  v_cursor_id uuid;
+  v_cursor_version text;
+  v_kernel jsonb;
+  v_next_cursor_payload jsonb;
 begin
+  perform private.assert_portal_catalog_projection_contract_cn1();
+
   perform private.portal_validate_search_v3(
     p_kind,
     coalesce(p_query, ''),
@@ -245,29 +103,61 @@ begin
   v_query := pg_catalog.lower(pg_catalog.btrim(coalesce(p_query, '')));
   v_filters := private.portal_normalize_filters_v1(p_filters);
   v_sort := pg_catalog.lower(pg_catalog.btrim(coalesce(p_sort, 'relevance')));
-
-  -- The navigation filter is part of the request identity, so a cursor bound to
-  -- a different branch can never be replayed.
-  v_fingerprint := pg_catalog.encode(extensions.digest(
-    pg_catalog.convert_to(
-      'portal-search-versions-v3:' || private.portal_query_fingerprint_v1(
-        p_kind, v_query, v_filters, v_sort
-      ),
-      'UTF8'
-    ),
-    'sha256'
-  ), 'hex');
-
-  v_result := private.portal_search_v2(
-    p_kind, p_query, p_filters, p_sort, p_cursor, p_limit
+  v_fingerprint := private.portal_query_fingerprint_v1(
+    p_kind,
+    v_query,
+    v_filters,
+    v_sort
   );
-  if pg_catalog.jsonb_typeof(v_result) = 'object' then
-    v_result := pg_catalog.jsonb_set(
-      v_result, '{queryFingerprint}', pg_catalog.to_jsonb(v_fingerprint)
-    );
+  if p_kind = 'process' then
+  v_fingerprint := pg_catalog.encode(extensions.digest(pg_catalog.convert_to('composite-names-v2:' || v_fingerprint, 'UTF8'), 'sha256'), 'hex');
   end if;
-  return v_result;
-end
+  v_fingerprint := pg_catalog.encode(extensions.digest(
+    pg_catalog.convert_to('portal-search-versions-v3:' || (select asset_sha256 from private.portal_navigation_contract_v1 where contract_version=1) || ':' || v_fingerprint,'UTF8'),'sha256'),'hex');
+  if p_cursor is not null then
+    v_cursor := private.portal_cursor_decode_v1(p_cursor);
+    if v_cursor is null
+       or (select count(*) from pg_catalog.jsonb_object_keys(v_cursor)) <> 6
+       or v_cursor ->> 'v' <> '1'
+       or v_cursor ->> 'fp' <> v_fingerprint
+       or v_cursor ->> 'kind' <> p_kind
+       or coalesce(v_cursor ->> 'rankKey', '') = ''
+       or coalesce(v_cursor ->> 'id', '')
+         !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+       or coalesce(v_cursor ->> 'version', '') !~ '^\d{2}\.\d{2}\.\d{3}$' then
+      raise exception using errcode = '22023', message = 'invalid portal request';
+    end if;
+    v_cursor_rank := v_cursor ->> 'rankKey';
+    v_cursor_id := (v_cursor ->> 'id')::uuid;
+    v_cursor_version := v_cursor ->> 'version';
+    if v_sort = 'relevance'
+       and v_cursor_rank !~ '^(0(\.\d+)?|1(\.0+)?)$' then
+      raise exception using errcode = '22023', message = 'invalid portal request';
+    elsif v_sort = 'modified_desc'
+       and private.portal_datetime_v1(v_cursor_rank) is null then
+      raise exception using errcode = '22023', message = 'invalid portal request';
+    end if;
+  end if;
+
+  v_kernel := private.catalog_portal_search_v3_impl(
+    p_kind,v_query,v_filters,v_sort,v_cursor_rank,v_cursor_id,v_cursor_version,v_limit,v_fingerprint
+  );
+
+  v_next_cursor_payload := nullif(
+    v_kernel -> 'nextCursorPayload',
+    'null'::jsonb
+  );
+
+  return pg_catalog.jsonb_build_object(
+    'schemaVersion', 'portal.public-search-page.v1',
+    'kind', p_kind,
+    'queryFingerprint', v_fingerprint,
+    'items', coalesce(v_kernel -> 'items', '[]'::jsonb),
+    'nextCursor', case when v_next_cursor_payload is null then null
+      else private.portal_cursor_encode_v1(v_next_cursor_payload)
+    end
+  );
+end;
 $function$;
 
 create function api.portal_search_processes_v3(
@@ -299,7 +189,7 @@ exception
     raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
   when others then
     raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
-end
+end;
 $function$;
 
 create function api.portal_search_flows_v3(
@@ -329,46 +219,83 @@ exception
     raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
   when others then
     raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
-end
+end;
 $function$;
 
-create function api.portal_facets_v3(
-  p_kind text,
-  p_query text,
-  p_filters jsonb default '{}'::jsonb
-)
-returns jsonb
-language plpgsql
-stable
-security definer
-set search_path = ''
-set statement_timeout = '8s'
-as $function$
+CREATE OR REPLACE FUNCTION api.portal_facets_v3(p_kind text, p_query text, p_filters jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+ SET statement_timeout TO '8s'
+AS $function$
 declare
-  v_kind text := pg_catalog.lower(pg_catalog.btrim(coalesce(p_kind, 'all')));
-  v_query text := coalesce(p_query, '');
-  v_filters jsonb := private.portal_normalize_filters_v1(coalesce(p_filters, '{}'::jsonb));
+  v_kind text;
+  v_query text;
+  v_filters jsonb;
   v_fingerprint text;
-  v_result jsonb;
+  v_exact_id uuid;
+  v_like_pattern text;
 begin
-  perform private.portal_validate_search_v3(v_kind, v_query, v_filters, 'relevance', 20);
-  v_query := pg_catalog.lower(pg_catalog.btrim(v_query));
+  perform private.assert_portal_catalog_projection_contract_cn1();
+
+  if pg_catalog.octet_length(coalesce(p_kind, '')) > 32 then
+    raise exception using errcode = '22023', message = 'invalid portal request';
+  end if;
+  v_kind := pg_catalog.lower(pg_catalog.btrim(coalesce(p_kind, '')));
+  perform private.portal_validate_search_v3(
+    v_kind,
+    coalesce(p_query, ''),
+    coalesce(p_filters, '{}'::jsonb),
+    'relevance',
+    1
+  );
+  v_query := pg_catalog.lower(pg_catalog.btrim(coalesce(p_query, '')));
+  v_filters := private.portal_normalize_filters_v1(p_filters);
+  v_fingerprint := private.portal_query_fingerprint_v1(
+    v_kind,
+    v_query,
+    v_filters,
+    'relevance'
+  );
+
   v_fingerprint := pg_catalog.encode(extensions.digest(
-    pg_catalog.convert_to(
-      'portal-facets-v3:' || private.portal_query_fingerprint_v1(
-        v_kind, v_query, v_filters, 'facets'
-      ),
-      'UTF8'
-    ),
-    'sha256'
-  ), 'hex');
-  v_result := api.portal_facets_v2(v_kind, v_query, v_filters);
-  if pg_catalog.jsonb_typeof(v_result) = 'object' then
-    v_result := pg_catalog.jsonb_set(
-      v_result, '{queryFingerprint}', pg_catalog.to_jsonb(v_fingerprint)
+    pg_catalog.convert_to('portal-search-versions-v3:' || (select asset_sha256 from private.portal_navigation_contract_v1 where contract_version=1) || ':' || v_fingerprint,'UTF8'),'sha256'),'hex');
+  if v_query = '' and v_filters = '{}'::jsonb then
+    perform private.assert_portal_catalog_facet_contract_v1();
+    return private.catalog_portal_facets_empty_v2_impl(
+      v_kind,
+      v_fingerprint
     );
   end if;
-  return v_result;
+
+  if v_query ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    v_exact_id := v_query::uuid;
+  end if;
+  if v_query <> '' then
+    v_like_pattern := '%' || pg_catalog.replace(
+      pg_catalog.replace(
+        pg_catalog.replace(
+          v_query,
+          pg_catalog.chr(92),
+          pg_catalog.chr(92) || pg_catalog.chr(92)
+        ),
+        '%',
+        pg_catalog.chr(92) || '%'
+      ),
+      '_',
+      pg_catalog.chr(92) || '_'
+    ) || '%';
+  end if;
+
+  return private.catalog_portal_facets_v3_impl(
+    v_kind,
+    v_query,
+    v_exact_id,
+    v_like_pattern,
+    v_filters,
+    v_fingerprint
+  );
 exception
   when sqlstate '22023' then
     raise exception using errcode = '22023', message = 'invalid portal request';
@@ -376,7 +303,7 @@ exception
     raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
   when others then
     raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
-end
+end;
 $function$;
 
 CREATE OR REPLACE FUNCTION private.catalog_portal_search_v3_impl(p_kind text, p_query text, p_filters jsonb, p_sort text, p_cursor_rank text, p_cursor_id uuid, p_cursor_version text, p_limit integer, p_query_fingerprint text)
@@ -780,7 +707,7 @@ begin
     'items', v_items,
     'nextCursorPayload', v_next_cursor_payload
   );
-end
+end;
 $function$;
 
 CREATE OR REPLACE FUNCTION private.catalog_portal_facets_v3_impl(p_kind text, p_query text, p_exact_id uuid, p_like_pattern text, p_filters jsonb, p_query_fingerprint text)
@@ -801,7 +728,7 @@ AS $function$
       p_like_pattern
     ) as candidate
     where private.portal_navigation_version_matches_v3(
-        p_kind, p_filters, candidate.id, candidate.version
+        candidate.dataset_kind, p_filters, candidate.id, candidate.version
       )
       and (
         not (p_filters ? 'accessLevel')
@@ -966,21 +893,18 @@ AS $function$
   from groups
 $function$;
 
-alter function private.portal_navigation_version_matches_v3(text, jsonb, uuid, text) owner to api_internal_executor;
 alter function private.catalog_portal_candidate_rows_v3(text, text, uuid, text) owner to portal_public_executor;
 alter function private.catalog_portal_facet_candidate_rows_v3(text, text, uuid, text) owner to portal_public_executor;
-alter function private.catalog_portal_search_v3_impl(text, text, jsonb, text, text, uuid, text, integer, text) owner to api_internal_executor;
-alter function private.catalog_portal_facets_v3_impl(text, text, uuid, text, jsonb, text) owner to api_internal_executor;
+alter function private.catalog_portal_search_v3_impl(text, text, jsonb, text, text, uuid, text, integer, text) owner to portal_public_executor;
+alter function private.catalog_portal_facets_v3_impl(text, text, uuid, text, jsonb, text) owner to portal_public_executor;
 
-revoke all on function private.portal_navigation_version_matches_v3(text, jsonb, uuid, text) from public, anon, authenticated, service_role;
 revoke all on function private.catalog_portal_candidate_rows_v3(text, text, uuid, text) from public, anon, authenticated, service_role;
 revoke all on function private.catalog_portal_facet_candidate_rows_v3(text, text, uuid, text) from public, anon, authenticated, service_role;
 revoke all on function private.catalog_portal_search_v3_impl(text, text, jsonb, text, text, uuid, text, integer, text) from public, anon, authenticated, service_role;
 revoke all on function private.catalog_portal_facets_v3_impl(text, text, uuid, text, jsonb, text) from public, anon, authenticated, service_role;
 
-grant execute on function private.portal_navigation_version_matches_v3(text, jsonb, uuid, text) to api_internal_executor;
-grant execute on function private.catalog_portal_candidate_rows_v3(text, text, uuid, text) to api_internal_executor;
-grant execute on function private.catalog_portal_facet_candidate_rows_v3(text, text, uuid, text) to api_internal_executor;
+grant execute on function private.catalog_portal_candidate_rows_v3(text, text, uuid, text) to api_internal_executor, portal_public_executor;
+grant execute on function private.catalog_portal_facet_candidate_rows_v3(text, text, uuid, text) to api_internal_executor, portal_public_executor;
 grant execute on function private.catalog_portal_search_v3_impl(text, text, jsonb, text, text, uuid, text, integer, text) to portal_public_executor;
 grant execute on function private.catalog_portal_facets_v3_impl(text, text, uuid, text, jsonb, text) to portal_public_executor;
 
