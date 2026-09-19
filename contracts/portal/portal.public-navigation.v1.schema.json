@@ -1,0 +1,377 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "portal.public-navigation.v1.schema.json",
+  "title": "TianGong Portal public navigation page v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "countBasis",
+    "dimension",
+    "kind",
+    "totals",
+    "parent",
+    "ancestors",
+    "nodes",
+    "nextCursor"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "portal.public-navigation.v1"
+    },
+    "countBasis": {
+      "description": "What each count counts. `public_versions` means distinct exact kind/id/version identities matching the request predicate; it is never a de-duplicated data-set count.",
+      "const": "public_versions"
+    },
+    "dimension": {
+      "$ref": "#/$defs/NavigationDimension"
+    },
+    "kind": {
+      "description": "The object-kind scope the counts were computed for. `all` keeps both kinds and is reported as-is.",
+      "type": "string",
+      "enum": [
+        "process",
+        "flow",
+        "all"
+      ]
+    },
+    "totals": {
+      "$ref": "#/$defs/NavigationTotals"
+    },
+    "parent": {
+      "description": "The requested branch node as a complete node. It carries its own `count`/`directCount`/`hasChildren` so a consumer can offer \"this level only\" versus \"whole branch\" without a second request. Null for a root page.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/NavigationNode"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ancestors": {
+      "description": "Root-to-parent ancestors of the requested branch, excluding the parent itself, in root-first order. Identity only: a breadcrumb never needs counts. Empty for a root page.",
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/NavigationNodeIdentity"
+      }
+    },
+    "nodes": {
+      "description": "The complete page of immediate children of `parent`. A page is bounded by the response byte budget, never by a hidden per-node cap; when more siblings remain, `nextCursor` is present.",
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "$ref": "#/$defs/NavigationNode"
+      }
+    },
+    "nextCursor": {
+      "$ref": "./portal.common-types.v1.schema.json#/$defs/NullableCursor"
+    }
+  },
+  "$defs": {
+    "NavigationDimension": {
+      "description": "Which vocabulary axis the branch belongs to. A node id is only unique within its dimension.",
+      "type": "string",
+      "enum": [
+        "classification",
+        "geography"
+      ]
+    },
+    "NavigationTaxonomy": {
+      "description": "The vocabulary a node belongs to. `isic`, `cpc` and `elementary` are the pinned classification taxonomies; `ilcd-locations` is the pinned location table; `tiangong-lca-archive-locations-v1` is the separately receipted Chinese administrative layer; `database-virtual` and `unmapped` mark containers that exist only to keep an unknown or unclassified value addressable. A consumer must never infer a node's taxonomy from its code.",
+      "type": "string",
+      "enum": [
+        "isic",
+        "cpc",
+        "elementary",
+        "ilcd-locations",
+        "tiangong-lca-archive-locations-v1",
+        "database-virtual",
+        "unmapped",
+        "unclassified"
+      ]
+    },
+    "NavigationNodeIdentity": {
+      "description": "Locator-free identity of one vocabulary node. It carries no display text: the four-locale labels live in the versioned vocabulary asset so a page never has to repeat them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nodeId",
+        "parentNodeId",
+        "code",
+        "taxonomy"
+      ],
+      "properties": {
+        "nodeId": {
+          "$ref": "#/$defs/NavigationNodeId"
+        },
+        "parentNodeId": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/NavigationNodeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "code": {
+          "$ref": "./portal.common-types.v1.schema.json#/$defs/NonEmptyString"
+        },
+        "taxonomy": {
+          "$ref": "#/$defs/NavigationTaxonomy"
+        }
+      }
+    },
+    "NavigationNodeId": {
+      "description": "Canonical vocabulary node id. Classification nodes are `class:<taxonomy>:<zero-based tree index path>`; geography nodes are `geo:<lowercased source code>`. Unresolved values are retained as `class:<taxonomy>:~<hex16>` and `geo:~<hex16>`, where `hex16` is the first 16 hex characters of the sha256 of `<scope>|<uppercased code>`.",
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9-]*:[!-~]{1,96}$"
+    },
+    "NavigationNode": {
+      "description": "One immediate child with its public-version counts.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nodeId",
+        "parentNodeId",
+        "code",
+        "taxonomy",
+        "count",
+        "directCount",
+        "hasChildren"
+      ],
+      "properties": {
+        "nodeId": {
+          "$ref": "#/$defs/NavigationNodeId"
+        },
+        "parentNodeId": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/NavigationNodeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "code": {
+          "$ref": "./portal.common-types.v1.schema.json#/$defs/NonEmptyString"
+        },
+        "taxonomy": {
+          "$ref": "#/$defs/NavigationTaxonomy"
+        },
+        "count": {
+          "description": "Matching public versions whose placement is this node or any of its descendants.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "directCount": {
+          "description": "Matching public versions that authored exactly this node. A version whose placement is a descendant is never counted here, so `directCount <= count` always holds.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "hasChildren": {
+          "description": "Whether this node has at least one child node, including a child whose own count is zero.",
+          "type": "boolean"
+        }
+      }
+    },
+    "NavigationTotals": {
+      "description": "Distinct matching public versions for the whole request, ignoring the object-kind scope only. The same exact identities drive the search page, so a drill-down can never disagree with these totals.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "process",
+        "flow"
+      ],
+      "properties": {
+        "process": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "flow": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "NavigationVocabularyNode": {
+      "description": "One node of the versioned navigation vocabulary asset. It is the only place display text lives, so every locale of the public UI has one authoritative label and one recorded label strategy per locale.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nodeId",
+        "parentNodeId",
+        "code",
+        "taxonomy",
+        "dimension",
+        "hasChildren",
+        "labels",
+        "labelStrategy",
+        "sourceIndexPath",
+        "aliasCodes"
+      ],
+      "properties": {
+        "nodeId": {
+          "$ref": "#/$defs/NavigationNodeId"
+        },
+        "parentNodeId": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/NavigationNodeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "code": {
+          "$ref": "./portal.common-types.v1.schema.json#/$defs/NonEmptyString"
+        },
+        "taxonomy": {
+          "$ref": "#/$defs/NavigationTaxonomy"
+        },
+        "dimension": {
+          "$ref": "#/$defs/NavigationDimension"
+        },
+        "hasChildren": {
+          "type": "boolean"
+        },
+        "sourceIndexPath": {
+          "description": "The exact assertion this node was read from in the pinned source: a `category[i]/category[j]` index path for a classification, or `location:<CODE>` for a location. Null for a virtual container that owns no source node.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "labels": {
+          "description": "Four-locale display text. A locale with no evidenced name is an empty string, never a copy of another locale.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "en",
+            "zh-CN",
+            "de",
+            "fr"
+          ],
+          "properties": {
+            "en": {
+              "type": "string"
+            },
+            "zh-CN": {
+              "type": "string"
+            },
+            "de": {
+              "type": "string"
+            },
+            "fr": {
+              "type": "string"
+            }
+          }
+        },
+        "labelStrategy": {
+          "description": "Per-locale provenance of the label so a consumer can tell an official name from a project-reviewed overlay, an archived name, or a genuinely unavailable one.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "en",
+            "zh-CN",
+            "de",
+            "fr"
+          ],
+          "properties": {
+            "en": {
+              "$ref": "#/$defs/NavigationLabelStrategy"
+            },
+            "zh-CN": {
+              "$ref": "#/$defs/NavigationLabelStrategy"
+            },
+            "de": {
+              "$ref": "#/$defs/NavigationLabelStrategy"
+            },
+            "fr": {
+              "$ref": "#/$defs/NavigationLabelStrategy"
+            }
+          }
+        },
+        "aliasCodes": {
+          "description": "Source codes that address this exact node in another vocabulary. The datasets author the Chinese administrative layer as `SD-CN` / `AQ-AH-CN` while the pinned location table spells the same units `CN-SD` / `CN-AH-AQG`; the alias list records that reviewed equivalence so a consumer can match either spelling to one node. Empty for a node with no second spelling.",
+          "type": "array",
+          "items": {
+            "$ref": "./portal.common-types.v1.schema.json#/$defs/NonEmptyString"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "NavigationLabelStrategy": {
+      "description": "How a label was obtained. `official-source` is the pinned upstream name, `project-reviewed-overlay` is the pinned project translation, `archived-snapshot-parenthesised-name` is a name read out of the frozen archived location snapshot, `database-virtual-container` is a container label owned by this database, and `unavailable` means no evidenced name exists for that locale.",
+      "type": "string",
+      "enum": [
+        "official-source",
+        "project-reviewed-overlay",
+        "archived-snapshot-parenthesised-name",
+        "database-virtual-container",
+        "unavailable"
+      ]
+    },
+    "NavigationVocabulary": {
+      "description": "The complete versioned vocabulary asset. Its `sourceReceipt` pins every input by digest, and its node list is what the navigation RPC's node identities resolve against.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "sourceReceipt",
+        "counts",
+        "nodes"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "portal.navigation-vocabulary.v1"
+        },
+        "sourceReceipt": {
+          "type": "object"
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "nodes",
+            "classification",
+            "geography",
+            "ilcdLocationCodes"
+          ],
+          "properties": {
+            "nodes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "classification": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "geography": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ilcdLocationCodes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NavigationVocabularyNode"
+          }
+        }
+      }
+    }
+  },
+  "description": "One branch of the anonymous public navigation vocabulary with public-version counts. Counts are computed over the same matched-version predicate as the public search page, before any page limit, and the page is bounded so a large branch is paged rather than silently truncated."
+}

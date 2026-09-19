@@ -60,10 +60,10 @@ def main() -> int:
     supabase_cli_versions = re.findall(
         r"uses: supabase/setup-cli@v2\s+with:\s+version:\s*([^\s#]+)", text
     )
-    if supabase_cli_versions != ["2.116.0"] * 3:
+    if supabase_cli_versions != ["2.117.0"] * 3:
         failures.append(
             "all three local, persistent-Dev, and Preview Supabase CLI pins "
-            f"must be 2.116.0, found {supabase_cli_versions or 'none'}"
+            f"must be 2.117.0, found {supabase_cli_versions or 'none'}"
         )
 
     expected_head = resolve_migration_head(MIGRATIONS)
@@ -178,7 +178,7 @@ def main() -> int:
         "Supabase Preview runtime verification requires SUPABASE_ACCESS_TOKEN, SUPABASE_MAIN_PROJECT_ID, and SUPABASE_DEV_PROJECT_ID",
         "exit 1",
         "uses: supabase/setup-cli@v2",
-        "version: 2.116.0",
+        "version: 2.117.0",
         "Wait for exact Supabase Preview check",
         "check_name=Supabase%20Preview&filter=latest",
         '.name == "Supabase Preview"',
@@ -408,6 +408,8 @@ def main() -> int:
         "supabase test db supabase/tests/20260909_review_queue_full_text_search.sql",
         "supabase test db supabase/tests/20260909_tidas_partial_import.sql",
         "supabase test db supabase/tests/20260910_example_dataset_scope.sql",
+        "supabase test db supabase/tests/20260919_portal_navigation_v1.sql",
+        "supabase test db supabase/tests/20260919_portal_catalog_summary_bounded.sql",
         '"public", "api", "graphql_public"',
         '"public", "api", "extensions"',
         '"max_rows":1000',

@@ -1,0 +1,1 @@
+CREATE INDEX "portal_navigation_versions_process_parent_v1_idx" ON "private"."portal_navigation_versions_v1" USING "btree" ("dataset_kind", "process_id", "process_version") WHERE ("process_id" IS NOT NULL);

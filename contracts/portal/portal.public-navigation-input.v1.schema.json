@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "portal.public-navigation-input.v1.schema.json",
+  "title": "TianGong portal.public-navigation-input.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "query",
+    "filters",
+    "dimension",
+    "parentNodeId",
+    "cursor",
+    "limit"
+  ],
+  "properties": {
+    "kind": {
+      "enum": [
+        "all",
+        "process",
+        "flow"
+      ]
+    },
+    "query": {
+      "type": "string",
+      "maxLength": 512,
+      "description": "At most 2048 UTF-8 bytes; C0/C1 control characters are rejected."
+    },
+    "filters": {
+      "$ref": "./portal.public-search-input.v3.schema.json#/$defs/NavigationSearchFiltersV3"
+    },
+    "dimension": {
+      "enum": [
+        "classification",
+        "geography"
+      ]
+    },
+    "parentNodeId": {
+      "oneOf": [
+        {
+          "$ref": "./portal.public-navigation.v1.schema.json#/$defs/NavigationNodeId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cursor": {
+      "$ref": "./portal.common-types.v1.schema.json#/$defs/NullableCursor"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 500
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "flow"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "processSubtype": false
+            }
+          }
+        }
+      }
+    }
+  ]
+}

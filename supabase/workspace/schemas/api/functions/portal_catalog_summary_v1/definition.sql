@@ -8,6 +8,7 @@ CREATE OR REPLACE FUNCTION "api"."portal_catalog_summary_v1"() RETURNS "jsonb"
     SET "jit" TO 'off'
     SET "row_security" TO 'on'
     AS $_$
+
 declare
   v_counts jsonb;
   v_latest_modified_at text;
@@ -54,12 +55,15 @@ begin
         candidate.id,
         candidate.version,
         private.portal_catalog_summary_label_v1(candidate.card) as label
-      from private.portal_catalog_search_current_v2 as candidate
-      join latest
-        on latest.dataset_kind = candidate.dataset_kind
-       and latest.id = candidate.id
-       and latest.version = candidate.version
+      from private.portal_catalog_search_rows_v2 as candidate
       where candidate.dataset_kind = 'process'
+        and exists (
+          select 1
+          from latest
+          where latest.dataset_kind = candidate.dataset_kind
+            and latest.id = candidate.id
+            and latest.version = candidate.version
+        )
         and pg_catalog.jsonb_array_length(
           private.portal_catalog_summary_label_v1(candidate.card)
         ) > 0
@@ -76,12 +80,15 @@ begin
         candidate.id,
         candidate.version,
         private.portal_catalog_summary_label_v1(candidate.card) as label
-      from private.portal_catalog_search_current_v2 as candidate
-      join latest
-        on latest.dataset_kind = candidate.dataset_kind
-       and latest.id = candidate.id
-       and latest.version = candidate.version
+      from private.portal_catalog_search_rows_v1 as candidate
       where candidate.dataset_kind = 'flow'
+        and exists (
+          select 1
+          from latest
+          where latest.dataset_kind = candidate.dataset_kind
+            and latest.id = candidate.id
+            and latest.version = candidate.version
+        )
         and pg_catalog.jsonb_array_length(
           private.portal_catalog_summary_label_v1(candidate.card)
         ) > 0
@@ -104,7 +111,7 @@ begin
   ), cas_unique_values as materialized (
     select candidate.card ->> 'casNumber' as cas_number,
       pg_catalog.min(candidate.id::text)::uuid as id
-    from private.portal_catalog_search_current_v2 as candidate
+    from private.portal_catalog_search_rows_v1 as candidate
     where candidate.dataset_kind = 'flow'
       and pg_catalog.jsonb_typeof(candidate.card -> 'casNumber') = 'string'
       and candidate.card ->> 'casNumber' ~
@@ -128,15 +135,18 @@ begin
       unique_cas.cas_number,
       private.portal_catalog_summary_label_v1(candidate.card) as label
     from cas_unique_values as unique_cas
-    join private.portal_catalog_search_current_v2 as candidate
+    join private.portal_catalog_search_rows_v1 as candidate
       on candidate.dataset_kind = 'flow'
      and candidate.id = unique_cas.id
      and candidate.card ->> 'casNumber' = unique_cas.cas_number
-    join latest
-      on latest.dataset_kind = candidate.dataset_kind
-     and latest.id = candidate.id
-     and latest.version = candidate.version
-    where pg_catalog.jsonb_array_length(
+    where exists (
+        select 1
+        from latest
+        where latest.dataset_kind = candidate.dataset_kind
+          and latest.id = candidate.id
+          and latest.version = candidate.version
+      )
+      and pg_catalog.jsonb_array_length(
       private.portal_catalog_summary_label_v1(candidate.card)
     ) > 0
     order by unique_cas.cas_number,
@@ -169,15 +179,18 @@ begin
         classification.ordinality,
         pg_catalog.btrim(classification.value ->> 'code') as code,
         private.portal_catalog_summary_label_v1(candidate.card) as label
-      from private.portal_catalog_search_current_v2 as candidate
-      join latest
-        on latest.dataset_kind = candidate.dataset_kind
-       and latest.id = candidate.id
-       and latest.version = candidate.version
+      from private.portal_catalog_search_rows_v2 as candidate
       cross join lateral pg_catalog.jsonb_array_elements(
         candidate.card -> 'classifications'
       ) with ordinality as classification(value, ordinality)
       where candidate.dataset_kind = 'process'
+        and exists (
+          select 1
+          from latest
+          where latest.dataset_kind = candidate.dataset_kind
+            and latest.id = candidate.id
+            and latest.version = candidate.version
+        )
         and pg_catalog.jsonb_typeof(
           candidate.card -> 'classifications'
         ) = 'array'
@@ -219,15 +232,18 @@ begin
         classification.ordinality,
         pg_catalog.btrim(classification.value ->> 'code') as code,
         private.portal_catalog_summary_label_v1(candidate.card) as label
-      from private.portal_catalog_search_current_v2 as candidate
-      join latest
-        on latest.dataset_kind = candidate.dataset_kind
-       and latest.id = candidate.id
-       and latest.version = candidate.version
+      from private.portal_catalog_search_rows_v1 as candidate
       cross join lateral pg_catalog.jsonb_array_elements(
         candidate.card -> 'classifications'
       ) with ordinality as classification(value, ordinality)
       where candidate.dataset_kind = 'flow'
+        and exists (
+          select 1
+          from latest
+          where latest.dataset_kind = candidate.dataset_kind
+            and latest.id = candidate.id
+            and latest.version = candidate.version
+        )
         and pg_catalog.jsonb_typeof(
           candidate.card -> 'classifications'
         ) = 'array'
@@ -311,7 +327,7 @@ exception
     raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
   when others then
     raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
-end
+end;
 $_$;
 
 ALTER FUNCTION "api"."portal_catalog_summary_v1"() OWNER TO "portal_public_executor";

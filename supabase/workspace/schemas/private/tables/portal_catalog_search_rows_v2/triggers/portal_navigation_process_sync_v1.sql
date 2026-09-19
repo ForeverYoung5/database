@@ -1,0 +1,1 @@
+CREATE OR REPLACE TRIGGER "portal_navigation_process_sync_v1" AFTER INSERT OR DELETE OR UPDATE OF "card" ON "private"."portal_catalog_search_rows_v2" FOR EACH ROW EXECUTE FUNCTION "private"."sync_portal_navigation_row_v1"();

@@ -307,6 +307,46 @@ route at or below 2,000 projected exact-version keys; a 2,001st key must retain
 the predecessor HNSW route. The exact branch must reapply the complete canonical
 filter, preserve both versions of one ID, rank by exact cosine distance with
 deterministic ID/version ties, and return no row for an empty candidate set.
+### Navigation and V3 proof
+
+For the versioned navigation RPC, the Chinese-administrative alias layer and the
+V3 node filters, use the same isolated local stack, a clean reset, and
+`supabase/tests/20260919_portal_navigation_v1.sql`. Prove:
+
+- the closure projection materialises one row per authored placement and every
+  ancestor of it, that only the authored placement of a branch is `direct`, and
+  that a version with no usable classification still lands in a bucket;
+- an authored archive code (`SD-CN`, `AQ-AH-CN`) resolves through its alias to
+  the canonical `CN-*` node instead of creating a second tree, and that the
+  canonical tree's own parent links are asserted by each row's name;
+- the page carries `countBasis`, per-kind `totals` that keep measuring the other
+  kind, a complete `parent` node with its own `count`/`directCount`, identity-only
+  `ancestors`, subtree and direct child counts, and a keyset cursor that pages a
+  branch instead of truncating it;
+- V3 `classificationNodeId`/`geographyNodeId` with `subtree` (default) and
+  `direct` scopes reach the pre-filter, and a scope without its node, a node from
+  the other dimension, or a node outside the vocabulary is refused with
+  `22023`;
+- the v1 and v2 facades keep their exact signatures, grants and behaviour, the
+  navigation internals stay closed to browser roles, and every new `api.*`
+  routine is registered in `private.api_capability_grants`.
+
+The generated vocabulary is not hand-edited: change it by re-running
+`scripts/generate_portal_navigation_vocabulary.py` against the pinned platform
+commit and the receipted `tiangong-lca/data` snapshot, then confirm the committed
+`contracts/portal/navigation-vocabulary.json` and its receipt are byte-identical.
+
+### Bounded catalog summary
+
+The anonymous summary facade keeps a 2-second statement budget and must never
+raise it to hide cost. Proof for a change to it is a synthetic
+production-volume projection fixture on the isolated stack plus an assertion that
+`api.portal_catalog_summary_v1()` returns its published shape and that its body
+reads the narrow projection tables rather than the
+`portal_catalog_search_current_v2` union view. A performance fix must return
+byte-identical JSON: record `md5()` of the response before and after, and record
+representative timings. Do not run `EXPLAIN ANALYZE` against production.
+
 Existing V1 definitions and immutable projection/context/facet manifests must
 remain unchanged. Compile all Portal JSON Schemas in strict
 Draft 2020-12 mode and regenerate contracts and the five-schema workspace twice
@@ -491,3 +531,15 @@ The trigger inventory in `20260805_full_schema_cutover.sql` is asserted over the
 The example-scope migration intentionally changes four private raw Hybrid/semantic definitions. Update only their definition fingerprints in the two `20260826` Portal Hybrid/candidate suites and run both (64 and 83 assertions respectively); all eight routine owners, security modes, configs and ACLs remain pinned. This baseline refresh does not modify the immutable Portal projection helper closure or authorize Portal visibility changes.
 
 For Database #654, run `supabase/tests/20260918_tidas_full_package_import.sql` and existing partial-import/API/full-schema suites after clean migration replay. Prove orphan/rootless and all-existing packages, per-record skips, cross-type identity, cross-chunk rollback, exact replay, missing chunks, expiry and lease loss during inserts, and receipt ACLs. Regenerate the five-schema workspace and Data API types from the qualified migration state.
+
+## Portal hierarchical navigation and summary
+
+After a blank local migration reset, run all `*portal*.sql` suites plus full-schema, API closure, adjacent matched-version Hybrid/OAuth and FK-index tests. `20260919_portal_navigation_v1.sql` retains both Process projection writers and the Flow writer in rollback-only source fixtures; it checks historical versions, duplicate paths, type disambiguation, aliases, direct/subtree and combined filtering, byte bounds, more than 100 regions, cursor scope, source updates, withdrawals and derivation drift. `20260919_portal_catalog_summary_bounded.sql` checks dataset totals, executable examples and unchanged public capabilities/timeouts.
+
+Use `python3 scripts/benchmark_portal_summary_bounded.py --container <explicit-local-container> --direct-projection-fixture --process-datasets 20000 --flow-datasets 30000 --samples 5 --report <new-json-file>` only on an empty local Docker fixture. This is a rollback-only 100,000-version read-scale benchmark, not production p95 or bulk-write qualification. It compares the exact September predecessor with the replacement on identical data, restores selected raw support rows for context decorators and leaves every change rolled back. The separate source-writer SQL suite proves transactional maintenance.
+
+Run the offline vocabulary generator with `--check`, generate Portal types twice without drift, compile all schemas in strict Draft 2020-12 mode with `python3 scripts/check_portal_json_schemas.py` (the checker preloads sibling references rather than relying on filename order), and regenerate the five-schema workspace plus Data API types from the same clean local state. The pinned Supabase CLI in the workflow owns the generation version. Hosted Preview, persistent Dev, production promote and root integration remain distinct proofs.
+
+Run `python3 scripts/test_portal_navigation_backfill.py --container supabase_db_database-engine --report /tmp/portal-navigation-backfill.json` on the empty local stack before other committed fixtures. It replays all four populated shards twice and uses a two-connection advisory barrier to prove that concurrent withdrawal and update win after the cursor snapshot. It touches only fixture projection parents, cleans them up, and never accepts hosted URLs. The backfill makes only its two parent FKs immediate so per-version savepoints catch withdrawal before commit.
+
+The local qualification at `e6c536f63a4afcc167c70bb95767b79f210f4f03` passed all 16 Portal suites and three adjacent schema/API/Hybrid suites, including 48 navigation and ten summary assertions. The exact four-shard replay and withdrawal/update barrier tests passed. Two regenerated five-schema snapshots matched across 1,705 SQL files. The 100,000-version synthetic benchmark returned identical old/new summary JSON, with new reads 43.6–58.3 ms versus 2,136–2,197 ms; a world navigation page was 40,014 bytes and 1,483–1,552 ms. These are local receipts only. Full `db lint` still reports 12 untouched historical/temp-table routines; none belong to this navigation, V3 or summary increment. Hosted Preview and subsequent Dev/Main checks remain release gates.
