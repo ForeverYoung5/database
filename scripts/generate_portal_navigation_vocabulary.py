@@ -132,9 +132,11 @@ class Node:
     source_index_path: str | None = None
     source_file: str | None = None
     has_children: bool = False
+    alias_codes: list[str] = field(default_factory=list)
 
     def to_document(self) -> dict[str, object]:
         return {
+            "aliasCodes": list(self.alias_codes),
             "code": self.code,
             "dimension": self.dimension,
             "hasChildren": self.has_children,
@@ -376,13 +378,33 @@ def build_geography_nodes(
     )
 
     ilcd_codes: set[str] = set()
+    ilcd_names: dict[str, str] = {}
+    ilcd_parents: dict[str, str | None] = {}
     for entry in category_children(base["ILCDLocations"]["location"]):
         code = (entry.get("@value") or "").strip()
         if not code or code.upper() == "NULL":
             # The literal NULL row carries no usable location code.
             continue
-        ilcd_codes.add(code.upper())
-        labels = {"en": (entry.get("#text") or "").strip()}
+        upper = code.upper()
+        ilcd_codes.add(upper)
+        ilcd_names[upper] = (entry.get("#text") or "").strip()
+        parts = upper.split("-")
+        parent = "-".join(parts[:-1]) if len(parts) > 1 else None
+        ilcd_parents[upper] = parent if parent and parent in ilcd_names else None
+
+    # A code that addresses a lower administrative level than its own row states
+    # is only accepted when the deeper row exists and repeats the parent name.
+    for code, parent in sorted(ilcd_parents.items()):
+        if parent is None or len(code.split("-")) < 3:
+            continue
+        parent_core = ilcd_names.get(parent, "").replace(",China", "").strip()
+        if parent_core and parent_core not in ilcd_names[code]:
+            raise SystemExit(
+                f"location {code} does not name its parent {parent}: {ilcd_names[code]!r}"
+            )
+
+    for code in sorted(ilcd_codes):
+        labels = {"en": ilcd_names[code]}
         strategy = {"en": LABEL_STRATEGY_OFFICIAL}
         for locale in ("zh-CN", "de", "fr"):
             value = overlay[OVERLAY_LOCALE[locale]].get(f"location:{code}")
@@ -393,7 +415,11 @@ def build_geography_nodes(
         nodes.append(
             Node(
                 node_id=f"geo:{code.lower()}",
-                parent_id=None,
+                parent_id=(
+                    f"geo:{ilcd_parents[code].lower()}"
+                    if ilcd_parents[code] is not None
+                    else None
+                ),
                 code=code,
                 taxonomy="ilcd-locations",
                 dimension="geography",
@@ -403,17 +429,84 @@ def build_geography_nodes(
                 source_file="src/services/referenceResources/data/ilcd-locations/base.json",
             )
         )
+    by_code = {node.code: node for node in nodes if node.dimension == "geography"}
 
-    # Project Chinese administrative layer, sourced only from the frozen archive
-    # and gated by the checked-in controlled mapping.
+    def cn_levels(node: Node) -> list[str]:
+        """The Chinese name split into administrative levels, deepest last.
+
+        The pinned labels read `China, <province>, <city>`; the archive names the
+        same levels in the same order.
+        """
+        value = node.labels.get("zh-CN") or ""
+        return [part.strip() for part in value.split(",") if part.strip()]
+
+    suffix_re = re.compile(
+        r"(壮族|回族|苗族|彝族|藏族|蒙古族|土家族|布依族|侗族|白族|傣族|景颇族|傈僳族|哈尼族|"
+        r"哈萨克|柯尔克孜|朝鲜族|羌族|纳西族|拉祜族|佤族|畲族|黎族|瑶族|水族|仡佬族|锡伯族|"
+        r"自治州|自治县|自治旗|地区|林区|盟|州|市|县|区)+$"
+    )
+
+    def core_name(value: str) -> str:
+        return suffix_re.sub("", (value or "").strip())
+
+    def pinyin_tokens(code_segment: str) -> list[str]:
+        """The archive code's Latin initials, longest first.
+
+        `CXD` addresses `楚雄彝族自治州`; the initials alone cannot decide which
+        prefix of the Chinese name they spell, so the longest prefix that the
+        Chinese name actually starts with is the candidate, and an ambiguous
+        match is refused rather than guessed.
+        """
+        segment = code_segment.strip().lower()
+        return [
+            segment[:length] for length in range(len(segment), 0, -1)
+        ]
+
+    def local_match_rank(node: Node, local: str, code_segment: str | None) -> int:
+        """How strongly one canonical node matches an archive entry, 0 = no match.
+
+        Ranking instead of a boolean is what makes this safe: when two
+        prefectures share a short initialism the code alone cannot decide, so the
+        caller keeps the strongest and requires it to be unique.
+        """
+        levels = cn_levels(node)
+        current = levels[-1] if levels else ""
+        if not current:
+            return 0
+        if local == current:
+            return 100
+        core = core_name(current)
+        if local == core:
+            return 95
+        if local in current or current in local:
+            return 90
+        if core and (core in local or local in core):
+            return 85
+        if code_segment:
+            folded = code_segment.strip().lower()
+            # An initialism that the Chinese core name starts with, preferring
+            # the longest run of matching initial characters.
+            matched = 0
+            for index, character in enumerate(core.lower()):
+                if index >= len(folded) or character != folded[index]:
+                    break
+                matched += 1
+            if matched >= 2:
+                return 70 + matched
+        return 0
+
+    # Archive layer. Its codes are the ones the datasets actually author, and the
+    # pinned vocabulary carries the same administrative units under its own
+    # `CN-XX` spelling, so each archive code becomes an alias on the canonical
+    # node instead of a second parallel tree.
     archive_digest, archive_length = sha256_file(archive_locations)
     mapping = read_json(china_mapping_path)
     mapping_sources = [
         source
         for source in mapping.get("sources", [])
-        if source.get("path") == "data/tiangong_lca_data/ILCDLocations.xml"
+        if source.get("sha256") == archive_digest
     ]
-    if len(mapping_sources) != 1 or mapping_sources[0].get("sha256") != archive_digest:
+    if len(mapping_sources) != 1:
         raise SystemExit(
             "the China mapping does not receipt the archive file being read; "
             f"expected sha256 {archive_digest}"
@@ -440,12 +533,30 @@ def build_geography_nodes(
         }
     )
 
+    nodes.append(
+        virtual_node(
+            f"geo:{country_node.lower()}:unmapped",
+            "~",
+            "database-virtual",
+            "geography",
+            {
+                "en": "Unplaced China codes",
+                "zh-CN": "未归位的中国地区编码",
+                "de": "Nicht zugeordnete China-Codes",
+                "fr": "Codes chinois non placés",
+            },
+        )
+    )
+    nodes[-1].parent_id = f"geo:{country_node.lower()}"
+
     archive_text = archive_locations.read_text(encoding="utf-8")
     archive_entries = dict(
         re.findall(r'<location[^>]*value="([^"]*)"[^>]*>([^<]*)</location>', archive_text)
     )
-    chinese: dict[str, dict[str, str | None]] = {}
-    for raw_code, raw_name in archive_entries.items():
+    canonical_cn = {
+        code: node for code, node in by_code.items() if code.startswith("CN-")
+    }
+    for raw_code, raw_name in sorted(archive_entries.items()):
         code = raw_code.strip().upper()
         if not code.endswith("-CN") or code in ilcd_codes:
             continue
@@ -457,55 +568,72 @@ def build_geography_nodes(
             raise SystemExit(
                 f"archived location {code} does not name every level: {raw_name!r}"
             )
-        if len(segments) == 1:
-            if code not in province_codes:
-                raise SystemExit(
-                    f"province {code} is absent from the controlled mapping"
-                )
-            parent_code = country_node
-            parent_label = None
+        local = chinese_segments[0].strip()
+        # The archive abbreviates provinces differently from the pinned
+        # vocabulary (Inner Mongol is `NMG-CN` there and `CN-NM` here) and even
+        # reuses letters in a different order (`HB` is Hubei there, Hebei here),
+        # so a code segment is never treated as a province. The province is
+        # resolved by its Chinese name and the city is then matched inside it.
+        province_parent = f"geo:{country_node.lower()}"
+        province_target = local if len(segments) == 1 else chinese_segments[1].strip()
+        province_ranked = sorted(
+            (
+                (local_match_rank(node, province_target, None), node)
+                for node in canonical_cn.values()
+                if node.parent_id == province_parent
+            ),
+            key=lambda entry: (-entry[0], entry[1].node_id),
+        )
+        province_ranked = [entry for entry in province_ranked if entry[0] > 0]
+        if len(province_ranked) != 1 or province_ranked[0][0] != province_ranked[-1][0]:
+            candidates = []
+        elif len(segments) == 1:
+            candidates = [province_ranked[0][1]]
         else:
-            parent_code = f"{segments[1]}-CN"
-            parent_label = chinese_segments[1].strip()
-        chinese[code] = {
-            "code": code,
-            "label": chinese_segments[0].strip(),
-            "parent": parent_code,
-            "parentLabel": parent_label,
-        }
-    for code, entry in sorted(chinese.items()):
-        parent_code = entry["parent"]
-        if parent_code is None or parent_code in chinese or parent_code == country_node:
-            continue
-        if parent_code not in province_codes:
-            raise SystemExit(
-                f"Chinese administrative parent {parent_code} of {code} is not a "
-                "mapped province"
+            province_node = province_ranked[0][1]
+            child_ranked = sorted(
+                (
+                    (local_match_rank(node, local, segments[0]), node)
+                    for node in canonical_cn.values()
+                    if node.parent_id == province_node.node_id
+                ),
+                key=lambda entry: (-entry[0], entry[1].node_id),
             )
-        # The archive may omit the province row itself; label it from the child.
-        chinese[parent_code] = {
-            "code": parent_code,
-            "label": entry["parentLabel"],
-            "parent": country_node,
-            "parentLabel": None,
-        }
-    for code, entry in sorted(chinese.items()):
-        if not entry["label"]:
-            raise SystemExit(f"Chinese administrative code {code} has no derivable label")
-        parent_code = entry["parent"]
-        if parent_code is not None and parent_code not in chinese and parent_code != country_node:
-            raise SystemExit(f"Chinese administrative code {code} lacks parent {parent_code}")
-        # Only zh-CN is a real name. Recording the same string under en/de/fr
-        # would present a Chinese name as a translation, so the other locales are
-        # explicitly empty and marked unavailable.
+            child_ranked = [entry for entry in child_ranked if entry[0] > 0]
+            if len(child_ranked) == 1 or (
+                len(child_ranked) > 1 and child_ranked[0][0] > child_ranked[1][0]
+            ):
+                candidates = [child_ranked[0][1]]
+            else:
+                candidates = []
+        import os as _os
+        if _os.environ.get("NAV_DEBUG") and code in _os.environ["NAV_DEBUG"].split(","):
+            import sys as _sys
+            print(f"DEBUG {code}: segs={segments} local={local!r} province_target={province_target!r} "
+                  f"province_matches={[n.node_id for n in province_matches]} "
+                  f"candidates={[n.node_id for n in candidates]}", file=_sys.stderr)
+        if len(candidates) == 1:
+            node = candidates[0]
+            if code in node.alias_codes:
+                continue
+            node.alias_codes.append(code)
+            node.alias_codes.sort()
+            if not node.labels["zh-CN"] and local:
+                node.labels["zh-CN"] = local
+                node.label_strategy["zh-CN"] = LABEL_STRATEGY_ARCHIVE
+            continue
+        # No unique canonical counterpart: keep the authored code addressable as
+        # its own raw node under the country it belongs to rather than attaching
+        # it to a guessed city.
+        raw_id = f"geo:~{sha256_bytes(f'geo|{code}'.encode())[:16]}"
         nodes.append(
             Node(
-                node_id=f"geo:{code.lower()}",
-                parent_id=f"geo:{parent_code.lower()}" if parent_code else "geo:cn",
+                node_id=raw_id,
+                parent_id=f"geo:{country_node.lower()}:unmapped",
                 code=code,
-                taxonomy=TAXONOMY_ARCHIVE_LOCATIONS,
+                taxonomy="unmapped",
                 dimension="geography",
-                labels={"en": "", "zh-CN": entry["label"], "de": "", "fr": ""},
+                labels={"en": "", "zh-CN": local, "de": "", "fr": ""},
                 label_strategy={
                     "en": LABEL_STRATEGY_UNAVAILABLE,
                     "zh-CN": LABEL_STRATEGY_ARCHIVE,
@@ -540,6 +668,12 @@ def sql_text(value: str) -> str:
 
 def sql_jsonb(document: object) -> str:
     return sql_text(stable_json(document)) + "::jsonb"
+
+
+def sql_array(values: list[str]) -> str:
+    if not values:
+        return "'{}'::text[]"
+    return "array[" + ",".join(sql_text(value) for value in values) + "]::text[]"
 
 
 def chunked(rows: list[str], size: int) -> list[list[str]]:
@@ -600,12 +734,13 @@ def emit_seed_migration(
         statements.append(
             "insert into private.portal_navigation_node_v1 ("
             "node_id,parent_node_id,code,taxonomy,dimension,"
-            "source_index_path,source_file,labels,label_strategy"
+            "source_index_path,source_file,alias_codes,labels,label_strategy"
             ") values ("
             f"{sql_text(node.node_id)},{sql_text(node.parent_id) if node.parent_id else 'null'},"
             f"{sql_text(node.code)},{sql_text(node.taxonomy)},{sql_text(node.dimension)},"
             f"{sql_text(node.source_index_path) if node.source_index_path else 'null'},"
             f"{sql_text(node.source_file) if node.source_file else 'null'},"
+            f"{sql_array(node.alias_codes)},"
             f"{sql_jsonb(node.labels)},{sql_jsonb(node.label_strategy)}"
             ");"
         )
@@ -779,6 +914,7 @@ def main() -> int:
                     "1" if node.has_children else "0",
                     node.source_index_path or "",
                     node.source_file or "",
+                    ",".join(sorted(node.alias_codes)),
                     *(node.labels[locale] for locale in OUTPUT_LOCALES),
                     *(node.label_strategy[locale] for locale in OUTPUT_LOCALES),
                 ]

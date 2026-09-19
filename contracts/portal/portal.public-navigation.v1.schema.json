@@ -39,10 +39,10 @@
       "$ref": "#/$defs/NavigationTotals"
     },
     "parent": {
-      "description": "The requested branch node, or null for a root page. It never carries counts because the caller is already inside it.",
+      "description": "The requested branch node as a complete node. It carries its own `count`/`directCount`/`hasChildren` so a consumer can offer \"this level only\" versus \"whole branch\" without a second request. Null for a root page.",
       "oneOf": [
         {
-          "$ref": "#/$defs/NavigationNodeIdentity"
+          "$ref": "#/$defs/NavigationNode"
         },
         {
           "type": "null"
@@ -50,7 +50,7 @@
       ]
     },
     "ancestors": {
-      "description": "Root-to-parent ancestors of the requested branch, excluding the parent itself, in root-first order. Empty for a root page.",
+      "description": "Root-to-parent ancestors of the requested branch, excluding the parent itself, in root-first order. Identity only: a breadcrumb never needs counts. Empty for a root page.",
       "type": "array",
       "maxItems": 32,
       "items": {
@@ -212,7 +212,8 @@
         "hasChildren",
         "labels",
         "labelStrategy",
-        "sourceIndexPath"
+        "sourceIndexPath",
+        "aliasCodes"
       ],
       "properties": {
         "nodeId": {
@@ -296,6 +297,14 @@
               "$ref": "#/$defs/NavigationLabelStrategy"
             }
           }
+        },
+        "aliasCodes": {
+          "description": "Source codes that address this exact node in another vocabulary. The datasets author the Chinese administrative layer as `SD-CN` / `AQ-AH-CN` while the pinned location table spells the same units `CN-SD` / `CN-AH-AQG`; the alias list records that reviewed equivalence so a consumer can match either spelling to one node. Empty for a node with no second spelling.",
+          "type": "array",
+          "items": {
+            "$ref": "./portal.common-types.v1.schema.json#/$defs/NonEmptyString"
+          },
+          "uniqueItems": true
         }
       }
     },

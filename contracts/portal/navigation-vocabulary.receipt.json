@@ -1,14 +1,14 @@
 {
   "asset": {
-    "byteLength": 4004491,
+    "byteLength": 3976237,
     "path": "navigation-vocabulary.json",
-    "sha256": "7db533ac3a0a8401ada2c8f2857019524319710a6390b274b10a36b326142477"
+    "sha256": "3f6481fce115bb29a7af6fe738bc9a9c6d7e4b663f7add95b2bf0c1905661b16"
   },
   "counts": {
     "classification": 5475,
-    "geography": 1008,
+    "geography": 656,
     "ilcdLocationCodes": 646,
-    "nodes": 6483
+    "nodes": 6131
   },
   "schemaVersion": "portal.navigation-vocabulary.v1",
   "sourceReceipt": {
@@ -222,11 +222,11 @@
         "sha256": "0e6c14cff52b8af26b48f85e684760a80ec963ceaff738bf65b0c5e205841c26"
       },
       {
-        "byteLength": 2061,
+        "byteLength": 1970,
         "path": "data/portal-navigation-china-mapping.json",
         "resourceId": "portal-navigation-china-mapping-v1",
         "scope": "location",
-        "sha256": "a3828129fc78f2c0881b6cf35a4b5085fa52fea99094d51e5d37a7219d147395"
+        "sha256": "7536de3666af224558ac37e2033e9e76fecaff0744659fb0096336c7fc630760"
       }
     ]
   }

@@ -65,11 +65,11 @@ export interface TianGongPortalPublicNavigationPageV1 {
   kind: "process" | "flow" | "all";
   totals: NavigationTotals;
   /**
-   * The requested branch node, or null for a root page. It never carries counts because the caller is already inside it.
+   * The requested branch node as a complete node. It carries its own `count`/`directCount`/`hasChildren` so a consumer can offer "this level only" versus "whole branch" without a second request. Null for a root page.
    */
-  parent: NavigationNodeIdentity | null;
+  parent: NavigationNode | null;
   /**
-   * Root-to-parent ancestors of the requested branch, excluding the parent itself, in root-first order. Empty for a root page.
+   * Root-to-parent ancestors of the requested branch, excluding the parent itself, in root-first order. Identity only: a breadcrumb never needs counts. Empty for a root page.
    *
    * @maxItems 32
    */
@@ -96,18 +96,6 @@ export interface NavigationTotals {
   flow: number;
 }
 /**
- * Locator-free identity of one vocabulary node. It carries no display text: the four-locale labels live in the versioned vocabulary asset so a page never has to repeat them.
- *
- * This interface was referenced by `TianGongPortalPublicNavigationPageV1`'s JSON-Schema
- * via the `definition` "NavigationNodeIdentity".
- */
-export interface NavigationNodeIdentity {
-  nodeId: NavigationNodeId;
-  parentNodeId: NavigationNodeId | null;
-  code: string;
-  taxonomy: NavigationTaxonomy;
-}
-/**
  * One immediate child with its public-version counts.
  *
  * This interface was referenced by `TianGongPortalPublicNavigationPageV1`'s JSON-Schema
@@ -130,6 +118,18 @@ export interface NavigationNode {
    * Whether this node has at least one child node, including a child whose own count is zero.
    */
   hasChildren: boolean;
+}
+/**
+ * Locator-free identity of one vocabulary node. It carries no display text: the four-locale labels live in the versioned vocabulary asset so a page never has to repeat them.
+ *
+ * This interface was referenced by `TianGongPortalPublicNavigationPageV1`'s JSON-Schema
+ * via the `definition` "NavigationNodeIdentity".
+ */
+export interface NavigationNodeIdentity {
+  nodeId: NavigationNodeId;
+  parentNodeId: NavigationNodeId | null;
+  code: string;
+  taxonomy: NavigationTaxonomy;
 }
 /**
  * One node of the versioned navigation vocabulary asset. It is the only place display text lives, so every locale of the public UI has one authoritative label and one recorded label strategy per locale.
@@ -166,6 +166,10 @@ export interface NavigationVocabularyNode {
     de: NavigationLabelStrategy;
     fr: NavigationLabelStrategy;
   };
+  /**
+   * Source codes that address this exact node in another vocabulary. The datasets author the Chinese administrative layer as `SD-CN` / `AQ-AH-CN` while the pinned location table spells the same units `CN-SD` / `CN-AH-AQG`; the alias list records that reviewed equivalence so a consumer can match either spelling to one node. Empty for a node with no second spelling.
+   */
+  aliasCodes: string[];
 }
 /**
  * The complete versioned vocabulary asset. Its `sourceReceipt` pins every input by digest, and its node list is what the navigation RPC's node identities resolve against.

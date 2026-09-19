@@ -1,34 +1,33 @@
 {
   "schemaVersion": "portal.navigation-china-mapping.v1",
-  "note": "Controlled parent mapping for the Chinese province/city geography layer. The frozen archive states every level inside the entry text ('City (市), Province (省), China (中国)'); this file records that reading explicitly so the generator never infers a parent from code shape alone.",
+  "note": "Controlled parent mapping for the Chinese province/city geography layer. The archived source states every level inside the entry text ('City (市), Province (省), China (中国)'); this file records that reading explicitly so the generator never infers a parent from code shape alone.",
   "rule": [
     "An archive code '<A>-CN' is a province whose parent is the country node CN.",
     "An archive code '<A>-<B>-CN' is a city whose parent is province '<B>-CN'.",
     "The province label is the second parenthesised segment of the child entry; it must be present before the mapping is accepted.",
-    "A code whose entry does not name every level, or whose parent code is absent from this mapping and from the archive, is rejected by the generator instead of being guessed."
+    "A city whose province segment has no province-level entry of its own is NOT given a synthesised province. It is listed in `unparentedCodes` and emitted as an independent raw node instead, because the archive never states which administrative unit that province segment denotes."
   ],
   "sources": [
     {
-      "path": "data/tiangong_lca_data/ILCDLocations.xml",
-      "repository": "tiangong-lca/database",
+      "repository": "tiangong-lca/data",
+      "commit": "2e163304adb9357cd7a17facfc8e5b426ed74a93",
+      "release": "0.2.0",
+      "path": "tiangong_lca_data/ILCDLocations.xml",
+      "workspacePath": "data/tiangong_lca_data/ILCDLocations.xml",
       "resourceId": "tiangong-lca-archive-locations-v1",
       "sha256": "0e6c14cff52b8af26b48f85e684760a80ec963ceaff738bf65b0c5e205841c26",
       "byteLength": 47683,
-      "status": "historical public snapshot, unmaintained since 2026-06-21"
+      "status": "historical public snapshot of the TianGong LCA database, retained unmaintained since 2026-06-21"
     }
   ],
   "provinceToCountry": [
-    "AH-CN", "BJ-CN", "CQ-CN", "FJ-CN", "GD-CN", "GS-CN", "GX-CN", "GXZ-CN",
-    "GZ-CN", "HAIN-CN", "HEB-CN", "HEN-CN", "HLJ-CN", "HUB-CN", "HUN-CN",
-    "JL-CN", "JS-CN", "JX-CN", "LN-CN", "NMG-CN", "NX-CN", "QH-CN", "SAX-CN",
-    "SC-CN", "SD-CN", "SH-CN", "SX-CN", "TJ-CN", "XJ-CN", "XZ-CN", "YN-CN",
-    "ZJ-CN"
+    "AH-CN", "BJ-CN", "CQ-CN", "FJ-CN", "GD-CN", "GS-CN", "GX-CN", "GZ-CN",
+    "HAIN-CN", "HEB-CN", "HEN-CN", "HLJ-CN", "HUB-CN", "HUN-CN", "JL-CN",
+    "JS-CN", "JX-CN", "LN-CN", "NMG-CN", "NX-CN", "QH-CN", "SAX-CN", "SC-CN",
+    "SD-CN", "SH-CN", "SX-CN", "TJ-CN", "XJ-CN", "XZ-CN", "YN-CN", "ZJ-CN"
   ],
-  "provinceCodeVariants": {
-    "GXZ-CN": {
-      "canonical": "GX-CN",
-      "reason": "Five Guizhou-coded city entries in the archive (NN-GXZ-CN, LZ-GXZ-CN, GL-GXZ-CN, WZ-GXZ-CN, BH-GXZ-CN) use the province segment GXZ, which has no province-level entry of its own. CN-GXZ-CN is therefore kept as a distinct node so those codes still resolve; it is not merged into GX-CN because the archive never states that they are the same administrative unit."
-    }
-  },
+  "unparentedCodes": [
+    "BH-GXZ-CN", "GL-GXZ-CN", "LZ-GXZ-CN", "NN-GXZ-CN", "WZ-GXZ-CN"
+  ],
   "countryNode": "CN"
 }
