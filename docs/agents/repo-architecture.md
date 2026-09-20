@@ -30,9 +30,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: "2026-09-18"
-lastReviewedCommit: "c606853ccb821c33bef4808da93a70698d39814e"
-lastReviewedNote: "Reviewed Database #654: bounded temporary staging, atomic whole-package insert-only finalization and replay receipts, unchanged root-group API, owner-scoped receipt recovery. Migration inventories and local proof are updated; persistent Dev/production deployment is not performed."
+lastReviewedAt: 2026-09-20
+lastReviewedCommit: e1bd83ecb3dd933f50a96bfb1c584335b852ebae
+lastReviewedNote: "Reviewed for Database #659: documented the RPC's 30-second timeout, reviewer-account exclusion, and ranking priorities; generated SQL is an exact-local review snapshot."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -331,12 +331,18 @@ must never be used as an authorization, role, team, or RLS input.
 `api.qry_national_carbon_organization_contributions(integer)` returns the
 administrator-only `national_carbon_organization_contribution_v5` snapshot.
 Only `public.processes` contributes dataset counts; LifecycleModels are not read.
+The RPC has a function-level 30-second `statement_timeout` for browser calls.
 
 - `rankings` contains up to `p_limit` units with published processes, ordered by
-  published count and stable normalized unit name. `organizations` contains every
-  non-empty current profile organization, including review-only and zero-data
-  units. The limit never truncates `organizations` or summary metrics.
+  published count, assigned-reviewer dataset count, and unassigned-reviewer
+  dataset count descending, then display name and normalized key in `C` order.
+  `organizations` uses that same order and contains every eligible non-empty
+  current profile organization, including pending-only and zero-data units.
+  The limit never truncates `organizations` or summary metrics.
 - Unit attribution uses normalized `private.users.raw_user_meta_data.organization`.
+  A user with `review-admin` or `review-member` in any team is excluded from
+  the unit catalog and its published/pending facts. This does not change the
+  independent reviewer KPI, regional distribution, or daily activity.
   Published and pending-review summary counts retain the organization-attributed
   scope. Pending review uses the latest process version at state 20; its active
   root review state 1 means assigned, while state 0 or no active root means

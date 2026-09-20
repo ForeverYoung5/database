@@ -1,8 +1,8 @@
 version: 1
 layout: repo
-lastReviewedAt: "2026-09-19"
-lastReviewedCommit: "623acc63b977f50ccf26bc23e291b967c2270157"
-lastReviewedNote: "Reviewed Database #654: bounded temporary staging, atomic whole-package insert-only finalization and replay receipts, unchanged root-group API, owner-scoped receipt recovery. Migration inventories and local proof are updated; persistent Dev/production deployment is not performed."
+lastReviewedAt: "2026-09-20"
+lastReviewedCommit: "e1bd83ecb3dd933f50a96bfb1c584335b852ebae"
+lastReviewedNote: "Reviewed for Database #659: existing migration, SQL-test, and generated-workspace routing covers the RPC migration and CI snapshot refresh; no rule change needed."
 
 # Keep deterministic governance facts here.
 # AGENTS.md remains the repo contract entrypoint.
