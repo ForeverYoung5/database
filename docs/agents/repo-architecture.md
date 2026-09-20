@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-20
-lastReviewedCommit: f3d91da8daaba375b04cd454957b56c652e75605
-lastReviewedNote: "Reviewed for Database #662: source-backed administrative parent revision, immutable bootstrap, populated upgrade and anonymous zero-count/V3 proof; deployment boundaries and generated-schema ownership remain unchanged."
+lastReviewedCommit: 7f3c73651b5743bd4ff7da54e4ce0918c1229b63
+lastReviewedNote: "Reviewed for Database #662 with dev #661/#664: retain the qualified worker admission snapshot and source-backed administrative parent revision; deployment boundaries remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -722,6 +722,8 @@ aliases are owned by Edge, not by a source/vector backfill here.
 The reusable AI runtime uses `worker_queue=ai`; `ai.tidas_suggestion` is only its first versioned job kind. `api.svc_ai_tidas_suggestion_enqueue` validates the exact Process/Flow v1 envelope, computes the canonical request hash, and reuses only identical active requests. `api.svc_ai_tidas_suggestion_read` requires the original requester and exposes the non-internal Worker projection. Both facades are service-only: Edge owns user authentication, while authenticated clients never enqueue or read `private.worker_jobs` directly. AI results remain advisory and create no Process/Flow domain mutation.
 
 Claim must remain non-blocking under concurrent recovery: expired max-attempt rows are selected in bounded `FOR UPDATE SKIP LOCKED` batches before they are marked failed, while claimable queued/stale or expired-retry rows use their own skip-locked candidate set. Terminal result recording is lease-fenced; an exact repeat with the same lease token, status, and normalized result content is an idempotent acknowledgement, while any conflicting replay remains rejected. This permits a Worker to retry an ambiguous database/transport failure without leaving completed compute stranded in `running`.
+
+Scope-closure package-build certificate admission runs on job insert or payload mutation, not on status-only claim or terminal transitions. If a certificate is revoked after enqueue, Worker must still claim the job, reject the stale binding, and record a terminal failure with no package publication; the queue must not retain an unclaimable head.
 
 Queue growth controls preserve lease freshness without turning every renewal into event history. A lease-only heartbeat updates `heartbeat_at` and `lease_expires_at` without changing business `updated_at`; events are appended only for a phase change, first progress value, or a crossed higher 5% progress bucket, diagnostics remain on the current job row, and the RPC reports `eventEmitted` for observation. Exact deterministic request identity excludes transport idempotency/concurrency keys. If its latest terminal job is explicitly `failed` with `retryable=false`, enqueue and LCA cache/snapshot facades return `WORKER_REQUEST_NON_RETRYABLE_FAILURE` with the reused Worker identity without inserting another job/event or resetting cache state; the result-cache facade exposes `mode=failed_cache_hit`, while `retryable=true` and unknown `NULL` remain admissible. Maintenance idempotency is stronger: a logical day-bucket key reuses terminal as well as active jobs under a transaction advisory lock.
 
