@@ -38,6 +38,7 @@ jobs:
           python scripts/check_portal_projection_manifest.py
           python3 scripts/check_portal_card_schema_parity.py
           python3 scripts/generate_portal_navigation_vocabulary.py --check
+          python3 scripts/test_portal_navigation_revisions.py
           python3 scripts/build_portal_contract_types.py --check
 
       - name: Rebuild migration history
@@ -53,6 +54,7 @@ jobs:
 
       - name: Verify schema and capability contracts
         run: |
+          supabase test db supabase/tests/20260920_portal_china_administrative_navigation.sql
           supabase test db supabase/tests/20260805_full_schema_cutover.sql
           supabase test db supabase/tests/20260806_api_contract_closure.sql
           supabase test db supabase/tests/20260806_identity_center_facades.sql

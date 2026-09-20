@@ -1,8 +1,8 @@
 version: 1
 layout: repo
 lastReviewedAt: "2026-09-20"
-lastReviewedCommit: "e1bd83ecb3dd933f50a96bfb1c584335b852ebae"
-lastReviewedNote: "Reviewed for Database #659: existing migration, SQL-test, and generated-workspace routing covers the RPC migration and CI snapshot refresh; no rule change needed."
+lastReviewedCommit: "f3d91da8daaba375b04cd454957b56c652e75605"
+lastReviewedNote: "Reviewed for Database #662: source-backed administrative parent revision, immutable bootstrap, populated upgrade and anonymous zero-count/V3 proof; deployment boundaries and generated-schema ownership remain unchanged."
 
 # Keep deterministic governance facts here.
 # AGENTS.md remains the repo contract entrypoint.

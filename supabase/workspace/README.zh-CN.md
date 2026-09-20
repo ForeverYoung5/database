@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-20
-lastReviewedCommit: e1bd83ecb3dd933f50a96bfb1c584335b852ebae
-lastReviewedNote: "Reviewed Database #659: the national-carbon RPC generated SQL is a deterministic exact-local migration snapshot for PR review; remote Dev provenance remains a post-merge check."
+lastReviewedCommit: f3d91da8daaba375b04cd454957b56c652e75605
+lastReviewedNote: "Reviewed for Database #662: source-backed administrative parent revision, immutable bootstrap, populated upgrade and anonymous zero-count/V3 proof; deployment boundaries and generated-schema ownership remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

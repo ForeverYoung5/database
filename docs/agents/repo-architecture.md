@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-20
-lastReviewedCommit: e1bd83ecb3dd933f50a96bfb1c584335b852ebae
-lastReviewedNote: "Reviewed for Database #659: documented the RPC's 30-second timeout, reviewer-account exclusion, and ranking priorities; generated SQL is an exact-local review snapshot."
+lastReviewedCommit: f3d91da8daaba375b04cd454957b56c652e75605
+lastReviewedNote: "Reviewed for Database #662: source-backed administrative parent revision, immutable bootstrap, populated upgrade and anonymous zero-count/V3 proof; deployment boundaries and generated-schema ownership remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -177,6 +177,8 @@ Package readiness remains a service-only V3 wrapper over the frozen V1/V2 insert
 For Exchange support types whose TIDAS schemas do not carry a Process-style license field, `portal-capability-policy.v1` treats exact state-100 Flow, FlowProperty, and UnitGroup rows as the explicit support capability only after the containing Process passes the full-free license policy. State 200 never supplies numeric support. Public search matches only the projected allowlist, never `search_text`, `extracted_md`, URI, or stripped raw fields. Facet values use the same bounded normalization as filters and return at most 100 values per group with `hasMore` evidence.
 
 `contracts/portal/navigation-vocabulary.json` and its receipt bind the four-language hierarchy to exact platform/data inputs vendored under `data/portal-navigation-sources/`. The generator verifies pinned live inputs or rebuilds offline without rewriting files in `--check` mode. Canonical `CN` province/city nodes follow the reviewed location vocabulary; evidenced archive spellings are aliases, and unknown codes remain distinct. Empty navigation queries read `private.portal_navigation_versions_v1`, not wide cards. Projection-child triggers maintain these narrow facts and a deduplicated ancestor membership closure; foreign keys to both authoritative projection families withdraw rows and memberships transactionally. There is no additional raw-table writer.
+
+Reviewed parent corrections are separate data revisions. `data/portal-navigation-china-administrative.json` binds existing `TW`, `HK` and `MO` nodes to `CN` using the pinned GeoAtlas feature parent, level and adcode; codes, labels, aliases and authored data stay unchanged. `data/portal-navigation-revisions.json` pins the immutable bootstrap seed and the prior contract digests. The revision fences the narrow projection writers, updates exactly three parents, adds deduplicated country-ancestor memberships through the branch index, and restores the seed guard in one bounded transaction.
 
 `api.portal_navigation_v1` returns one byte-bounded, paginated branch with public-version counts, direct counts and full parent counts. Static taxonomy nodes may show zero; data-derived unknown nodes are only disclosed while public members remain. Search/Facets V3 admit node/subtree/direct filters before ordering and limits, retain V2 DTOs, and use separate cursor fingerprints. V2/Hybrid remain unchanged. The independent literal derivation manifest checks source functions, constrained execution, RLS, foreign keys and exact projection triggers; seeded meanings cannot be changed by runtime writers. Reader grants name individual columns. The summary facade retains its dataset-count semantics and two-second setting while reading the correct kind-specific projection with semi-join existence checks against latest identities.
 

@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-20
-lastReviewedCommit: e1bd83ecb3dd933f50a96bfb1c584335b852ebae
-lastReviewedNote: "Reviewed Database #659: generated schema and Data API type commands match CI; the exact-local RPC snapshot is reproducible with pinned Supabase CLI 2.117.0. Script behavior unchanged."
+lastReviewedCommit: f3d91da8daaba375b04cd454957b56c652e75605
+lastReviewedNote: "Reviewed for Database #662: source-backed administrative parent revision, immutable bootstrap, populated upgrade and anonymous zero-count/V3 proof; deployment boundaries and generated-schema ownership remain unchanged."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml
@@ -596,6 +596,8 @@ The repository now includes a local pre-push docpact gate in `scripts/docpact-ga
 ## Portal 导航工具
 
 `python3 scripts/generate_portal_navigation_vocabulary.py --check` 只读验证离线词表及来源收据。只有经过审阅的来源变更才应省略 `--check` 并传入 `--seed-dir supabase/migrations` 重新生成。`--vendor --platform-root <path> --archive-locations <path>` 在核对平台精确提交后刷新来源副本；普通构建不联网刷新。来源收据、schema、类型与 seed migration 必须一起审阅。
+
+后续层级变更必须通过 `data/portal-navigation-revisions.json`：生成器校验原始 seed 的固定字节，只生成由 CLI 新建的修订迁移。`python3 scripts/test_portal_navigation_revisions.py` 校验有来源依据的绑定与修订边界。`python3 scripts/test_portal_china_navigation_upgrade.py --local-container supabase_db_database-engine-662-isolated` 要求从修订前提交初始化、唯一命名且源表为空的本地项目；它创建 160 个合成公开版本，在已提交的旧成员关系上应用修订，核对精确计数及源数据不变，再清理夹具。该工具拒绝远端 Docker context 和非空源表；验证后应在这个可丢弃项目重放完整迁移历史。
 
 `python3 scripts/benchmark_portal_summary_bounded.py --help` 说明本地、回滚式性能夹具。它拒绝远端 Docker context 和非空公开投影。读取规模测试不能替代生产延迟或源数据写入吞吐验证。
 

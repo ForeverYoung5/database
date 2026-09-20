@@ -33,8 +33,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-20
-lastReviewedCommit: e1bd83ecb3dd933f50a96bfb1c584335b852ebae
-lastReviewedNote: "Reviewed for Database #659: clean local reset, focused pgTAP assertions, and deterministic exact-local schema/type regeneration cover the CI snapshot refresh; validation matrix unchanged."
+lastReviewedCommit: f3d91da8daaba375b04cd454957b56c652e75605
+lastReviewedNote: "Reviewed for Database #662: source-backed administrative parent revision, immutable bootstrap, populated upgrade and anonymous zero-count/V3 proof; deployment boundaries and generated-schema ownership remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -308,6 +308,8 @@ the predecessor HNSW route. The exact branch must reapply the complete canonical
 filter, preserve both versions of one ID, rank by exact cosine distance with
 deterministic ID/version ties, and return no row for an empty candidate set.
 ### Navigation and V3 proof
+
+For administrative parent revisions, first run `python3 scripts/test_portal_china_navigation_upgrade.py --local-container supabase_db_database-engine-662-isolated` against an empty disposable project at the pre-revision base. Then replay the complete migrations and run `supabase/tests/20260920_portal_china_administrative_navigation.sql` alongside the original navigation suite. Prove existing historical versions gain exactly one ancestor, direct placements and raw codes remain unchanged, TW/HK/MO and Tibet remain reachable at zero matches, anonymous V3 counts agree, withdrawals remove ancestors, and the seed guard and private ACLs remain intact. Regenerated five-schema workspace and Data API types must have no diff for this data-only revision.
 
 For the versioned navigation RPC, the Chinese-administrative alias layer and the
 V3 node filters, use the same isolated local stack, a clean reset, and
