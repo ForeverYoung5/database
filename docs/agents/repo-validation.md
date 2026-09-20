@@ -33,8 +33,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-20
-lastReviewedCommit: 981bc45fdf4c1826a20c7c99ae60f330cae4066e
-lastReviewedNote: "Reviewed Database #661: local reset and the new trigger assertion cover admission on insert/payload mutation without blocking status-only Worker claims; Worker #299 owns the stateful revoked-certificate E2E proof."
+lastReviewedCommit: f3d91da8daaba375b04cd454957b56c652e75605
+lastReviewedNote: "Reviewed Database #659 and #661: preserved national-carbon reset/pgTAP/generated-snapshot proof, and verified the scope-closure trigger assertions plus Worker #299's revoked-certificate E2E."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

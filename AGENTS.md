@@ -38,8 +38,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-20
-lastReviewedCommit: 981bc45fdf4c1826a20c7c99ae60f330cae4066e
-lastReviewedNote: "Reviewed Database #661: post-enqueue scope-closure certificate revocation must not poison status-only Worker claims; ownership, branch, and deployment boundaries remain unchanged."
+lastReviewedCommit: f3d91da8daaba375b04cd454957b56c652e75605
+lastReviewedNote: "Reviewed Database #659 and #661: national-carbon RPC behavior and scope-closure claim repair remain database-owned; branch, delivery, documentation, and deployment boundaries are unchanged."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md

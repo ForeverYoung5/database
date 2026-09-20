@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-20
-lastReviewedCommit: 981bc45fdf4c1826a20c7c99ae60f330cae4066e
-lastReviewedNote: "Reviewed Database #661: scope-closure package admission remains on enqueue and payload mutation; post-enqueue revocation must not block status-only Worker claim and terminal failure."
+lastReviewedCommit: f3d91da8daaba375b04cd454957b56c652e75605
+lastReviewedNote: "Reviewed Database #659 and #661: retained the national-carbon RPC timeout/ranking account contract and scope-closure package admission on enqueue/payload mutation, not status-only Worker claim."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -331,12 +331,18 @@ must never be used as an authorization, role, team, or RLS input.
 `api.qry_national_carbon_organization_contributions(integer)` returns the
 administrator-only `national_carbon_organization_contribution_v5` snapshot.
 Only `public.processes` contributes dataset counts; LifecycleModels are not read.
+The RPC has a function-level 30-second `statement_timeout` for browser calls.
 
 - `rankings` contains up to `p_limit` units with published processes, ordered by
-  published count and stable normalized unit name. `organizations` contains every
-  non-empty current profile organization, including review-only and zero-data
-  units. The limit never truncates `organizations` or summary metrics.
+  published count, assigned-reviewer dataset count, and unassigned-reviewer
+  dataset count descending, then display name and normalized key in `C` order.
+  `organizations` uses that same order and contains every eligible non-empty
+  current profile organization, including pending-only and zero-data units.
+  The limit never truncates `organizations` or summary metrics.
 - Unit attribution uses normalized `private.users.raw_user_meta_data.organization`.
+  A user with `review-admin` or `review-member` in any team is excluded from
+  the unit catalog and its published/pending facts. This does not change the
+  independent reviewer KPI, regional distribution, or daily activity.
   Published and pending-review summary counts retain the organization-attributed
   scope. Pending review uses the latest process version at state 20; its active
   root review state 1 means assigned, while state 0 or no active root means

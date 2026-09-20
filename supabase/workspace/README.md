@@ -20,9 +20,9 @@ checkPaths:
   - .githooks/pre-push
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-19
-lastReviewedCommit: 623acc63b977f50ccf26bc23e291b967c2270157
-lastReviewedNote: "Reviewed Database #654: new private whole-package staging/finalization and receipt snapshot generated from isolated complete migration replay; original root-group path retained. Local-contract workflow adds its targeted suite. Deployment boundaries, branch bindings, tooling and generated-source ownership remain unchanged."
+lastReviewedAt: 2026-09-20
+lastReviewedCommit: e1bd83ecb3dd933f50a96bfb1c584335b852ebae
+lastReviewedNote: "Reviewed Database #659: the national-carbon RPC generated SQL is a deterministic exact-local migration snapshot for PR review; remote Dev provenance remains a post-merge check."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
