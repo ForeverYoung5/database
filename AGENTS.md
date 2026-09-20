@@ -37,9 +37,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-19
-lastReviewedCommit: 623acc63b977f50ccf26bc23e291b967c2270157
-lastReviewedNote: "Reviewed Database #654: new private whole-package staging/finalization and receipt snapshot generated from isolated complete migration replay; original root-group path retained. Local-contract workflow adds its targeted suite. Deployment boundaries, branch bindings, tooling and generated-source ownership remain unchanged."
+lastReviewedAt: 2026-09-20
+lastReviewedCommit: 815f2951fd4b863b5b60cb681fdff3c04dca6731
+lastReviewedNote: "Reviewed Database #664: generated schema-workspace snapshot repair remains database-owned; branch, deployment, and workspace-integration boundaries are unchanged."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md

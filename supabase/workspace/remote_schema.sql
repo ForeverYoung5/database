@@ -21682,6 +21682,7 @@ ALTER FUNCTION "api"."qry_membership_get_mine"() OWNER TO "postgres";
 CREATE OR REPLACE FUNCTION "api"."qry_national_carbon_organization_contributions"("p_limit" integer DEFAULT 10) RETURNS "jsonb"
     LANGUAGE "plpgsql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
+    SET "statement_timeout" TO '30s'
     AS $$
 declare
   v_actor uuid := auth.uid();
@@ -21776,6 +21777,10 @@ begin
         '[[:space:]]+', ' ', 'g'), '') as organization_name
     from private.users u
     where pg_catalog.jsonb_typeof(u.raw_user_meta_data -> 'organization') = 'string'
+      and not exists (
+        select 1 from private.roles r
+        where r.user_id = u.id and r.role in ('review-admin', 'review-member')
+      )
   ),
   profiles as materialized (
     select user_id, organization_name, pg_catalog.lower(organization_name) as organization_key
@@ -21800,6 +21805,7 @@ begin
   ),
   organizations as materialized (
     select pg_catalog.row_number() over (order by coalesce(a.published_count, 0) desc,
+      coalesce(a.assigned_count, 0) desc, coalesce(a.unassigned_count, 0) desc,
       c.organization_name collate "C", c.organization_key collate "C")::integer as rank,
       c.organization_key, c.organization_name,
       coalesce(a.published_count, 0)::bigint as published_count,
@@ -79195,7 +79201,11 @@ CREATE OR REPLACE TRIGGER "worker_job_artifacts_scope_closure_lifecycle" BEFORE 
 
 
 
-CREATE OR REPLACE TRIGGER "worker_jobs_scope_closure_build_admission" BEFORE INSERT OR UPDATE OF "status", "payload_json" ON "private"."worker_jobs" FOR EACH ROW EXECUTE FUNCTION "private"."lcia_scope_closure_build_admission_guard"();
+CREATE OR REPLACE TRIGGER "worker_jobs_scope_closure_build_admission" BEFORE INSERT OR UPDATE OF "payload_json" ON "private"."worker_jobs" FOR EACH ROW EXECUTE FUNCTION "private"."lcia_scope_closure_build_admission_guard"();
+
+
+
+COMMENT ON TRIGGER "worker_jobs_scope_closure_build_admission" ON "private"."worker_jobs" IS 'Reject unavailable closure certificates at package-build enqueue or payload mutation; status-only lease and terminal transitions remain claimable for fail-closed Worker handling.';
 
 
 

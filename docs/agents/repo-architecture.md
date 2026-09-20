@@ -30,9 +30,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: "2026-09-18"
-lastReviewedCommit: "c606853ccb821c33bef4808da93a70698d39814e"
-lastReviewedNote: "Reviewed Database #654: bounded temporary staging, atomic whole-package insert-only finalization and replay receipts, unchanged root-group API, owner-scoped receipt recovery. Migration inventories and local proof are updated; persistent Dev/production deployment is not performed."
+lastReviewedAt: 2026-09-20
+lastReviewedCommit: 815f2951fd4b863b5b60cb681fdff3c04dca6731
+lastReviewedNote: "Reviewed Database #664: the generated schema workspace reflects the #661 trigger migration; stable schema ownership and Worker claim boundaries remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -331,12 +331,18 @@ must never be used as an authorization, role, team, or RLS input.
 `api.qry_national_carbon_organization_contributions(integer)` returns the
 administrator-only `national_carbon_organization_contribution_v5` snapshot.
 Only `public.processes` contributes dataset counts; LifecycleModels are not read.
+The RPC has a function-level 30-second `statement_timeout` for browser calls.
 
 - `rankings` contains up to `p_limit` units with published processes, ordered by
-  published count and stable normalized unit name. `organizations` contains every
-  non-empty current profile organization, including review-only and zero-data
-  units. The limit never truncates `organizations` or summary metrics.
+  published count, assigned-reviewer dataset count, and unassigned-reviewer
+  dataset count descending, then display name and normalized key in `C` order.
+  `organizations` uses that same order and contains every eligible non-empty
+  current profile organization, including pending-only and zero-data units.
+  The limit never truncates `organizations` or summary metrics.
 - Unit attribution uses normalized `private.users.raw_user_meta_data.organization`.
+  A user with `review-admin` or `review-member` in any team is excluded from
+  the unit catalog and its published/pending facts. This does not change the
+  independent reviewer KPI, regional distribution, or daily activity.
   Published and pending-review summary counts retain the organization-attributed
   scope. Pending review uses the latest process version at state 20; its active
   root review state 1 means assigned, while state 0 or no active root means
@@ -714,6 +720,8 @@ aliases are owned by Edge, not by a source/vector backfill here.
 The reusable AI runtime uses `worker_queue=ai`; `ai.tidas_suggestion` is only its first versioned job kind. `api.svc_ai_tidas_suggestion_enqueue` validates the exact Process/Flow v1 envelope, computes the canonical request hash, and reuses only identical active requests. `api.svc_ai_tidas_suggestion_read` requires the original requester and exposes the non-internal Worker projection. Both facades are service-only: Edge owns user authentication, while authenticated clients never enqueue or read `private.worker_jobs` directly. AI results remain advisory and create no Process/Flow domain mutation.
 
 Claim must remain non-blocking under concurrent recovery: expired max-attempt rows are selected in bounded `FOR UPDATE SKIP LOCKED` batches before they are marked failed, while claimable queued/stale or expired-retry rows use their own skip-locked candidate set. Terminal result recording is lease-fenced; an exact repeat with the same lease token, status, and normalized result content is an idempotent acknowledgement, while any conflicting replay remains rejected. This permits a Worker to retry an ambiguous database/transport failure without leaving completed compute stranded in `running`.
+
+Scope-closure package-build certificate admission runs on job insert or payload mutation, not on status-only claim or terminal transitions. If a certificate is revoked after enqueue, Worker must still claim the job, reject the stale binding, and record a terminal failure with no package publication; the queue must not retain an unclaimable head.
 
 Queue growth controls preserve lease freshness without turning every renewal into event history. A lease-only heartbeat updates `heartbeat_at` and `lease_expires_at` without changing business `updated_at`; events are appended only for a phase change, first progress value, or a crossed higher 5% progress bucket, diagnostics remain on the current job row, and the RPC reports `eventEmitted` for observation. Exact deterministic request identity excludes transport idempotency/concurrency keys. If its latest terminal job is explicitly `failed` with `retryable=false`, enqueue and LCA cache/snapshot facades return `WORKER_REQUEST_NON_RETRYABLE_FAILURE` with the reused Worker identity without inserting another job/event or resetting cache state; the result-cache facade exposes `mode=failed_cache_hit`, while `retryable=true` and unknown `NULL` remain admissible. Maintenance idempotency is stronger: a logical day-bucket key reuses terminal as well as active jobs under a transaction advisory lock.
 

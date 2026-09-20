@@ -14,10 +14,10 @@ select is(
       and routine.proname = 'qry_national_carbon_organization_contributions'
       and routine.prosecdef
       and routine.provolatile = 's'
-      and routine.proconfig = array['search_path=""']::text[]
+      and routine.proconfig @> array['search_path=""', 'statement_timeout=30s']::text[]
   ),
   1::bigint,
-  'organization-contribution RPC is a fixed-path stable SECURITY DEFINER'
+  'organization-contribution RPC is a fixed-path stable SECURITY DEFINER with a 30-second statement timeout'
 );
 
 select ok(
@@ -243,10 +243,9 @@ update public.processes set json_ordered = json_build_object(
 where id::text like '57410000-%';
 
 insert into private.roles (user_id, team_id, role) values
-  ('57400000-0000-4000-8000-000000000002', '00000000-0000-0000-0000-000000000000', 'review-member'),
-  ('57400000-0000-4000-8000-000000000003', '00000000-0000-0000-0000-000000000000', 'review-member'),
-  ('57400000-0000-4000-8000-000000000003', '57400000-0000-4000-8000-000000000010', 'review-member'),
-  ('57400000-0000-4000-8000-000000000004', '57400000-0000-4000-8000-000000000010', 'review-member');
+  ('57400000-0000-4000-8000-000000000005', '00000000-0000-0000-0000-000000000000', 'review-member'),
+  ('57400000-0000-4000-8000-000000000006', '00000000-0000-0000-0000-000000000000', 'review-member'),
+  ('57400000-0000-4000-8000-000000000005', '57400000-0000-4000-8000-000000000010', 'review-member');
 
 set local session_replication_role = origin;
 
@@ -364,5 +363,97 @@ set local session_replication_role = origin;
 select is((select sum((d->>'processCount')::bigint) from jsonb_array_elements(
   api.qry_national_carbon_organization_contributions(10) #> '{dailyActivity,days}') d),
   9::numeric, 'deletion removes the version from daily history');
+
+-- Review roles in any team exclude the actor from unit attribution, while
+-- reviewer KPI and the page-wide region/activity measures retain their scopes.
+set local session_replication_role = replica;
+update private.users set raw_user_meta_data = '{"organization":"Beta Institute"}'
+where id = '57400000-0000-4000-8000-000000000005';
+update private.users set raw_user_meta_data = '{"organization":"Reviewer Only"}'
+where id = '57400000-0000-4000-8000-000000000006';
+insert into auth.users (id, raw_user_meta_data)
+values ('57400000-0000-4000-8000-000000000008', '{"organization":"Review Admin Only"}');
+insert into private.users (id, raw_user_meta_data)
+values ('57400000-0000-4000-8000-000000000008', '{"organization":"Review Admin Only"}');
+insert into private.roles (user_id, team_id, role)
+values ('57400000-0000-4000-8000-000000000008',
+  '57400000-0000-4000-8000-000000000010', 'review-admin');
+insert into public.processes (id, version, user_id, state_code, created_at, modified_at)
+values ('57410000-0000-4000-8000-000000000008', '01.00.000',
+  '57400000-0000-4000-8000-000000000008', 100, now(), now());
+insert into public.processes (id, version, user_id, state_code, created_at, modified_at)
+values
+  ('57410000-0000-4000-8000-000000000009', '01.00.000',
+    '57400000-0000-4000-8000-000000000008', 20, now(), now()),
+  ('57410000-0000-4000-8000-000000000010', '01.00.000',
+    '57400000-0000-4000-8000-000000000008', 20, now(), now());
+insert into private.reviews (id, data_id, data_version, state_code, reviewer_id, json,
+  review_kind, target_table, submitted_revision_checksum, target_owner_id)
+values ('57430000-0000-4000-8000-000000000009',
+  '57410000-0000-4000-8000-000000000009', '01.00.000', 1, '[]', '{}',
+  'root', 'processes', repeat('a', 64), '57400000-0000-4000-8000-000000000008');
+set local session_replication_role = origin;
+select is(api.qry_national_carbon_organization_contributions(10) #>> '{summary,organizationCount}',
+  '15', 'review-only organizations are excluded regardless of team');
+select is(api.qry_national_carbon_organization_contributions(10) #>> '{summary,publishedDatasetCount}',
+  '2', 'review-member and review-admin process publications are excluded from unit totals');
+select is(api.qry_national_carbon_organization_contributions(10) #>> '{summary,pendingReviewDatasetCount}',
+  '3', 'assigned and unassigned pending processes from review roles are excluded');
+select is(api.qry_national_carbon_organization_contributions(10) #>> '{summary,reviewerCount}',
+  '2', 'excluding reviewer accounts from units does not alter the reviewer KPI');
+select is(api.qry_national_carbon_organization_contributions(10) #>> '{regions,totalProcessCount}',
+  '4', 'non-unit regional publication still includes review-role process data');
+select ok(not exists (
+  select 1 from jsonb_array_elements(api.qry_national_carbon_organization_contributions(10)
+    -> 'organizations') item
+  where item ->> 'organizationKey' in ('reviewer only', 'review admin only')
+), 'review-only units are absent from the table');
+
+-- Give five units the same published count and one unit only assigned work.
+-- Published, assigned, unassigned, then name must decide their order.
+set local session_replication_role = replica;
+insert into auth.users (id, raw_user_meta_data)
+select ('57400000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid,
+  jsonb_build_object('organization', 'Sort ' || chr(n - 136))
+from generate_series(201, 206) n;
+insert into private.users (id, raw_user_meta_data)
+select id, raw_user_meta_data from auth.users
+where id::text like '57400000-%' and id::text between
+  '57400000-0000-4000-8000-000000000201' and '57400000-0000-4000-8000-000000000206';
+insert into public.processes (id, version, user_id, state_code, created_at, modified_at)
+select ('57410000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid,
+  '01.00.000', ('57400000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid,
+  100, now(), now()
+from generate_series(201, 205) n;
+insert into public.processes (id, version, user_id, state_code, created_at, modified_at)
+select ('57410000-0000-4000-8000-' || lpad((n + 9)::text, 12, '0'))::uuid,
+  '01.00.000', ('57400000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid,
+  20, now(), now()
+from generate_series(202, 206) n;
+insert into public.processes (id, version, user_id, state_code, created_at, modified_at)
+select ('57410000-0000-4000-8000-' || lpad(process_suffix::text, 12, '0'))::uuid,
+  '01.00.000', ('57400000-0000-4000-8000-' || lpad(user_suffix::text, 12, '0'))::uuid,
+  20, now(), now()
+from (values (203, 221), (204, 222), (204, 223), (205, 224)) v(user_suffix, process_suffix);
+insert into private.reviews (id, data_id, data_version, state_code, reviewer_id, json,
+  review_kind, target_table, submitted_revision_checksum, target_owner_id)
+select ('57430000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid,
+  ('57410000-0000-4000-8000-' || lpad((n + 9)::text, 12, '0'))::uuid,
+  '01.00.000', 1, '[]', '{}', 'root', 'processes', repeat('a', 64),
+  ('57400000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid
+from generate_series(202, 206) n;
+set local session_replication_role = origin;
+select is((select jsonb_agg(item ->> 'organizationKey' order by (item ->> 'rank')::integer)
+  from jsonb_array_elements(api.qry_national_carbon_organization_contributions(10)
+    -> 'organizations') item
+  where item ->> 'organizationKey' like 'sort %'),
+  '["sort d", "sort c", "sort e", "sort b", "sort a", "sort f"]'::jsonb,
+  'unit table orders by published, assigned, unassigned, then name');
+select is((select jsonb_agg(item ->> 'organizationKey' order by (item ->> 'rank')::integer)
+  from jsonb_array_elements(api.qry_national_carbon_organization_contributions(10)
+    -> 'rankings') item
+  where item ->> 'organizationKey' like 'sort %'),
+  '["sort d", "sort c", "sort e", "sort b", "sort a"]'::jsonb,
+  'chart uses the same ordered positive-published units');
 select * from finish();
 rollback;

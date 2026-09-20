@@ -1,8 +1,13 @@
-CREATE OR REPLACE FUNCTION "api"."qry_national_carbon_organization_contributions"("p_limit" integer DEFAULT 10) RETURNS "jsonb"
-    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
-    SET "search_path" TO ''
-    SET "statement_timeout" TO '30s'
-    AS $$
+-- #659: bound the dashboard RPC and exclude reviewer accounts from unit attribution.
+-- Keep reviewer KPI, regional distribution, and daily activity independent of unit filtering.
+create or replace function api.qry_national_carbon_organization_contributions(
+  p_limit integer default 10
+)
+returns jsonb
+language plpgsql stable security definer
+set search_path = ''
+set statement_timeout = '30s'
+as $function$
 declare
   v_actor uuid := auth.uid();
   v_result jsonb;
@@ -183,10 +188,8 @@ begin
   ) into v_result;
   return v_result;
 end;
-$$;
+$function$;
 
-ALTER FUNCTION "api"."qry_national_carbon_organization_contributions"("p_limit" integer) OWNER TO "postgres";
-
-REVOKE ALL ON FUNCTION "api"."qry_national_carbon_organization_contributions"("p_limit" integer) FROM PUBLIC;
-
-GRANT ALL ON FUNCTION "api"."qry_national_carbon_organization_contributions"("p_limit" integer) TO "authenticated";
+alter function api.qry_national_carbon_organization_contributions(integer) owner to postgres;
+revoke all on function api.qry_national_carbon_organization_contributions(integer) from public, anon, service_role;
+grant execute on function api.qry_national_carbon_organization_contributions(integer) to authenticated;
