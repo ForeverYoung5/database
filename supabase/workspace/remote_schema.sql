@@ -79201,7 +79201,11 @@ CREATE OR REPLACE TRIGGER "worker_job_artifacts_scope_closure_lifecycle" BEFORE 
 
 
 
-CREATE OR REPLACE TRIGGER "worker_jobs_scope_closure_build_admission" BEFORE INSERT OR UPDATE OF "status", "payload_json" ON "private"."worker_jobs" FOR EACH ROW EXECUTE FUNCTION "private"."lcia_scope_closure_build_admission_guard"();
+CREATE OR REPLACE TRIGGER "worker_jobs_scope_closure_build_admission" BEFORE INSERT OR UPDATE OF "payload_json" ON "private"."worker_jobs" FOR EACH ROW EXECUTE FUNCTION "private"."lcia_scope_closure_build_admission_guard"();
+
+
+
+COMMENT ON TRIGGER "worker_jobs_scope_closure_build_admission" ON "private"."worker_jobs" IS 'Reject unavailable closure certificates at package-build enqueue or payload mutation; status-only lease and terminal transitions remain claimable for fail-closed Worker handling.';
 
 
 

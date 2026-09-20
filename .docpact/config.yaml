@@ -1,8 +1,8 @@
 version: 1
 layout: repo
 lastReviewedAt: "2026-09-20"
-lastReviewedCommit: "f3d91da8daaba375b04cd454957b56c652e75605"
-lastReviewedNote: "Reviewed Database #659 and #661: existing routing covers the national-carbon RPC and CI snapshot refresh plus scope-closure claim trigger repair; no governance rule change needed."
+lastReviewedCommit: "815f2951fd4b863b5b60cb681fdff3c04dca6731"
+lastReviewedNote: "Reviewed Database #664: generated scope-closure trigger snapshot is covered by the existing schema-workspace routing; no governance rule change needed."
 
 # Keep deterministic governance facts here.
 # AGENTS.md remains the repo contract entrypoint.

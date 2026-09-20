@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-20
-lastReviewedCommit: e1bd83ecb3dd933f50a96bfb1c584335b852ebae
-lastReviewedNote: "Reviewed Database #659: the national-carbon RPC generated SQL is a deterministic exact-local migration snapshot for PR review; remote Dev provenance remains a post-merge check."
+lastReviewedCommit: 815f2951fd4b863b5b60cb681fdff3c04dca6731
+lastReviewedNote: "Reviewed Database #664: the #661 trigger definition and comment are generated from the exact local migration state; remote Dev provenance remains a post-merge check."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
