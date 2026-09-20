@@ -25,6 +25,9 @@ returns jsonb language sql immutable as $$
        'common:licenseType','Free of charge for all users and uses'))))
 $$;
 
+-- Keep a distinct lexical namespace from the original NavAlpha656 regression.
+-- The local PGroonga rollback fixture can otherwise affect the first short-prefix
+-- query in a later suite; this test does not change the production query kernel.
 -- Suppress unrelated authoring only; every public projection writer stays enabled.
 alter table public.processes disable trigger user;
 alter table public.processes enable trigger portal_catalog_projection_content_sync_v1;
@@ -33,18 +36,18 @@ alter table public.flows disable trigger user;
 alter table public.flows enable trigger portal_catalog_projection_content_sync_v1;
 insert into public.processes(id,version,json,state_code,modified_at) values
 -- One id with two historical public versions, authored in the island.
-('66200000-0000-4000-8000-000000000001','01.00.000',pg_temp.nav662_payload('Nav662TwA','TW','[{"@classId":"A"}]'),100,'2026-09-20'),
-('66200000-0000-4000-8000-000000000001','01.00.001',pg_temp.nav662_payload('Nav662TwA','TW','[{"@classId":"A"}]',2025),100,'2026-09-20'),
-('66200000-0000-4000-8000-000000000002','01.00.000',pg_temp.nav662_payload('Nav662HkB','HK','[{"@classId":"A"}]'),100,'2026-09-20'),
-('66200000-0000-4000-8000-000000000003','01.00.000',pg_temp.nav662_payload('Nav662MoC','MO','[{"@classId":"A"}]'),100,'2026-09-20'),
+('66200000-0000-4000-8000-000000000001','01.00.000',pg_temp.nav662_payload('Administrative662TwA','TW','[{"@classId":"A"}]'),100,'2026-09-20'),
+('66200000-0000-4000-8000-000000000001','01.00.001',pg_temp.nav662_payload('Administrative662TwA','TW','[{"@classId":"A"}]',2025),100,'2026-09-20'),
+('66200000-0000-4000-8000-000000000002','01.00.000',pg_temp.nav662_payload('Administrative662HkB','HK','[{"@classId":"A"}]'),100,'2026-09-20'),
+('66200000-0000-4000-8000-000000000003','01.00.000',pg_temp.nav662_payload('Administrative662MoC','MO','[{"@classId":"A"}]'),100,'2026-09-20'),
 -- A national-only record, authored directly on the country.
-('66200000-0000-4000-8000-000000000004','01.00.000',pg_temp.nav662_payload('Nav662CnD','CN','[{"@classId":"A"}]'),100,'2026-09-20'),
+('66200000-0000-4000-8000-000000000004','01.00.000',pg_temp.nav662_payload('Administrative662CnD','CN','[{"@classId":"A"}]'),100,'2026-09-20'),
 -- An ordinary province, to pair with the island children under a nonmatching query.
-('66200000-0000-4000-8000-000000000005','01.00.000',pg_temp.nav662_payload('Nav662XzE','CN-XZ','[{"@classId":"A"}]'),100,'2026-09-20'),
+('66200000-0000-4000-8000-000000000005','01.00.000',pg_temp.nav662_payload('Administrative662XzE','CN-XZ','[{"@classId":"A"}]'),100,'2026-09-20'),
 -- A withdrawn (private) island record: never projected, never counted.
-('66200000-0000-4000-8000-000000000006','01.00.000',pg_temp.nav662_payload('Nav662PrivateG','TW','[{"@classId":"A"}]'),20,'2026-09-20');
+('66200000-0000-4000-8000-000000000006','01.00.000',pg_temp.nav662_payload('Administrative662PrivateG','TW','[{"@classId":"A"}]'),20,'2026-09-20');
 insert into public.flows(id,version,json,state_code,modified_at) values
-('66200000-0000-4000-8000-000000000007','01.00.000',pg_temp.nav662_payload('Nav662FlowF','HK','[{"@classId":"0"}]',2024,true),100,'2026-09-20');
+('66200000-0000-4000-8000-000000000007','01.00.000',pg_temp.nav662_payload('Administrative662FlowF','HK','[{"@classId":"0"}]',2024,true),100,'2026-09-20');
 set constraints all immediate;
 
 -- --- Shipped hierarchy -------------------------------------------------------
@@ -93,17 +96,17 @@ create temp table nav662(label text primary key, payload jsonb);
 grant select,insert on nav662 to anon;
 set local role anon;
 insert into nav662 values
-('china',api.portal_navigation_v1('all','Nav662','{}','geography','geo:cn',null,500)),
-('chinaProcess',api.portal_navigation_v1('process','Nav662','{}','geography','geo:cn',null,500)),
+('china',api.portal_navigation_v1('all','Administrative662','{}','geography','geo:cn',null,500)),
+('chinaProcess',api.portal_navigation_v1('process','Administrative662','{}','geography','geo:cn',null,500)),
 ('chinaEmpty',api.portal_navigation_v1('all','NoSuchQuery662','{}','geography','geo:cn',null,500)),
-('tw',api.portal_navigation_v1('process','Nav662','{}','geography','geo:tw',null,500)),
-('hkFlow',api.portal_navigation_v1('flow','Nav662','{}','geography','geo:hk',null,500)),
+('tw',api.portal_navigation_v1('process','Administrative662','{}','geography','geo:tw',null,500)),
+('hkFlow',api.portal_navigation_v1('flow','Administrative662','{}','geography','geo:hk',null,500)),
 ('world1',api.portal_navigation_v1('all','','{}','geography',null,null,100)),
-('searchSubtree',api.portal_search_processes_v3('Nav662','{"geographyNodeId":"geo:cn","geographyScope":"subtree"}','relevance',null,50)),
-('searchDirect',api.portal_search_processes_v3('Nav662','{"geographyNodeId":"geo:cn","geographyScope":"direct"}','relevance',null,50)),
-('searchTw',api.portal_search_processes_v3('Nav662','{"geographyNodeId":"geo:tw","geographyScope":"subtree"}','relevance',null,50)),
-('facetsSubtree',api.portal_facets_v3('process','Nav662','{"geographyNodeId":"geo:cn","geographyScope":"subtree"}')),
-('facetsDirect',api.portal_facets_v3('process','Nav662','{"geographyNodeId":"geo:cn","geographyScope":"direct"}'));
+('searchSubtree',api.portal_search_processes_v3('Administrative662','{"geographyNodeId":"geo:cn","geographyScope":"subtree"}','relevance',null,50)),
+('searchDirect',api.portal_search_processes_v3('Administrative662','{"geographyNodeId":"geo:cn","geographyScope":"direct"}','relevance',null,50)),
+('searchTw',api.portal_search_processes_v3('Administrative662','{"geographyNodeId":"geo:tw","geographyScope":"subtree"}','relevance',null,50)),
+('facetsSubtree',api.portal_facets_v3('process','Administrative662','{"geographyNodeId":"geo:cn","geographyScope":"subtree"}')),
+('facetsDirect',api.portal_facets_v3('process','Administrative662','{"geographyNodeId":"geo:cn","geographyScope":"direct"}'));
 insert into nav662 select 'world2',api.portal_navigation_v1('all','','{}','geography',null,(select payload->>'nextCursor' from nav662 where label='world1'),100);
 reset role;
 
@@ -234,7 +237,7 @@ select throws_ok($$delete from private.portal_navigation_node_v1 where node_id =
 update public.processes set state_code = 20
  where id = '66200000-0000-4000-8000-000000000001' and version = '01.00.001';
 select is(
-  (select (api.portal_navigation_v1('process','Nav662','{}','geography','geo:tw')->'parent'->>'count')::integer),
+  (select (api.portal_navigation_v1('process','Administrative662','{}','geography','geo:tw')->'parent'->>'count')::integer),
   1,
   'withdrawing one island version leaves the other reachable');
 select is(
@@ -243,11 +246,11 @@ select is(
   0,
   'a withdrawal cascades every membership of that version');
 select is(
-  (select (api.portal_navigation_v1('all','Nav662','{}','geography','geo:cn')->'parent'->>'count')::integer),
+  (select (api.portal_navigation_v1('all','Administrative662','{}','geography','geo:cn')->'parent'->>'count')::integer),
   6,
   'the country subtree immediately reflects the withdrawal');
 -- Moving the island record to an ordinary province removes the island placement.
-update public.processes set json = pg_temp.nav662_payload('Nav662TwA','CN-SD-JNA','[{"@classId":"A"}]')
+update public.processes set json = pg_temp.nav662_payload('Administrative662TwA','CN-SD-JNA','[{"@classId":"A"}]')
  where id = '66200000-0000-4000-8000-000000000001' and version = '01.00.000';
 select is(
   (select count(*)::integer from private.portal_navigation_membership_v1
@@ -262,18 +265,18 @@ select is(
   1,
   'the moved record is placed directly in its new province family');
 select is(
-  (select (api.portal_navigation_v1('process','Nav662','{}','geography','geo:cn-sd')->'parent'->>'count')::integer),
+  (select (api.portal_navigation_v1('process','Administrative662','{}','geography','geo:cn-sd')->'parent'->>'count')::integer),
   1,
   'the new province reaches the moved record through the anonymous API');
 select is(
-  (select (api.portal_navigation_v1('process','Nav662','{}','geography','geo:tw')->'parent'->>'count')::integer),
+  (select (api.portal_navigation_v1('process','Administrative662','{}','geography','geo:tw')->'parent'->>'count')::integer),
   0,
   'the island stops counting the moved record');
 -- Publishing the private island record brings it into the same closure.
 update public.processes set state_code = 100
  where id = '66200000-0000-4000-8000-000000000006';
 select is(
-  (select (api.portal_navigation_v1('process','Nav662','{}','geography','geo:tw')->'parent'->>'count')::integer),
+  (select (api.portal_navigation_v1('process','Administrative662','{}','geography','geo:tw')->'parent'->>'count')::integer),
   1,
   'publishing the private island record makes it reachable through the island');
 select is(
