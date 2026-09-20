@@ -1,5 +1,15 @@
 {
   "platformCommit": "aca2d4f2a905e97867942a78be75c5daea4fde5e",
+  "geoatlas": {
+    "id": "china-province-100000-full",
+    "platformPath": "public/maps/china-province-100000-full.geojson",
+    "lastModifiedCommit": "6c5d02f5cad6a864e290d16b3ce6d3a62c91247b",
+    "lastModifiedDate": "2026-05-20",
+    "origin": "https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json",
+    "upstream": "Aliyun DataV.GeoAtlas province-level boundaries for 100000, vendored into tiangong-lca/platform",
+    "byteLength": 582522,
+    "sha256": "99adfeded5223848bbe37a0a12f8023e11ee12161c7800521c27db42fdeac275"
+  },
   "archiveRepository": "tiangong-lca/data",
   "archiveCommit": "2e163304adb9357cd7a17facfc8e5b426ed74a93",
   "archivePath": "tiangong_lca_data/ILCDLocations.xml",
@@ -71,6 +81,10 @@
     {
       "path": "platform/src/services/referenceResources/data/ilcd-locations/overlays/fr.json.gz",
       "sha256": "c3d23283d9115608929f0ca914b110883b292a9f4ce63558be733531599c05bb"
+    },
+    {
+      "path": "geoatlas/china-province-100000-full.geojson.gz",
+      "sha256": "99adfeded5223848bbe37a0a12f8023e11ee12161c7800521c27db42fdeac275"
     },
     {
       "path": "archive/ILCDLocations.xml.gz",

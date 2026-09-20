@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "portal.navigation-revisions.v1",
+  "note": "Versioned history for the generated Portal navigation vocabulary. The bootstrap seed is applied history: its bytes are pinned here and never re-emitted from the current vocabulary, so a later hierarchy revision cannot silently rewrite what a hosted database already applied. Each revision names the exact narrow migration that carries it.",
+  "historicalSeed": {
+    "file": "supabase/migrations/20260919121000_portal_navigation_vocabulary_seed.sql",
+    "sha256": "14f173bbfcc54a61d920b9048d25b4412a2a141b7121200d2884001fca918d51",
+    "byteLength": 4708208,
+    "assetSha256": "3f6481fce115bb29a7af6fe738bc9a9c6d7e4b663f7add95b2bf0c1905661b16",
+    "seedSha256": "62f0c6d7214d6db2bc75d065d71a774e6cefb4f560ca8357866bcd58944027bd",
+    "nodeCount": 6131,
+    "createdByMigration": "20260919121000"
+  },
+  "revisions": [
+    {
+      "id": "china-administrative-parents-v1",
+      "file": "supabase/migrations/20260920095651_portal_china_administrative_navigation.sql",
+      "priorAssetSha256": "3f6481fce115bb29a7af6fe738bc9a9c6d7e4b663f7add95b2bf0c1905661b16",
+      "priorSeedSha256": "62f0c6d7214d6db2bc75d065d71a774e6cefb4f560ca8357866bcd58944027bd",
+      "changes": "parents geo:tw, geo:hk and geo:mo under geo:cn and adds the missing ancestor membership rows",
+      "evidencePath": "data/portal-navigation-china-administrative.json",
+      "mappingPath": "data/portal-navigation-china-mapping.json",
+      "reseed": false
+    }
+  ]
+}

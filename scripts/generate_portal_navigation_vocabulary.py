@@ -19,13 +19,23 @@ Outputs:
   taxonomy, dimension, four-locale labels, label strategy).
 * `contracts/portal/navigation-vocabulary.receipt.json` - small summary that
   records the receipt and the sha256/byte length of the asset.
-* `supabase/migrations/<stamp>_portal_navigation_vocabulary_seed_*.sql` - the
-  seeded SQL rows, split into bounded files.
+* the narrow revision migration named by `data/portal-navigation-revisions.json`,
+  carrying the reviewed hierarchy change and its closure refresh.
+
+The bootstrap seed migration is *not* regenerated: its bytes are pinned in the
+revision descriptor and only verified, so a later revision can never rewrite the
+rows a hosted database already applied. Emitting the seed happens once, in the
+change that first introduced the vocabulary.
 
 Run:  python3 scripts/generate_portal_navigation_vocabulary.py \
           --platform-root ../platform \
           --archive-locations ../data/tiangong_lca_data/ILCDLocations.xml \
-          --china-mapping data/portal-navigation-china-mapping.json
+          --china-mapping data/portal-navigation-china-mapping.json \
+          --administrative-mapping data/portal-navigation-china-administrative.json \
+          --revisions data/portal-navigation-revisions.json
+
+Offline check: add `--check` to verify the committed asset, receipt, revision
+migration and pinned historical seed instead of writing them.
 
 The script is offline and deterministic: identical inputs produce byte-identical
 outputs. It never reads or writes a database.
@@ -39,7 +49,7 @@ import json
 import re
 import sys
 import tempfile
-from portal_navigation_sources import materialize, verify_live, vendor
+from portal_navigation_sources import GEOATLAS_PATH, materialize, verify_live, vendor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -78,6 +88,8 @@ LABEL_STRATEGY_ARCHIVE = "archived-snapshot-parenthesised-name"
 LABEL_STRATEGY_VIRTUAL = "database-virtual-container"
 LABEL_STRATEGY_UNAVAILABLE = "unavailable"
 TAXONOMY_ARCHIVE_LOCATIONS = "tiangong-lca-archive-locations-v1"
+ADMINISTRATIVE_SCHEMA = "portal.navigation-china-administrative.v1"
+REVISION_SCHEMA = "portal.navigation-revisions.v1"
 
 # Virtual containers. They own no source node, and their code is a fixed marker
 # that can never collide with a real source code.
@@ -330,6 +342,8 @@ def build_geography_nodes(
     manifest: dict,
     archive_locations: Path,
     china_mapping_path: Path,
+    administrative_mapping_path: Path,
+    administrative_evidence: Path,
 ) -> tuple[list[Node], list[dict], list[str]]:
     asset_root = platform_root / "src/services/referenceResources/data"
     nodes: list[Node] = [
@@ -432,6 +446,72 @@ def build_geography_nodes(
             )
         )
     by_code = {node.code: node for node in nodes if node.dimension == "geography"}
+
+    # Reviewed administrative parents. The evidence is the GeoAtlas feature's own
+    # `parent.adcode`; nothing here is inferred from a code shape or a name.
+    administrative = read_json(administrative_mapping_path)
+    if administrative.get("schemaVersion") != ADMINISTRATIVE_SCHEMA:
+        raise SystemExit("unexpected China administrative evidence schema")
+    evidence_bytes = administrative_evidence.read_bytes()
+    evidence_digest = sha256_bytes(evidence_bytes)
+    source = administrative["source"]
+    if evidence_digest != source["rawSha256"] or len(evidence_bytes) != source["rawBytes"]:
+        raise SystemExit(
+            "the vendored GeoAtlas evidence does not match its receipt; "
+            f"expected sha256 {source['rawSha256']}"
+        )
+    evidence = json.loads(evidence_bytes)
+    features_by_adcode = {}
+    for feature in evidence.get("features", []):
+        properties = feature.get("properties") or {}
+        features_by_adcode.setdefault(properties.get("adcode"), []).append(properties)
+    country_node_id = administrative["countryNodeId"]
+    country = by_code.get(administrative["countryCode"])
+    if country is None or country.node_id != country_node_id:
+        raise SystemExit("China administrative evidence names an absent country node")
+    receipts.append(
+        {
+            "byteLength": administrative_mapping_path.stat().st_size,
+            "path": "data/portal-navigation-china-administrative.json",
+            "resourceId": "portal-navigation-china-administrative-v1",
+            "scope": "location",
+            "sha256": sha256_file(administrative_mapping_path)[0],
+        }
+    )
+    receipts.append(
+        {
+            "byteLength": len(evidence_bytes),
+            "note": "Reviewed GeoAtlas administrative parent evidence; read only to bind the three locations below.",
+            "path": source["platformPath"],
+            "resourceId": source["id"],
+            "scope": "location",
+            "sha256": evidence_digest,
+        }
+    )
+    for binding in administrative["bindings"]:
+        node = by_code.get(binding["code"])
+        if node is None or node.node_id != binding["nodeId"]:
+            raise SystemExit(f"China administrative binding names an absent node: {binding}")
+        if node.parent_id is not None:
+            raise SystemExit(
+                f"China administrative binding {binding['nodeId']} already has parent "
+                f"{node.parent_id}; the prior state must be null"
+            )
+        matches = features_by_adcode.get(binding["adcode"], [])
+        if len(matches) != 1:
+            raise SystemExit(
+                f"GeoAtlas evidence has {len(matches)} features for adcode {binding['adcode']}"
+            )
+        feature = matches[0]
+        if (
+            feature.get("name") != binding["name"]
+            or feature.get("level") != binding["level"]
+            or (feature.get("parent") or {}).get("adcode") != 100000
+        ):
+            raise SystemExit(
+                f"GeoAtlas evidence for {binding['adcode']} does not state the reviewed parent"
+            )
+        node.parent_id = country_node_id
 
     def cn_levels(node: Node) -> list[str]:
         """The Chinese name split into administrative levels, deepest last.
@@ -792,6 +872,217 @@ def emit_seed_migration(
     return path
 
 
+def emit_update_migration(
+    *,
+    seed_dir: Path,
+    revision: dict,
+    administrative: dict,
+    asset_digest: str,
+    seed_digest: str,
+    node_count: int,
+) -> Path:
+    """Write one narrow hierarchy revision as a bounded, replayable migration.
+
+    This is deliberately not a reseed: it asserts the exact prior state, moves only
+    the reviewed parent rows, refreshes the affected ancestor memberships, and
+    leaves the historical bootstrap bytes exactly as a hosted database applied them.
+    """
+    file_name = revision["file"]
+    stamp = re.fullmatch(r"(\d{14})_.+", Path(file_name).name)
+    if stamp is None:
+        raise SystemExit("revision file must start with a 14-digit migration timestamp")
+    bindings = administrative["bindings"]
+    ids = ", ".join(sql_text(binding["nodeId"]) for binding in bindings)
+    if not bindings:
+        raise SystemExit("revision carries no bindings")
+    expected = ", ".join(
+        f"({sql_text(binding['nodeId'])}, {sql_text(binding['code'])})"
+        for binding in bindings
+    )
+    country = sql_text(administrative["countryNodeId"])
+    body = f"""-- Portal navigation hierarchy revision ({revision['id']}).
+--
+-- Source of truth: {revision['evidencePath']} (reviewed GeoAtlas parent evidence)
+--   asset sha256 {asset_digest}
+--   seed  sha256 {seed_digest}
+--   nodes {node_count} (unchanged: this revision re-parents existing rows only)
+--   prior asset sha256 {revision['priorAssetSha256']}
+--   prior seed  sha256 {revision['priorSeedSha256']}
+-- Regenerate with:
+--   python3 scripts/generate_portal_navigation_vocabulary.py
+-- Never edit these rows by hand. This migration never reseeds the vocabulary: the
+-- historical bootstrap migration keeps the exact bytes that were applied.
+
+begin;
+
+set local lock_timeout = '5s';
+set local statement_timeout = '60s';
+
+do $portal_china_revision_prior_state$
+declare
+  v_unparented integer;
+begin
+  select count(*)
+  into v_unparented
+  from private.portal_navigation_node_v1 as node
+  where node.node_id in ({ids});
+
+  if v_unparented <> {len(bindings)} then
+    raise exception 'Portal China revision expected {len(bindings)} seeded rows, found %', v_unparented
+      using errcode = '55000';
+  end if;
+
+  if exists (
+    select 1
+    from private.portal_navigation_node_v1 as node
+    join (values {expected}) as expected(node_id, code) using (node_id)
+    where node.node_id in ({ids})
+      and (node.parent_node_id is not null
+        or node.dimension <> 'geography'
+        or node.code <> expected.code
+        or node.taxonomy <> 'ilcd-locations'
+        or node.source_file is null)
+  ) then
+    raise exception 'Portal China revision prior state is not the reviewed unparented state'
+      using errcode = '55000';
+  end if;
+
+  if not exists (
+    select 1 from private.portal_navigation_node_v1 as node
+    where node.node_id = {country} and node.code = {sql_text(administrative['countryCode'])}
+      and node.dimension = 'geography' and node.taxonomy = 'ilcd-locations'
+      and node.parent_node_id is null
+  ) then
+    raise exception 'Portal China revision needs the country node %', {country}
+      using errcode = '55000';
+  end if;
+
+  if (
+    select contract.asset_sha256
+    from private.portal_navigation_contract_v1 as contract
+    where contract.contract_version = 1
+  ) is distinct from {sql_text(revision['priorAssetSha256'])}
+     or (
+    select contract.seed_sha256
+    from private.portal_navigation_contract_v1 as contract
+    where contract.contract_version = 1
+  ) is distinct from {sql_text(revision['priorSeedSha256'])} then
+    raise exception 'Portal navigation contract is not the revision baseline'
+      using errcode = '55000';
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_trigger
+    where tgrelid = 'private.portal_navigation_node_v1'::regclass
+      and tgname = 'portal_navigation_seed_guard_v1' and tgenabled = 'O'
+      and tgfoid = 'private.guard_portal_navigation_seed_v1()'::regprocedure
+  ) then
+    raise exception 'Portal navigation seed guard is not enabled as expected'
+      using errcode = '55000';
+  end if;
+end;
+$portal_china_revision_prior_state$;
+
+-- Drain the projection writers before touching the hierarchy they read.
+-- `private.sync_portal_navigation_membership_v1` upserts this narrow table before
+-- it reads node parents, so this lock ordering lets existing writers finish and
+-- holds new ones for the rest of the transaction. Reads are unaffected.
+lock table private.portal_navigation_versions_v1 in share row exclusive mode;
+
+-- The seeded vocabulary is immutable; this revision is the deliberate exception,
+-- so the guard is disabled inside this transaction only and restored before commit.
+alter table private.portal_navigation_node_v1 disable trigger portal_navigation_seed_guard_v1;
+
+update private.portal_navigation_node_v1 as node
+   set parent_node_id = {country}
+ where node.node_id in ({ids})
+   and node.parent_node_id is null;
+
+alter table private.portal_navigation_node_v1 enable trigger portal_navigation_seed_guard_v1;
+
+-- Closure refresh: an existing membership of a moved node gains the country
+-- ancestor in one set-based, deduplicated insert. `direct` stays false for the new
+-- ancestor, and `on conflict do nothing` preserves both an existing row's flag and
+-- the unique (dataset_kind, id, version, dimension, node_id) key.
+insert into private.portal_navigation_membership_v1 as membership (
+  dataset_kind, id, version, dimension, node_id, direct
+)
+select distinct member.dataset_kind, member.id, member.version, 'geography', {country}, false
+  from private.portal_navigation_membership_v1 as member
+ where member.dimension = 'geography' and member.node_id in ({ids})
+on conflict (dataset_kind, id, version, dimension, node_id) do nothing;
+
+-- The manifest row now describes the revised vocabulary.
+update private.portal_navigation_contract_v1 as contract
+   set asset_sha256 = {sql_text(asset_digest)},
+       seed_sha256 = {sql_text(seed_digest)}
+ where contract.contract_version = 1;
+
+do $portal_china_revision_readback$
+declare
+  v_parented integer;
+  v_members integer;
+begin
+  select count(*)
+  into v_parented
+  from private.portal_navigation_node_v1 as node
+  where node.node_id in ({ids})
+    and node.parent_node_id = {country};
+
+  if v_parented <> {len(bindings)} then
+    raise exception 'Portal China revision did not parent every reviewed row: %', v_parented
+      using errcode = '55000';
+  end if;
+
+  if exists (
+    select 1
+    from private.portal_navigation_membership_v1 as member
+    where member.dimension = 'geography' and member.node_id in ({ids})
+      and not exists (
+        select 1
+        from private.portal_navigation_membership_v1 as ancestor
+        where ancestor.dataset_kind = member.dataset_kind
+          and ancestor.id = member.id
+          and ancestor.version = member.version
+          and ancestor.dimension = 'geography'
+          and ancestor.node_id = {country}
+      )
+  ) then
+    raise exception 'Portal China revision left a membership without its country ancestor'
+      using errcode = '55000';
+  end if;
+
+  select count(*)
+  into v_members
+  from private.portal_navigation_membership_v1 as member
+  where member.dimension = 'geography' and member.node_id = {country};
+
+  if not exists (
+    select 1 from pg_catalog.pg_trigger
+    where tgrelid = 'private.portal_navigation_node_v1'::regclass
+      and tgname = 'portal_navigation_seed_guard_v1' and tgenabled = 'O'
+      and tgfoid = 'private.guard_portal_navigation_seed_v1()'::regprocedure
+  ) then
+    raise exception 'Portal navigation seed guard was not restored'
+      using errcode = '55000';
+  end if;
+
+  perform private.assert_portal_navigation_contract_v1();
+  raise notice 'Portal China revision applied: % rows re-parented, % country memberships',
+    v_parented, v_members;
+end;
+$portal_china_revision_readback$;
+
+commit;
+"""
+    seed_dir.mkdir(parents=True, exist_ok=True)
+    # The descriptor records the repository-relative path for readers; the emitter
+    # writes the file into the configured migration directory.
+    path = seed_dir / Path(file_name).name
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform-root", type=Path)
@@ -803,12 +1094,24 @@ def main() -> int:
         type=Path,
         help="controlled parent mapping for the Chinese province/city layer",
     )
+    parser.add_argument(
+        "--administrative-mapping",
+        default="data/portal-navigation-china-administrative.json",
+        type=Path,
+        help="reviewed GeoAtlas parent evidence for TW/HK/MO",
+    )
+    parser.add_argument(
+        "--revisions",
+        default="data/portal-navigation-revisions.json",
+        type=Path,
+        help="versioned history: pinned bootstrap seed and the narrow revision migrations",
+    )
     parser.add_argument("--contracts-dir", default="contracts/portal", type=Path)
     parser.add_argument(
         "--seed-dir",
         type=Path,
         default=Path("supabase/migrations"),
-        help="emit the SQL seed migrations here (default: <repo>/supabase/migrations)",
+        help="verify the historical seed and emit the current revision here",
     )
     parser.add_argument(
         "--seed-stamp",
@@ -832,17 +1135,48 @@ def main() -> int:
     if arguments.platform_root or arguments.archive_locations:
         if not arguments.platform_root or not arguments.archive_locations:
             parser.error("Pass both live source paths or use the vendored defaults")
-        platform_root, archive_locations = arguments.platform_root.resolve(), arguments.archive_locations.resolve()
+        platform_root = arguments.platform_root.resolve()
+        archive_locations = arguments.archive_locations.resolve()
         verify_live(platform_root)
+        geoatlas_evidence = platform_root / GEOATLAS_PATH
     else:
-        platform_root, archive_locations = materialize(vendored, Path(temporary.name))
+        platform_root, archive_locations, geoatlas_evidence = materialize(
+            vendored, Path(temporary.name)
+        )
+
+    revisions = read_json(arguments.revisions.resolve())
+    if revisions.get("schemaVersion") != REVISION_SCHEMA:
+        raise SystemExit("unexpected portal navigation revision schema")
+    revision = revisions["revisions"][-1]
+    administrative = read_json(arguments.administrative_mapping.resolve())
+
+    # The bootstrap seed is applied history. Its bytes are pinned here and are
+    # never re-emitted from the current vocabulary, so a later revision cannot
+    # rewrite what a hosted database already ran.
+    historical = revisions["historicalSeed"]
+    historical_path = arguments.seed_dir / Path(historical["file"]).name
+    if not historical_path.exists():
+        raise SystemExit(f"historical seed migration is missing: {historical_path}")
+    historical_digest, historical_length = sha256_file(historical_path)
+    if (
+        historical_digest != historical["sha256"]
+        or historical_length != historical["byteLength"]
+    ):
+        raise SystemExit(
+            "the historical navigation seed migration no longer matches its pinned bytes"
+        )
 
     manifest = load_manifest(platform_root)
     classification_nodes, classification_receipts = build_classification_nodes(
         platform_root, manifest
     )
     geography_nodes, geography_receipts, ilcd_codes = build_geography_nodes(
-        platform_root, manifest, archive_locations, arguments.china_mapping.resolve()
+        platform_root,
+        manifest,
+        archive_locations,
+        arguments.china_mapping.resolve(),
+        arguments.administrative_mapping.resolve(),
+        geoatlas_evidence,
     )
     nodes = classification_nodes + geography_nodes
     mark_parents(nodes)
@@ -917,15 +1251,26 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
-        with tempfile.TemporaryDirectory(prefix="portal-navigation-seed-") as temporary_seed:
-            expected = emit_seed_migration(seed_dir=Path(temporary_seed), stamp=arguments.seed_stamp or "20260919121000",
-                nodes=sorted(nodes,key=lambda item:item.node_id),asset_digest=asset_digest,
-                seed_digest=seed_digest,node_count=document["counts"]["nodes"])
-            actual=arguments.seed_dir / expected.name
-            if not actual.exists() or actual.read_bytes()!=expected.read_bytes():
-                print("navigation seed migration drifted",file=sys.stderr)
+        update_path = arguments.seed_dir / Path(revision["file"]).name
+        if not update_path.exists():
+            print(f"navigation revision migration is missing: {update_path}", file=sys.stderr)
+            return 1
+        with tempfile.TemporaryDirectory(prefix="portal-navigation-revision-") as temporary_revision:
+            expected = emit_update_migration(
+                seed_dir=Path(temporary_revision),
+                revision=revision,
+                administrative=administrative,
+                asset_digest=asset_digest,
+                seed_digest=seed_digest,
+                node_count=document["counts"]["nodes"],
+            )
+            if update_path.read_bytes() != expected.read_bytes():
+                print("navigation revision migration drifted", file=sys.stderr)
                 return 1
-        print(f"navigation vocabulary is current: sha256={asset_digest}")
+        print(
+            f"navigation vocabulary is current: sha256={asset_digest} "
+            f"revision={revision['id']} seed_sha256={historical['sha256']}"
+        )
         return 0
 
     asset_path.write_text(serialized + "\n", encoding="utf-8")
@@ -934,10 +1279,11 @@ def main() -> int:
     )
 
     if arguments.seed_dir is not None:
-        emit_seed_migration(
+        # Only the narrow revision is emitted; the bootstrap stays as applied.
+        emit_update_migration(
             seed_dir=arguments.seed_dir,
-            stamp=arguments.seed_stamp or "20260919121000",
-            nodes=sorted(nodes, key=lambda item: item.node_id),
+            revision=revision,
+            administrative=administrative,
             asset_digest=asset_digest,
             seed_digest=seed_digest,
             node_count=document["counts"]["nodes"],

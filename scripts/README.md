@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-20
-lastReviewedCommit: 815f2951fd4b863b5b60cb681fdff3c04dca6731
-lastReviewedNote: "Reviewed Database #664: exact-local schema-workspace generation is deterministic for the #661 trigger change; script behavior and command surface are unchanged."
+lastReviewedCommit: 7f3c73651b5743bd4ff7da54e4ce0918c1229b63
+lastReviewedNote: "Reviewed for Database #662 with dev #661/#664: retain the qualified worker admission snapshot and source-backed administrative parent revision; deployment boundaries remain unchanged."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml
@@ -664,6 +664,8 @@ The repository now includes a local pre-push docpact gate in `scripts/docpact-ga
 ## Portal navigation tooling
 
 `python3 scripts/generate_portal_navigation_vocabulary.py --check` verifies the offline, receipted vocabulary without modifying generated artifacts. Omit `--check` and pass `--seed-dir supabase/migrations` to regenerate an intentionally reviewed source change. `--vendor --platform-root <path> --archive-locations <path>` refreshes source copies only after exact platform-commit verification; this is separate from ordinary builds. Source receipts, schemas, types and seed migrations must be reviewed together.
+
+Later hierarchy changes must use `data/portal-navigation-revisions.json`; generation verifies the original seed bytes and emits only the new CLI-created revision. `python3 scripts/test_portal_navigation_revisions.py` checks the source-backed bindings and revision boundary. `python3 scripts/test_portal_china_navigation_upgrade.py --local-container supabase_db_database-engine-662-isolated` requires an empty, uniquely named local project initialized from the pre-revision base. It creates 160 synthetic public versions, applies the revision to committed old memberships, proves exact counts and unchanged source rows, then removes its fixtures. It rejects hosted Docker contexts and nonempty sources; reset that disposable project to the full migration history afterwards.
 
 `python3 scripts/benchmark_portal_summary_bounded.py --help` describes the explicitly local, rollback-only performance fixture. It refuses remote Docker contexts and nonempty public projections. Read-scale results do not qualify production latency or source-writer throughput.
 
