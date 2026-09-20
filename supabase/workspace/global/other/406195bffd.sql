@@ -1,0 +1,1 @@
+COMMENT ON TRIGGER "worker_jobs_scope_closure_build_admission" ON "private"."worker_jobs" IS 'Reject unavailable closure certificates at package-build enqueue or payload mutation; status-only lease and terminal transitions remain claimable for fail-closed Worker handling.';

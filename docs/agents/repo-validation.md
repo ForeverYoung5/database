@@ -33,8 +33,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-20
-lastReviewedCommit: f3d91da8daaba375b04cd454957b56c652e75605
-lastReviewedNote: "Reviewed Database #659 and #661: preserved national-carbon reset/pgTAP/generated-snapshot proof, and verified the scope-closure trigger assertions plus Worker #299's revoked-certificate E2E."
+lastReviewedCommit: 815f2951fd4b863b5b60cb681fdff3c04dca6731
+lastReviewedNote: "Reviewed Database #664: exact isolated migration replay and deterministic second generation repair the #661 schema-workspace CI snapshot; the validation matrix is unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

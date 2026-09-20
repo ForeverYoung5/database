@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-20
-lastReviewedCommit: e1bd83ecb3dd933f50a96bfb1c584335b852ebae
-lastReviewedNote: "Reviewed Database #659: generated schema and Data API type commands match CI; the exact-local RPC snapshot is reproducible with pinned Supabase CLI 2.117.0. Script behavior unchanged."
+lastReviewedCommit: 815f2951fd4b863b5b60cb681fdff3c04dca6731
+lastReviewedNote: "Reviewed Database #664: exact-local schema-workspace generation is deterministic for the #661 trigger change; script behavior and command surface are unchanged."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml

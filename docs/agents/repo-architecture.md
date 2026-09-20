@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-20
-lastReviewedCommit: f3d91da8daaba375b04cd454957b56c652e75605
-lastReviewedNote: "Reviewed Database #659 and #661: retained the national-carbon RPC timeout/ranking account contract and scope-closure package admission on enqueue/payload mutation, not status-only Worker claim."
+lastReviewedCommit: 815f2951fd4b863b5b60cb681fdff3c04dca6731
+lastReviewedNote: "Reviewed Database #664: the generated schema workspace reflects the #661 trigger migration; stable schema ownership and Worker claim boundaries remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
