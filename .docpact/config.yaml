@@ -1,8 +1,8 @@
 version: 1
 layout: repo
 lastReviewedAt: "2026-09-20"
-lastReviewedCommit: "981bc45fdf4c1826a20c7c99ae60f330cae4066e"
-lastReviewedNote: "Reviewed for Database #659: the existing migration and SQL-test routing rules cover the national-carbon RPC change; no ownership or routing rule changes are needed."
+lastReviewedCommit: "e1bd83ecb3dd933f50a96bfb1c584335b852ebae"
+lastReviewedNote: "Reviewed for Database #659: existing migration, SQL-test, and generated-workspace routing covers the RPC migration and CI snapshot refresh; no rule change needed."
 
 # Keep deterministic governance facts here.
 # AGENTS.md remains the repo contract entrypoint.

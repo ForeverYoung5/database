@@ -1,6 +1,7 @@
 CREATE OR REPLACE FUNCTION "api"."qry_national_carbon_organization_contributions"("p_limit" integer DEFAULT 10) RETURNS "jsonb"
     LANGUAGE "plpgsql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
+    SET "statement_timeout" TO '30s'
     AS $$
 declare
   v_actor uuid := auth.uid();
@@ -95,6 +96,10 @@ begin
         '[[:space:]]+', ' ', 'g'), '') as organization_name
     from private.users u
     where pg_catalog.jsonb_typeof(u.raw_user_meta_data -> 'organization') = 'string'
+      and not exists (
+        select 1 from private.roles r
+        where r.user_id = u.id and r.role in ('review-admin', 'review-member')
+      )
   ),
   profiles as materialized (
     select user_id, organization_name, pg_catalog.lower(organization_name) as organization_key
@@ -119,6 +124,7 @@ begin
   ),
   organizations as materialized (
     select pg_catalog.row_number() over (order by coalesce(a.published_count, 0) desc,
+      coalesce(a.assigned_count, 0) desc, coalesce(a.unassigned_count, 0) desc,
       c.organization_name collate "C", c.organization_key collate "C")::integer as rank,
       c.organization_key, c.organization_name,
       coalesce(a.published_count, 0)::bigint as published_count,

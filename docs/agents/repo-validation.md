@@ -33,8 +33,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-20
-lastReviewedCommit: 981bc45fdf4c1826a20c7c99ae60f330cae4066e
-lastReviewedNote: "Reviewed for Database #659: clean local reset, migration list, and focused national-carbon pgTAP assertions remain the required proof; the validation matrix needs no change."
+lastReviewedCommit: e1bd83ecb3dd933f50a96bfb1c584335b852ebae
+lastReviewedNote: "Reviewed for Database #659: clean local reset, focused pgTAP assertions, and deterministic exact-local schema/type regeneration cover the CI snapshot refresh; validation matrix unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

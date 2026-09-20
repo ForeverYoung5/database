@@ -38,7 +38,7 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-20
-lastReviewedCommit: 981bc45fdf4c1826a20c7c99ae60f330cae4066e
+lastReviewedCommit: e1bd83ecb3dd933f50a96bfb1c584335b852ebae
 lastReviewedNote: "Reviewed for Database #659: the national-carbon unit RPC timeout, reviewer-account exclusion, and ranking change remain database-owned; branch, delivery, and documentation ownership rules are unchanged."
 related:
   - .docpact/config.yaml
