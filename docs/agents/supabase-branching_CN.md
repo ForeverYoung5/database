@@ -22,9 +22,9 @@ checkPaths:
   - .github/workflows/supabase-dev.yml
   - .env.supabase.dev.local.example
   - .env.supabase.main.local.example
-lastReviewedAt: 2026-09-19
-lastReviewedCommit: 623acc63b977f50ccf26bc23e291b967c2270157
-lastReviewedNote: "Reviewed Database #654: new private whole-package staging/finalization and receipt snapshot generated from isolated complete migration replay; original root-group path retained. Local-contract workflow adds its targeted suite. Deployment boundaries, branch bindings, tooling and generated-source ownership remain unchanged."
+lastReviewedAt: 2026-09-20
+lastReviewedCommit: f3d91da8daaba375b04cd454957b56c652e75605
+lastReviewedNote: "Reviewed for Database #662: source-backed administrative parent revision, immutable bootstrap, populated upgrade and anonymous zero-count/V3 proof; deployment boundaries and generated-schema ownership remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

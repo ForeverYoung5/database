@@ -1,8 +1,8 @@
 {
   "asset": {
-    "byteLength": 3976237,
+    "byteLength": 3976798,
     "path": "navigation-vocabulary.json",
-    "sha256": "3f6481fce115bb29a7af6fe738bc9a9c6d7e4b663f7add95b2bf0c1905661b16"
+    "sha256": "f3af2988ce1fc4c5c6d6c65404a48e44905481476609350e65cb005d6da7da48"
   },
   "counts": {
     "classification": 5475,
@@ -212,6 +212,21 @@
         },
         "scope": "location",
         "sha256": "2efa6365e14215296ab418ac5f20af90d75052e4c6f6564682b738bdd51a7950"
+      },
+      {
+        "byteLength": 2197,
+        "path": "data/portal-navigation-china-administrative.json",
+        "resourceId": "portal-navigation-china-administrative-v1",
+        "scope": "location",
+        "sha256": "8ac96b60957adbfa7844b82344cab7ca3b431d2b195abe76be353a603cab0a79"
+      },
+      {
+        "byteLength": 582522,
+        "note": "Reviewed GeoAtlas administrative parent evidence; read only to bind the three locations below.",
+        "path": "public/maps/china-province-100000-full.geojson",
+        "resourceId": "china-province-100000-full",
+        "scope": "location",
+        "sha256": "99adfeded5223848bbe37a0a12f8023e11ee12161c7800521c27db42fdeac275"
       },
       {
         "byteLength": 47683,

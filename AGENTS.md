@@ -38,8 +38,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-20
-lastReviewedCommit: 815f2951fd4b863b5b60cb681fdff3c04dca6731
-lastReviewedNote: "Reviewed Database #664: generated schema-workspace snapshot repair remains database-owned; branch, deployment, and workspace-integration boundaries are unchanged."
+lastReviewedCommit: 7f3c73651b5743bd4ff7da54e4ce0918c1229b63
+lastReviewedNote: "Reviewed for Database #662 with dev #661/#664: retain the qualified worker admission snapshot and source-backed administrative parent revision; deployment boundaries remain unchanged."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md

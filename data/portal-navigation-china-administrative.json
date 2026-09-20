@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "portal.navigation-china-administrative.v1",
+  "note": "Reviewed administrative parent evidence for the three Chinese locations the pinned ILCD resource lists as top-level codes. GeoAtlas states the parent inside each feature, so the parent is read from the source rather than inferred from a code shape, a name similarity or the entry text.",
+  "rule": [
+    "A binding is accepted only when the vendored GeoAtlas feature with that adcode exists exactly once, is level='province', carries the reviewed name below, and states parent.adcode === 100000.",
+    "A binding only re-parents an existing ilcd-locations node under the country node. It never creates a node, and never changes a node's code, taxonomy, labels or aliases.",
+    "Parenthood is never inferred from a code shape, from a name similarity, or from the archive entry text; code letters are not treated as administrative segments."
+  ],
+  "source": {
+    "id": "china-province-100000-full",
+    "origin": "https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json",
+    "upstream": "Aliyun DataV.GeoAtlas province-level boundaries for 100000",
+    "platformRepository": "tiangong-lca/platform",
+    "platformPath": "public/maps/china-province-100000-full.geojson",
+    "platformCommit": "aca2d4f2a905e97867942a78be75c5daea4fde5e",
+    "lastModifiedCommit": "6c5d02f5cad6a864e290d16b3ce6d3a62c91247b",
+    "lastModifiedDate": "2026-05-20",
+    "rawSha256": "99adfeded5223848bbe37a0a12f8023e11ee12161c7800521c27db42fdeac275",
+    "rawBytes": 582522,
+    "features": 35,
+    "evidenceField": "properties.parent.adcode === 100000 for each bound feature, with level='province'",
+    "scope": "location"
+  },
+  "countryNodeId": "geo:cn",
+  "countryCode": "CN",
+  "bindings": [
+    {
+      "nodeId": "geo:tw",
+      "code": "TW",
+      "adcode": 710000,
+      "name": "台湾省",
+      "level": "province"
+    },
+    {
+      "nodeId": "geo:hk",
+      "code": "HK",
+      "adcode": 810000,
+      "name": "香港特别行政区",
+      "level": "province"
+    },
+    {
+      "nodeId": "geo:mo",
+      "code": "MO",
+      "adcode": 820000,
+      "name": "澳门特别行政区",
+      "level": "province"
+    }
+  ]
+}
