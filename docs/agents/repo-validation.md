@@ -32,9 +32,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: "2026-09-18"
-lastReviewedCommit: "c606853ccb821c33bef4808da93a70698d39814e"
-lastReviewedNote: "Reviewed Database #654: bounded temporary staging, atomic whole-package insert-only finalization and replay receipts, unchanged root-group API, owner-scoped receipt recovery. Migration inventories and local proof are updated; persistent Dev/production deployment is not performed."
+lastReviewedAt: 2026-09-20
+lastReviewedCommit: 981bc45fdf4c1826a20c7c99ae60f330cae4066e
+lastReviewedNote: "Reviewed for Database #659: clean local reset, migration list, and focused national-carbon pgTAP assertions remain the required proof; the validation matrix needs no change."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
