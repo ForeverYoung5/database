@@ -38,8 +38,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-20
-lastReviewedCommit: e1bd83ecb3dd933f50a96bfb1c584335b852ebae
-lastReviewedNote: "Reviewed for Database #659: the national-carbon unit RPC timeout, reviewer-account exclusion, and ranking change remain database-owned; branch, delivery, and documentation ownership rules are unchanged."
+lastReviewedCommit: f3d91da8daaba375b04cd454957b56c652e75605
+lastReviewedNote: "Reviewed Database #659 and #661: national-carbon RPC behavior and scope-closure claim repair remain database-owned; branch, delivery, documentation, and deployment boundaries are unchanged."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md
