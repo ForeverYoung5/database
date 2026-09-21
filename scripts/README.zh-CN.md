@@ -22,7 +22,7 @@ checkPaths:
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-22
 lastReviewedCommit: 258788439ebc80d365923c60d3981afcf6df1a4c
-lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the generated five-schema workspace and Data API types gain the guarded owner-draft before-content save facade; refresh behavior and stable-versus-generated boundaries are unchanged.Reviewed for Database #677 (Foundry #60) with workspace #1432: the protected-alias PostgREST routing probe joins the script inventory (real-HTTP OAuth denial/repair proof plus the explicit api content profile of the one-shot callback); refresh behavior and stable-versus-generated boundaries are unchanged.再次复核 Database #674（Foundry #186）：工作流契约辅助脚本新增一个封闭 Length*time 档案的套件固定标记；受支持的迁移生成流程与脚本用法未变。"
+lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the generated five-schema workspace and Data API types gain the guarded owner-draft before-content save facade; refresh behavior and stable-versus-generated boundaries are unchanged.Reviewed for Database #677 (Foundry #60) with workspace #1432: the protected-alias PostgREST routing probe joins the script inventory (real-HTTP OAuth denial/repair proof plus the explicit api content profile of the one-shot callback); refresh behavior and stable-versus-generated boundaries are unchanged.再次复核 Database #674（Foundry #186）：工作流契约辅助脚本新增一个封闭 Length*time 档案的套件固定标记；受支持的迁移生成流程与脚本用法未变。 Reviewed for Database #680 with workspace #1432: the workflow contract now pins the focused Time-alias v2 current-closure suite in the local contract selection; refresh behavior and stable-versus-generated boundaries are unchanged."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml
