@@ -621,7 +621,7 @@ begin
     );
   end if;
 
-  if jsonb_array_length(v_input_targets) <> 50
+  if jsonb_array_length(v_input_targets) <> (v_plan #>> '{expected,derivative_target_count}')::integer
     or exists (
       select 1
       from jsonb_array_elements(v_input_targets) as target_item(value)
@@ -1196,10 +1196,10 @@ begin
     'actor_user_id', v_actor,
     'plan_request_sha256', v_plan_request_sha256,
     'derivative_targets_sha256', v_targets_sha256,
-    'plan_rows', 52,
-    'plan_exchanges', 59,
-    'alias_audits', 55,
-    'derivative_targets', 50,
+    'plan_rows', jsonb_array_length(v_plan->'actions'),
+    'plan_exchanges', (v_plan #>> '{expected,exchange_count}')::integer,
+    'alias_audits', (v_plan #>> '{expected,audit_count}')::integer,
+    'derivative_targets', jsonb_array_length(v_input_targets),
     'rollback_simulation_passed', true
   );
   v_unused_gate_material := jsonb_build_object(
@@ -1353,10 +1353,10 @@ begin
     'preflight_token', v_token,
     'preflight_proof_sha256', v_proof_sha256,
     'simulation', jsonb_build_object(
-      'plan_rows', 52,
-      'plan_exchanges', 59,
-      'alias_audits', 55,
-      'derivative_targets', 50,
+      'plan_rows', jsonb_array_length(v_plan->'actions'),
+      'plan_exchanges', (v_plan #>> '{expected,exchange_count}')::integer,
+      'alias_audits', (v_plan #>> '{expected,audit_count}')::integer,
+      'derivative_targets', jsonb_array_length(v_input_targets),
       'rolled_back', true
     )
   );
@@ -1578,8 +1578,8 @@ begin
       v_alias_result := private.cmd_dataset_alias_plan_v2_guarded(v_preflight.plan);
       if coalesce((v_alias_result->>'ok')::boolean, false) is not true
         or coalesce((v_alias_result->>'idempotent_replay')::boolean, true)
-        or (v_alias_result #>> '{counts,action_count}') is distinct from (v_plan #>> '{expected,action_count}')
-        or (v_alias_result #>> '{counts,exchange_count}') is distinct from (v_plan #>> '{expected,exchange_count}') then
+        or (v_alias_result #>> '{counts,action_count}') is distinct from (v_preflight.plan #>> '{expected,action_count}')
+        or (v_alias_result #>> '{counts,exchange_count}') is distinct from (v_preflight.plan #>> '{expected,exchange_count}') then
         raise exception using
           errcode = 'P0001',
           message = 'Primary/support simulation rejected';
@@ -1595,11 +1595,12 @@ begin
       );
 
       if coalesce((v_batch_result->>'ok')::boolean, false) is not true
-        or v_batch_result->>'target_count' is distinct from '50'
-        or coalesce(v_batch_result->>'flow_count', v_batch_result->>'flows')
-          is distinct from '23'
-        or coalesce(v_batch_result->>'process_count', v_batch_result->>'processes')
-          is distinct from '27' then
+        or (v_batch_result->>'target_count')::integer
+          is distinct from (v_preflight.plan #>> '{expected,derivative_target_count}')::integer
+        or coalesce(v_batch_result->>'flow_count', v_batch_result->>'flows')::integer
+          is distinct from (select count(*) from jsonb_array_elements(v_preflight.derivative_targets) as target where target->>'table' = 'flows')
+        or coalesce(v_batch_result->>'process_count', v_batch_result->>'processes')::integer
+          is distinct from (select count(*) from jsonb_array_elements(v_preflight.derivative_targets) as target where target->>'table' = 'processes') then
         raise exception using
           errcode = 'P0001',
           message = 'Derivative batch simulation rejected';
@@ -1631,10 +1632,10 @@ begin
       'actor_user_id', v_actor,
       'plan_request_sha256', v_preflight.plan_request_sha256,
       'derivative_targets_sha256', v_preflight.derivative_targets_sha256,
-      'plan_rows', 52,
-      'plan_exchanges', 59,
-      'alias_audits', 55,
-      'derivative_targets', 50,
+      'plan_rows', jsonb_array_length(v_preflight.plan->'actions'),
+      'plan_exchanges', (v_preflight.plan #>> '{expected,exchange_count}')::integer,
+      'alias_audits', (v_preflight.plan #>> '{expected,audit_count}')::integer,
+      'derivative_targets', jsonb_array_length(v_preflight.derivative_targets),
       'rollback_simulation_passed', true
     );
   elsif p_gate_name = 'execution_unused' then
