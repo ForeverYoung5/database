@@ -20,9 +20,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: "2026-09-22"
-lastReviewedCommit: ee9bb7ead1c6b832a0fc94a681ae17ab5db3da4d
-lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the generated five-schema workspace and Data API types gain the guarded owner-draft before-content save facade; refresh behavior and stable-versus-generated boundaries are unchanged. Reviewed for Database #677 (Foundry #60) with workspace #1432: the protected-alias PostgREST routing probe joins the script inventory (real-HTTP OAuth denial/repair proof plus the explicit api content profile of the one-shot callback); refresh behavior and stable-versus-generated boundaries are unchanged."
+lastReviewedAt: 2026-09-22
+lastReviewedCommit: 258788439ebc80d365923c60d3981afcf6df1a4c
+lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the generated five-schema workspace and Data API types gain the guarded owner-draft before-content save facade; refresh behavior and stable-versus-generated boundaries are unchanged.Reviewed for Database #677 (Foundry #60) with workspace #1432: the protected-alias PostgREST routing probe joins the script inventory (real-HTTP OAuth denial/repair proof plus the explicit api content profile of the one-shot callback); refresh behavior and stable-versus-generated boundaries are unchanged.Reviewed again for Database #674 (Foundry #186): the workflow-contract helper gains one pinned suite token for the closed Length*time profile; the supported migration-generation flows and helper usage are unchanged."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml
@@ -354,26 +354,6 @@ requires a forged cursor to return only the bounded `22023` envelope.
 
 ```bash
 python scripts/test_supabase_dev_workflow_contract.py
-```
-
-### `test_protected_alias_postgrest_routing.py`
-
-Proves the protected Time-alias v2 transport over real PostgREST HTTP against
-the loopback stack, because a direct SQL connection cannot expose schema
-routing. A signed `client_id`-bearing session must be refused on the protected
-read route with SQLSTATE `42501` / "OAuth client is not authorized for this API
-route" while its client holds the prior official capability class, must reach
-the application's null-request refusal
-(`ALIAS_EXECUTION_READ_INVALID_REQUEST`, zero writes) after the additive
-`CLI-ALIAS-02` grant, and must stay refused on the service-only executor
-callback. The queued callback shape without an explicit content profile must
-fail as 404/`PGRST202` (the default `public` lookup), while the same shape with
-`Content-Profile: api` must reach the service-only routine. The probe refuses
-non-loopback stacks, provisions and disables only its own synthetic registry
-client through the service facade, and touches no business data.
-
-```bash
-python3 scripts/test_protected_alias_postgrest_routing.py
 ```
 
 ### `data_migrations/tidas_schema_202606/runner.py`

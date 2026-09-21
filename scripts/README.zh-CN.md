@@ -20,9 +20,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: "2026-09-22"
-lastReviewedCommit: ee9bb7ead1c6b832a0fc94a681ae17ab5db3da4d
-lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the generated five-schema workspace and Data API types gain the guarded owner-draft before-content save facade; refresh behavior and stable-versus-generated boundaries are unchanged. Reviewed for Database #677 (Foundry #60) with workspace #1432: the protected-alias PostgREST routing probe joins the script inventory (real-HTTP OAuth denial/repair proof plus the explicit api content profile of the one-shot callback); refresh behavior and stable-versus-generated boundaries are unchanged."
+lastReviewedAt: 2026-09-22
+lastReviewedCommit: 258788439ebc80d365923c60d3981afcf6df1a4c
+lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the generated five-schema workspace and Data API types gain the guarded owner-draft before-content save facade; refresh behavior and stable-versus-generated boundaries are unchanged.Reviewed for Database #677 (Foundry #60) with workspace #1432: the protected-alias PostgREST routing probe joins the script inventory (real-HTTP OAuth denial/repair proof plus the explicit api content profile of the one-shot callback); refresh behavior and stable-versus-generated boundaries are unchanged.再次复核 Database #674（Foundry #186）：工作流契约辅助脚本新增一个封闭 Length*time 档案的套件固定标记；受支持的迁移生成流程与脚本用法未变。"
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml
@@ -301,22 +301,6 @@ Schema，并要求伪造 cursor 只返回受限的 `22023` envelope。
 
 ```bash
 python scripts/test_supabase_dev_workflow_contract.py
-```
-
-### `test_protected_alias_postgrest_routing.py`
-
-在回环栈上通过真实 PostgREST HTTP 验证受保护 Time-alias v2 的传输路径，因为直连
-SQL 无法暴露 schema 路由。当合成客户端仅持有既有官方能力集时，携带 `client_id` 的
-签名会话必须在受保护 read 路由上被拒绝为 SQLSTATE `42501` / “OAuth client is not
-authorized for this API route”；在叠加 `CLI-ALIAS-02` 后，同一请求必须到达应用的
-空请求拒绝（`ALIAS_EXECUTION_READ_INVALID_REQUEST`，零写入），而 service-only
-executor 回调必须始终对 OAuth actor 拒绝。队列回调形态在缺少显式 content profile
-时必须按默认 `public` 查询以 404/`PGRST202` 失败，携带 `Content-Profile: api` 的
-同一形态必须命中 service-only 例程。该探针拒绝非回环栈，仅通过 service facade
-创建并停用自己的合成 registry 客户端，不触碰任何业务数据。
-
-```bash
-python3 scripts/test_protected_alias_postgrest_routing.py
 ```
 
 ### `data_migrations/tidas_schema_202606/runner.py`

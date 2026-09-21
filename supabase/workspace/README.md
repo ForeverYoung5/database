@@ -20,9 +20,9 @@ checkPaths:
   - .githooks/pre-push
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: "2026-09-22"
-lastReviewedCommit: ee9bb7ead1c6b832a0fc94a681ae17ab5db3da4d
-lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the generated five-schema workspace and Data API types gain the guarded owner-draft before-content save facade; refresh behavior and stable-versus-generated boundaries are unchanged. Reviewed for Database #677 (Foundry #60) with workspace #1432: the generated workspace captures the protected admission callback with its explicit api content profile and the matching function comment after a clean migration-built regeneration with the CI-pinned Supabase CLI 2.117.0; refresh rules and stable-versus-generated boundaries are unchanged."
+lastReviewedAt: 2026-09-22
+lastReviewedCommit: dcfbcd269cdea22ffefab8373b9a8f537c4ff609
+lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the generated five-schema workspace and Data API types gain the guarded owner-draft before-content save facade; refresh behavior and stable-versus-generated boundaries are unchanged.Reviewed for Database #677 (Foundry #60) with workspace #1432: the generated workspace captures the protected admission callback with its explicit api content profile and the matching function comment after a clean migration-built regeneration with the CI-pinned Supabase CLI 2.117.0; refresh rules and stable-versus-generated boundaries are unchanged.Reviewed again for Database #674 (Foundry #186): the workspace was regenerated for the closed Length*time profile migration with the CI-pinned Supabase CLI and re-generation is diff-clean; the generated-path contract itself is unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
