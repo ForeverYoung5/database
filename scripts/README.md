@@ -20,9 +20,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-20
+lastReviewedAt: 2026-09-21
 lastReviewedCommit: 7f3c73651b5743bd4ff7da54e4ce0918c1229b63
-lastReviewedNote: "Reviewed for Database #662 with dev #661/#664: retain the qualified worker admission snapshot and source-backed administrative parent revision; deployment boundaries remain unchanged."
+lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the generated five-schema workspace and Data API types gain the guarded owner-draft before-content save facade; refresh behavior and stable-versus-generated boundaries are unchanged."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml

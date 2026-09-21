@@ -30,9 +30,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-20
+lastReviewedAt: 2026-09-21
 lastReviewedCommit: 7f3c73651b5743bd4ff7da54e4ce0918c1229b63
-lastReviewedNote: "Reviewed for Database #662 with dev #661/#664: retain the qualified worker admission snapshot and source-backed administrative parent revision; deployment boundaries remain unchanged."
+lastReviewedNote: "Reviewed for Database #670 with workspace #1432: records the guarded owner-draft before-content save facade beside the existing DB-CORE-WRITE-01 command routes; repo shape and generated-path boundaries are unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -129,7 +129,10 @@ with an explicit capability. Direct reads of the nine public entity tables add
 one `RESTRICTIVE` authenticated policy over the existing row policies. Raw
 table insert/update/delete remains ACL-closed after command cutover. The three
 actor-bound `cmd_dataset_create`, `cmd_dataset_save_draft`, and
-`cmd_dataset_delete` routes instead use `DB-CORE-WRITE-01`; other first-party
+`cmd_dataset_delete` routes instead use `DB-CORE-WRITE-01`, and the additive
+`cmd_dataset_save_draft_guarded` facade reuses that same owner-draft write
+capability to reject concurrent before-content drift atomically before it calls
+the unchanged save-draft writer; other first-party
 CLI commands retain `CLI-RPC-01`. The exact
 `cmd_lifecycle_model_bundle_save(jsonb)` and
 `cmd_lifecycle_model_bundle_delete(uuid,text)` signatures use

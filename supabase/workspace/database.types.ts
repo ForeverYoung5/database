@@ -203,6 +203,20 @@ export type Database = {
         }
         Returns: Json
       }
+      cmd_dataset_save_draft_guarded: {
+        Args: {
+          p_audit?: Json
+          p_expected_json_ordered: Json
+          p_id: string
+          p_json_ordered: Json
+          p_model_id?: string
+          p_model_version?: string
+          p_rule_verification?: boolean
+          p_table: string
+          p_version: string
+        }
+        Returns: Json
+      }
       cmd_dataset_withdraw: {
         Args: {
           p_audit?: Json

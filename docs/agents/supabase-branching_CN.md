@@ -22,9 +22,9 @@ checkPaths:
   - .github/workflows/supabase-dev.yml
   - .env.supabase.dev.local.example
   - .env.supabase.main.local.example
-lastReviewedAt: 2026-09-20
+lastReviewedAt: 2026-09-21
 lastReviewedCommit: f3d91da8daaba375b04cd454957b56c652e75605
-lastReviewedNote: "Reviewed for Database #662: source-backed administrative parent revision, immutable bootstrap, populated upgrade and anonymous zero-count/V3 proof; deployment boundaries and generated-schema ownership remain unchanged."
+lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the local contract step gains one guarded owner-draft save suite; branch bindings, Preview classifier inputs, persistent-Dev deploy steps and hosted verification are unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
