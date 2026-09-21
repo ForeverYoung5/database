@@ -16,7 +16,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth, private;
 
-select plan(79);
+select plan(83);
 
 -- ------------------------------------------------------------------------------------------------
 -- Fixture: one target unit group (year base plus the exact hour factor), one distinct source unit group
@@ -814,20 +814,22 @@ begin
       'sha256', b#>>'{source_evidence,sha256}',
       'cohort_sha256', b#>>'{source_evidence,sha256}',
       'expected_cohort_sha256', b#>>'{source_evidence,sha256}',
-      'exchange_count', b#>>'{source_evidence,exchange_count}',
+      -- The external plan carries every count as a JSON number; the helper must emit the same wire
+      -- shape or it would only prove the executor accepts a shape the real producer never sends.
+      'exchange_count', b#>'{source_evidence,exchange_count}',
       'declared_source_unitgroup', b#>'{source_evidence,source_unitgroup}',
       'original_source_unit', 'hr'),
     'target_snapshots', b->'target_snapshots',
     'expected', jsonb_build_object(
-      'action_count', b#>>'{counts,action_count}',
+      'action_count', b#>'{counts,action_count}',
       'batch_count', 1,
-      'exchange_count', b#>>'{counts,exchange_count}',
-      'amount_field_count', b#>>'{counts,amount_field_count}',
-      'unrelated_exchange_count', b#>>'{counts,unrelated_exchange_count}',
+      'exchange_count', b#>'{counts,exchange_count}',
+      'amount_field_count', b#>'{counts,amount_field_count}',
+      'unrelated_exchange_count', b#>'{counts,unrelated_exchange_count}',
       'audit_count', (b#>>'{counts,action_count}')::integer + 2,
-      'flowproperty_count', b#>>'{counts,flowproperty_count}',
-      'flow_count', b#>>'{counts,flow_count}',
-      'process_count', b#>>'{counts,process_count}',
+      'flowproperty_count', b#>'{counts,flowproperty_count}',
+      'flow_count', b#>'{counts,flow_count}',
+      'process_count', b#>'{counts,process_count}',
       'derivative_target_count', jsonb_array_length(v_targets),
       'text_action_count', jsonb_array_length(b->'text_actions')),
     'dimensions', jsonb_build_array(jsonb_build_object(
@@ -870,7 +872,7 @@ select is(
 
 select is(
   (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{expected,audit_count}',
-    to_jsonb(((pg_temp.v2_plan() #>> '{expected,audit_count}')::integer + 1)::text))) ->> 'code'),
+    to_jsonb(((pg_temp.v2_plan() #>> '{expected,audit_count}')::integer + 1)))) ->> 'code'),
   'ALIAS_V2_COUNT_MISMATCH',
   'an audit count that is not the written row+batch+plan topology is refused'
 );
@@ -883,6 +885,16 @@ select is(
   (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{expected}', (pg_temp.v2_plan()->'expected') #- '{text_action_count}')) ->> 'code'),
   'ALIAS_V2_PLAN_INVALID',
   'an expected block without the versioned text-action count is refused'
+);
+select is(
+  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{expected,action_count}', '"2"'::jsonb)) ->> 'code'),
+  'ALIAS_V2_PLAN_INVALID',
+  'a quoted expected count is refused because the external plan emits JSON numbers'
+);
+select is(
+  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{source_evidence,exchange_count}', '"2"'::jsonb)) ->> 'code'),
+  'ALIAS_V2_PLAN_INVALID',
+  'a quoted source-evidence exchange count is refused as a different wire shape'
 );
 select is(
   (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{source_evidence,cohort_sha256}', to_jsonb(repeat('d', 64)))) ->> 'code'),

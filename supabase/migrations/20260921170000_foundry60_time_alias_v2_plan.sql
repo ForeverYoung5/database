@@ -127,6 +127,8 @@ begin
   end if;
 
   -- The ten flat expected keys of the real v1 contract plus the versioned text_action_count; all numeric.
+  -- The external producer emits JSON numbers (never quoted decimal strings), so the literal number type
+  -- is required here: a quoted count is a different wire shape and is refused rather than coerced.
   if exists (
     select 1 from jsonb_object_keys(p_plan->'expected') as key(name)
     where key.name <> all (array[
@@ -135,6 +137,10 @@ begin
       'text_action_count'
     ])
   ) or (select count(*) from jsonb_object_keys(p_plan->'expected')) <> 11
+    or exists (
+      select 1 from jsonb_each(p_plan->'expected') as entry(key, value)
+      where jsonb_typeof(entry.value) is distinct from 'number'
+    )
     or (p_plan #>> '{expected,action_count}') !~ '^[0-9]+$'
     or (p_plan #>> '{expected,batch_count}') !~ '^[0-9]+$'
     or (p_plan #>> '{expected,exchange_count}') !~ '^[0-9]+$'
@@ -171,6 +177,7 @@ begin
     or coalesce(p_plan #>> '{source_evidence,cohort_sha256}', '') !~ '^[a-f0-9]{64}$'
     or (p_plan #>> '{source_evidence,cohort_sha256}') is distinct from (p_plan #>> '{source_evidence,expected_cohort_sha256}')
     or coalesce(p_plan #>> '{source_evidence,original_source_unit}', '') = ''
+    or jsonb_typeof(p_plan #> '{source_evidence,exchange_count}') is distinct from 'number'
     or jsonb_typeof(p_plan->'source_evidence'->'declared_source_unitgroup') is distinct from 'object' then
     return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 400,
       'message', 'The plan must carry its source alias identity, equal declared cohort digests and the declared/original source unit semantics');
@@ -230,7 +237,7 @@ begin
     'target_snapshots', p_plan->'target_snapshots',
     'source_evidence', jsonb_build_object(
       'sha256', p_plan #>> '{source_evidence,sha256}',
-      'exchange_count', p_plan #>> '{source_evidence,exchange_count}',
+      'exchange_count', p_plan #> '{source_evidence,exchange_count}',
       'source_unitgroup', p_plan#>'{source_evidence,declared_source_unitgroup}'),
     'source_alias', p_plan->'source_alias',
     'counts', jsonb_build_object(
@@ -259,7 +266,7 @@ begin
     or (v_batch_result #>> '{counts,exchange_count}')::integer is distinct from (v_expected->>'exchange_count')::integer
     or (v_batch_result #>> '{counts,amount_field_count}')::integer is distinct from (v_expected->>'amount_field_count')::integer
     or (v_batch_result #>> '{counts,unrelated_exchange_count}')::integer is distinct from (v_expected->>'unrelated_exchange_count')::integer
-    or (v_batch_result #>> '{counts,text_action_count}')::integer is distinct from (p_plan->>'text_action_count')::integer then
+    or (v_batch_result #>> '{counts,text_action_count}')::integer is distinct from (v_expected->>'text_action_count')::integer then
     return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_PROOF_MISMATCH', 'status', 409,
       'message', 'The batch result does not prove the exact plan identity and counts',
       'details', jsonb_build_object('batch_result', v_batch_result));
@@ -321,12 +328,12 @@ begin
     'record_type', 'plan_summary', 'schema_version', v_schema_version, 'plan_sha256', v_plan_sha256,
     'plan_request_sha256', v_plan_request_sha256, 'batch_id', v_batch_id, 'dimension', 'time',
     'factor', v_dimension->>'factor', 'target_visibility', 'owner_draft',
-    'expected', v_expected, 'text_action_count', (p_plan->>'text_action_count')::integer,
+    'expected', v_expected, 'text_action_count', (v_expected->>'text_action_count')::integer,
     'audit_count', (v_expected->>'audit_count')::integer,
     'derivative_target_count', (v_expected->>'derivative_target_count')::integer,
     'source_evidence', jsonb_build_object(
       'sha256', p_plan #>> '{source_evidence,sha256}',
-      'exchange_count', p_plan #>> '{source_evidence,exchange_count}',
+      'exchange_count', p_plan #> '{source_evidence,exchange_count}',
       'source_unitgroup', p_plan#>'{source_evidence,declared_source_unitgroup}'),
     'source_alias', p_plan->'source_alias', 'target_snapshots', p_plan->'target_snapshots',
     'counts', jsonb_build_object(
@@ -334,7 +341,7 @@ begin
       'process_count', v_expected->>'process_count', 'exchange_count', v_expected->>'exchange_count',
       'amount_field_count', v_expected->>'amount_field_count',
       'unrelated_exchange_count', v_expected->>'unrelated_exchange_count',
-      'text_action_count', (p_plan->>'text_action_count')::integer)))
+      'text_action_count', (v_expected->>'text_action_count')::integer)))
   returning id into v_summary_id;
 
   return jsonb_build_object('ok', true, 'code', 'ALIAS_V2_PLAN_APPLIED', 'status', 200,
@@ -345,7 +352,7 @@ begin
       'process_count', v_expected->>'process_count', 'exchange_count', v_expected->>'exchange_count',
       'amount_field_count', v_expected->>'amount_field_count',
       'unrelated_exchange_count', v_expected->>'unrelated_exchange_count',
-      'text_action_count', (p_plan->>'text_action_count')::integer),
+      'text_action_count', (v_expected->>'text_action_count')::integer),
     'audit_count', v_audit_rows + v_batch_summary_rows + 1,
     'audit', jsonb_build_object('plan_summary_id', v_summary_id, 'batch_result', v_batch_result));
 end

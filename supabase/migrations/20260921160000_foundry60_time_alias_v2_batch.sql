@@ -1024,7 +1024,7 @@ begin
         return jsonb_build_object('ok', true, 'code', 'ALIAS_V2_BATCH_REPLAYED', 'status', 200,
           'idempotent_replay', true, 'plan_sha256', v_plan_sha256, 'batch_id', v_batch_id,
           'counts', v_summary_payload->'counts'
-            || jsonb_build_object('text_action_count', v_summary_payload->>'text_action_count'),
+            || jsonb_build_object('text_action_count', v_summary_payload->'text_action_count'),
           'audit', jsonb_build_object('plan_summary_id', v_proof_id, 'replayed_actions', v_action_count));
       end;
     end if;
