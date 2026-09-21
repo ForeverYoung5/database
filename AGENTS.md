@@ -38,8 +38,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-21
-lastReviewedCommit: 47168c0
-lastReviewedNote: "Reviewed for Database #670 with workspace #1432: records the guarded owner-draft before-content save facade in the capability facts; repo contract, branch rules and hard boundaries are unchanged."
+lastReviewedCommit: ee159966823ead649180b49ab6d961cbc7ee3101
+lastReviewedNote: "Reviewed for Database #670 with workspace #1432: records the guarded owner-draft before-content save facade in the capability facts; repo contract, branch rules and hard boundaries are unchanged. Reviewed for Database #673 (Foundry #60) with workspace #1432: the Time alias v2 RED baseline adds one database test file only; repo contract, architecture map and proof ownership are unchanged."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md
