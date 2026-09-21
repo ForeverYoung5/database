@@ -15,7 +15,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth, private;
 
-select plan(52);
+select plan(60);
 
 -- ------------------------------------------------------------------------------------------------
 -- Fixture: one target unit group, one target flow property (real common:name language object), one alias
@@ -31,7 +31,8 @@ create temp table v2_fixture (
   foreign_flow_id uuid,
   process_id uuid,
   uncertain_flow_id uuid,
-  uncertain_process_id uuid
+  uncertain_process_id uuid,
+  mismatch_process_id uuid
 ) on commit drop;
 
 insert into v2_fixture values (
@@ -44,7 +45,8 @@ insert into v2_fixture values (
   '77777777-7777-4777-8777-777777777777',
   '88888888-8888-4888-8888-888888888888',
   'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-  'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+  'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 );
 
 -- The deployed five-key reference: @refObjectId/@type/@uri(.json)/@version and one language-tagged
@@ -79,6 +81,10 @@ returns jsonb language sql immutable as $$
         'publicationAndOwnership', jsonb_build_object('common:dataSetVersion', p_version))))
 $$;
 
+-- A real process shape: TIDAS internal ids "1"/"2"/"3" for the exchanges while the reviewed source tuples
+-- carry the original EcoSpold numbers in their generalComment (730045 output reference, 730046 input); the
+-- reference-output source quantity is 1, matching a "1.0 a" functional unit. The third exchange references
+-- another flow and is the unrelated complement.
 create or replace function pg_temp.v2_process(
   p_id uuid, p_version text, p_flow uuid, p_flow_version text, p_flow_name text,
   p_alias_extra jsonb default '{}'::jsonb
@@ -94,13 +100,21 @@ returns jsonb language sql immutable as $$
       'exchanges', jsonb_build_object('exchange', jsonb_build_array(
         jsonb_build_object(
           '@dataSetInternalID', '1',
-          'meanAmount', '1.03E-4',
-          'resultingAmount', '1.03E-4',
+          'meanAmount', '1',
+          'resultingAmount', '1',
           'exchangeDirection', 'Output',
+          'generalComment', 'Reviewed source exchange 730045 (EcoSpold).',
           'referenceToFlowDataSet', pg_temp.v2_ref('flows', 'flow data set', p_flow, p_flow_version, p_flow_name))
         || p_alias_extra,
         jsonb_build_object(
           '@dataSetInternalID', '2',
+          'meanAmount', '1.03E-4',
+          'resultingAmount', '1.03E-4',
+          'exchangeDirection', 'Input',
+          'generalComment', 'Reviewed source exchange 730046 (EcoSpold).',
+          'referenceToFlowDataSet', pg_temp.v2_ref('flows', 'flow data set', p_flow, p_flow_version, 'Alias flow')),
+        jsonb_build_object(
+          '@dataSetInternalID', '3',
           'meanAmount', '5',
           'resultingAmount', '5',
           'exchangeDirection', 'Input',
@@ -191,14 +205,22 @@ begin
   v_desired_process := jsonb_set(
     jsonb_set(
       jsonb_set(
-        pg_temp.v2_process(f.process_id, '01.00.000', f.flow_id, '01.00.000', 'Alias flow'),
-        '{processDataSet,exchanges,exchange,0,meanAmount}', to_jsonb('0.00000001175799086757990853'::text), false),
-      '{processDataSet,exchanges,exchange,0,resultingAmount}', to_jsonb('0.00000001175799086757990853'::text), false),
+        jsonb_set(
+          jsonb_set(
+            pg_temp.v2_process(f.process_id, '01.00.000', f.flow_id, '01.00.000', 'Alias flow'),
+            '{processDataSet,exchanges,exchange,0,meanAmount}',
+            to_jsonb(private.dataset_alias_v2_multiply_amount('1', private.dataset_alias_v2_factor()::text)), false),
+          '{processDataSet,exchanges,exchange,0,resultingAmount}',
+          to_jsonb(private.dataset_alias_v2_multiply_amount('1', private.dataset_alias_v2_factor()::text)), false),
+        '{processDataSet,exchanges,exchange,1,meanAmount}',
+        to_jsonb(private.dataset_alias_v2_multiply_amount('1.03E-4', private.dataset_alias_v2_factor()::text)), false),
+      '{processDataSet,exchanges,exchange,1,resultingAmount}',
+      to_jsonb(private.dataset_alias_v2_multiply_amount('1.03E-4', private.dataset_alias_v2_factor()::text)), false),
     '{processDataSet,processInformation,quantitativeReference,functionalUnitOrOther,#text}', to_jsonb('1.0 hr per unit'::text), false);
-  select 1 + coalesce(sum(jsonb_array_length(coalesce(a->'mutation'->'exchanges', '[]'::jsonb))), 0)
+  select 2 + coalesce(sum(jsonb_array_length(coalesce(a->'mutation'->'exchanges', '[]'::jsonb))), 0)
     into v_occurrences
   from jsonb_array_elements(v_extra_processes) as a;
-  select 2 + coalesce(sum(jsonb_array_length(coalesce(a->'expected_json_ordered' #> '{processDataSet,exchanges,exchange}', '[]'::jsonb))), 0)
+  select 3 + coalesce(sum(jsonb_array_length(coalesce(a->'expected_json_ordered' #> '{processDataSet,exchanges,exchange}', '[]'::jsonb))), 0)
     into v_selected
   from jsonb_array_elements(v_extra_processes) as a;
   return jsonb_build_object(
@@ -238,12 +260,20 @@ begin
           'expected_json_ordered', pg_temp.v2_process(f.process_id, '01.00.000', f.flow_id, '01.00.000', 'Alias flow'),
           'desired_json_ordered', v_desired_process,
           'mutation', jsonb_build_object(
-            'exchanges', jsonb_build_array(jsonb_build_object(
-              'index', 0, 'internal_id', '1', 'flow_id', f.flow_id, 'flow_version', '01.00.000',
-              'direction', 'Output', 'before_amount', '1.03E-4', 'after_amount', '0.00000001175799086757990853')),
+            'exchanges', jsonb_build_array(
+              jsonb_build_object(
+                'index', 0, 'internal_id', '1', 'source_exchange_number', '730045',
+                'flow_id', f.flow_id, 'flow_version', '01.00.000', 'direction', 'Output',
+                'before_amount', '1',
+                'after_amount', private.dataset_alias_v2_multiply_amount('1', private.dataset_alias_v2_factor()::text)),
+              jsonb_build_object(
+                'index', 1, 'internal_id', '2', 'source_exchange_number', '730046',
+                'flow_id', f.flow_id, 'flow_version', '01.00.000', 'direction', 'Input',
+                'before_amount', '1.03E-4',
+                'after_amount', private.dataset_alias_v2_multiply_amount('1.03E-4', private.dataset_alias_v2_factor()::text))),
             'functional_unit', jsonb_build_object(
               'path', 'processDataSet.processInformation.quantitativeReference.functionalUnitOrOther.#text',
-              'before_text', '1.0 a per unit', 'after_text', '1.0 hr per unit', 'source_exchange_number', '1'))))
+              'before_text', '1.0 a per unit', 'after_text', '1.0 hr per unit', 'source_exchange_number', '730045'))))
       || v_extra_processes);
 end
 $$;
@@ -312,9 +342,33 @@ select is(
 -- 1.4 the functional-unit mutation must be the process's own reference-flow exchange, one of its bound
 -- exchanges, and only the reviewed leaf may move
 select is(
-  (pg_temp.v2_call(jsonb_set(pg_temp.v2_batch(), '{actions,1,mutation,functional_unit,source_exchange_number}', '"2"'::jsonb)) ->> 'code'),
-  'ALIAS_V2_TEXT_RULE_VIOLATION',
-  'a functional-unit source exchange that is not the reference-flow exchange is refused'
+  (pg_temp.v2_call(jsonb_set(pg_temp.v2_batch(), '{actions,1,mutation,functional_unit,source_exchange_number}', '"730046"'::jsonb)) ->> 'code')
+    || ' / ' || (pg_temp.v2_call(jsonb_set(pg_temp.v2_batch(), '{actions,1,mutation,functional_unit,source_exchange_number}', '"730046"'::jsonb)) ->> 'message'),
+  'ALIAS_V2_TEXT_RULE_VIOLATION / The functional-unit source exchange number is not the reference exchange''s reviewed source number',
+  'a functional-unit source number that is not the reference exchange''s own source number is refused'
+);
+select is(
+  (pg_temp.v2_call(jsonb_set(pg_temp.v2_batch(), '{actions,1,mutation,functional_unit,source_exchange_number}', '"2"'::jsonb)) ->> 'code')
+    || ' / ' || (pg_temp.v2_call(jsonb_set(pg_temp.v2_batch(), '{actions,1,mutation,functional_unit,source_exchange_number}', '"2"'::jsonb)) ->> 'message'),
+  'ALIAS_V2_TEXT_RULE_VIOLATION / The functional-unit source exchange number is not the reference exchange''s reviewed source number',
+  'a TIDAS internal id used where the original EcoSpold source number belongs is refused'
+);
+select is(
+  (pg_temp.v2_call(jsonb_set(
+    jsonb_set(pg_temp.v2_batch(), '{actions,1,mutation,functional_unit,source_exchange_number}', '"730046"'::jsonb),
+    '{actions,1,mutation,exchanges,0,source_exchange_number}', '"730046"'::jsonb)) ->> 'code')
+    || ' / ' || (pg_temp.v2_call(jsonb_set(
+      jsonb_set(pg_temp.v2_batch(), '{actions,1,mutation,functional_unit,source_exchange_number}', '"730046"'::jsonb),
+      '{actions,1,mutation,exchanges,0,source_exchange_number}', '"730046"'::jsonb)) ->> 'message'),
+  'ALIAS_V2_EVIDENCE_MISMATCH / The reviewed source comment of the reference exchange does not carry the declared source exchange number',
+  'a source number contradicting the stored reviewed source comment is refused'
+);
+select ok(
+  (pg_temp.v2_batch() #>> '{actions,1,mutation,exchanges,0,internal_id}') = '1'
+    and (pg_temp.v2_batch() #>> '{actions,1,mutation,exchanges,0,source_exchange_number}') = '730045'
+    and (pg_temp.v2_batch() #>> '{actions,1,mutation,exchanges,1,internal_id}') = '2'
+    and (pg_temp.v2_batch() #>> '{actions,1,mutation,exchanges,1,source_exchange_number}') = '730046',
+  'the fixture binds TIDAS internal ids and original source numbers as distinct namespaces'
 );
 select is(
   (pg_temp.v2_call(jsonb_set(pg_temp.v2_batch(), '{actions,1,mutation,functional_unit,path}', '"processDataSet.processInformation.dataSetInformation.common:UUID"'::jsonb)) ->> 'code'),
@@ -426,14 +480,81 @@ select is(
       'desired_json_ordered', pg_temp.v2_process((select uncertain_process_id from v2_fixture), '01.00.000', (select uncertain_flow_id from v2_fixture), '01.00.000', 'Alias flow',
         jsonb_build_object('absoluteStandardDeviation95In', '0.1')),
       'mutation', jsonb_build_object('exchanges', jsonb_build_array(jsonb_build_object(
-        'index', 0, 'internal_id', '1', 'flow_id', (select uncertain_flow_id from v2_fixture), 'flow_version', '01.00.000',
-        'direction', 'Output', 'before_amount', '1.03E-4', 'after_amount', '0.00000001175799086757990853'))))))))
+        'index', 0, 'internal_id', '1', 'source_exchange_number', '730001', 'flow_id', (select uncertain_flow_id from v2_fixture), 'flow_version', '01.00.000',
+        'direction', 'Output', 'before_amount', '1', 'after_amount', private.dataset_alias_v2_multiply_amount('1', private.dataset_alias_v2_factor()::text)))))))))
   ) ->> 'code',
   'ALIAS_V2_DERIVE_MISMATCH',
   'a stored absolute uncertainty bound fails the closed exchange key set'
 );
 delete from public.processes where id = (select uncertain_process_id from v2_fixture);
 delete from public.flows where id = (select uncertain_flow_id from v2_fixture);
+
+-- 1.11 a reference exchange whose own source quantity is 5 cannot carry a "1.0 a" functional unit even
+-- though the anchored spelling rule alone would accept the text
+create temp table v2_mismatch_payload as
+  select jsonb_set(jsonb_set(
+      pg_temp.v2_process(mismatch_process_id, '01.00.000', flow_id, '01.00.000', 'Alias flow'),
+      '{processDataSet,exchanges,exchange,0,meanAmount}', '"5"'::jsonb),
+    '{processDataSet,exchanges,exchange,0,resultingAmount}', '"5"'::jsonb) as payload
+  from v2_fixture;
+insert into public.processes (id, version, user_id, state_code, json_ordered, modified_at)
+select mismatch_process_id, '01.00.000', actor, 0, to_json(payload), timestamp '2026-09-21 00:00:00'
+from v2_fixture, v2_mismatch_payload;
+select is(
+  (pg_temp.v2_call(pg_temp.v2_batch(jsonb_build_object('processes', jsonb_build_array(jsonb_build_object(
+    'action_id', 'process-mismatch', 'table', 'processes', 'id', (select mismatch_process_id from v2_fixture), 'version', '01.00.000',
+    'expected_state_code', 0, 'expected_modified_at', '2026-09-21T00:00:00+00:00',
+    'expected_json_ordered', (select payload from v2_mismatch_payload),
+    'desired_json_ordered', jsonb_set(
+      jsonb_set(
+        jsonb_set(
+          jsonb_set(
+            jsonb_set((select payload from v2_mismatch_payload),
+              '{processDataSet,exchanges,exchange,0,meanAmount}', to_jsonb(private.dataset_alias_v2_multiply_amount('5', private.dataset_alias_v2_factor()::text)), false),
+            '{processDataSet,exchanges,exchange,0,resultingAmount}', to_jsonb(private.dataset_alias_v2_multiply_amount('5', private.dataset_alias_v2_factor()::text)), false),
+          '{processDataSet,exchanges,exchange,1,meanAmount}', to_jsonb(private.dataset_alias_v2_multiply_amount('1.03E-4', private.dataset_alias_v2_factor()::text)), false),
+        '{processDataSet,exchanges,exchange,1,resultingAmount}', to_jsonb(private.dataset_alias_v2_multiply_amount('1.03E-4', private.dataset_alias_v2_factor()::text)), false),
+      '{processDataSet,processInformation,quantitativeReference,functionalUnitOrOther,#text}', to_jsonb('1.0 hr per unit'::text), false),
+    'mutation', jsonb_build_object(
+      'exchanges', jsonb_build_array(
+        jsonb_build_object(
+          'index', 0, 'internal_id', '1', 'source_exchange_number', '730048',
+          'flow_id', (select flow_id from v2_fixture), 'flow_version', '01.00.000', 'direction', 'Output',
+          'before_amount', '5',
+          'after_amount', private.dataset_alias_v2_multiply_amount('5', private.dataset_alias_v2_factor()::text)),
+        jsonb_build_object(
+          'index', 1, 'internal_id', '2', 'source_exchange_number', '730046',
+          'flow_id', (select flow_id from v2_fixture), 'flow_version', '01.00.000', 'direction', 'Input',
+          'before_amount', '1.03E-4',
+          'after_amount', private.dataset_alias_v2_multiply_amount('1.03E-4', private.dataset_alias_v2_factor()::text))),
+      'functional_unit', jsonb_build_object(
+        'path', 'processDataSet.processInformation.quantitativeReference.functionalUnitOrOther.#text',
+        'before_text', '1.0 a per unit', 'after_text', '1.0 hr per unit', 'source_exchange_number', '730048'))))))) ->> 'code')
+    || ' / ' ||
+    (pg_temp.v2_call(pg_temp.v2_batch(jsonb_build_object('processes', jsonb_build_array(jsonb_build_object(
+      'action_id', 'process-mismatch', 'table', 'processes', 'id', (select mismatch_process_id from v2_fixture), 'version', '01.00.000',
+      'expected_state_code', 0, 'expected_modified_at', '2026-09-21T00:00:00+00:00',
+      'expected_json_ordered', (select payload from v2_mismatch_payload),
+      'desired_json_ordered', (select payload from v2_mismatch_payload),
+      'mutation', jsonb_build_object(
+        'exchanges', jsonb_build_array(
+          jsonb_build_object(
+            'index', 0, 'internal_id', '1', 'source_exchange_number', '730048',
+            'flow_id', (select flow_id from v2_fixture), 'flow_version', '01.00.000', 'direction', 'Output',
+            'before_amount', '5',
+            'after_amount', private.dataset_alias_v2_multiply_amount('5', private.dataset_alias_v2_factor()::text)),
+          jsonb_build_object(
+            'index', 1, 'internal_id', '2', 'source_exchange_number', '730046',
+            'flow_id', (select flow_id from v2_fixture), 'flow_version', '01.00.000', 'direction', 'Input',
+            'before_amount', '1.03E-4',
+            'after_amount', private.dataset_alias_v2_multiply_amount('1.03E-4', private.dataset_alias_v2_factor()::text))),
+        'functional_unit', jsonb_build_object(
+          'path', 'processDataSet.processInformation.quantitativeReference.functionalUnitOrOther.#text',
+          'before_text', '1.0 a per unit', 'after_text', '1.0 hr per unit', 'source_exchange_number', '730048'))))))) ->> 'message'),
+  'ALIAS_V2_TEXT_RULE_VIOLATION / The functional-unit quantity is not the reference exchange''s reviewed source quantity',
+  'a functional-unit quantity that is not the reference exchange quantity is refused'
+);
+delete from public.processes where id = (select mismatch_process_id from v2_fixture);
 
 -- ================================================================================================
 -- 2. A failure induced inside the write pass must roll back rows and audit alike.
@@ -483,7 +604,7 @@ create temp table v2_first as select pg_temp.v2_call(pg_temp.v2_batch()) as resu
 select is((select result->>'ok' from v2_first), 'true', 'a real small batch applies');
 select is((select result->>'code' from v2_first), 'ALIAS_V2_BATCH_APPLIED', 'the applied code is returned');
 select is((select result#>>'{counts,flow_count}' from v2_first), '1', 'one flow action is counted');
-select is((select result#>>'{counts,exchange_count}' from v2_first), '1', 'one bound exchange occurrence is counted');
+select is((select result#>>'{counts,exchange_count}' from v2_first), '2', 'both bound exchange occurrences are counted');
 select is((select result#>>'{counts,unrelated_exchange_count}' from v2_first), '1', 'the unrelated complement is inside the selected process');
 select is((select result#>>'{counts,fu_text_actions}' from v2_first), '1', 'one functional-unit text action is counted');
 select is(
@@ -523,18 +644,38 @@ select is(
 );
 select is(
   (select json_ordered::jsonb #>> '{processDataSet,exchanges,exchange,0,meanAmount}' from public.processes where id = (select process_id from v2_fixture)),
-  '0.00000001175799086757990853',
-  'the bound exchange meanAmount moved by the fixed factor'
+  '0.00011415525114155251',
+  'the reference output exchange (internal id 1, source 730045, quantity 1) moved by the fixed factor'
 );
 select is(
   (select json_ordered::jsonb #>> '{processDataSet,exchanges,exchange,0,resultingAmount}' from public.processes where id = (select process_id from v2_fixture)),
-  '0.00000001175799086757990853',
-  'the bound exchange resultingAmount moved by the fixed factor'
+  '0.00011415525114155251',
+  'the reference output resultingAmount moved by the fixed factor'
 );
 select is(
   (select json_ordered::jsonb #>> '{processDataSet,exchanges,exchange,1,meanAmount}' from public.processes where id = (select process_id from v2_fixture)),
+  '0.00000001175799086757990853',
+  'the bound input exchange (internal id 2, source 730046) moved by the fixed factor'
+);
+select is(
+  (select json_ordered::jsonb #>> '{processDataSet,exchanges,exchange,2,meanAmount}' from public.processes where id = (select process_id from v2_fixture)),
   '5',
   'the unrelated exchange amount is untouched'
+);
+select is(
+  (select json_ordered::jsonb #>> '{processDataSet,exchanges,exchange,0,generalComment}' from public.processes where id = (select process_id from v2_fixture)),
+  'Reviewed source exchange 730045 (EcoSpold).',
+  'the reviewed source tuple of the reference output survives the amount move'
+);
+select is(
+  (select json_ordered::jsonb #>> '{processDataSet,exchanges,exchange,1,generalComment}' from public.processes where id = (select process_id from v2_fixture)),
+  'Reviewed source exchange 730046 (EcoSpold).',
+  'the second source tuple survives independently of the first'
+);
+select is(
+  (select json_ordered::jsonb #>> '{processDataSet,processInformation,quantitativeReference,referenceToReferenceFlow}' from public.processes where id = (select process_id from v2_fixture)),
+  '1',
+  'the TIDAS internal reference-flow pointer never moves'
 );
 select is(
   (select json_ordered::jsonb #>> '{processDataSet,processInformation,quantitativeReference,functionalUnitOrOther,#text}' from public.processes where id = (select process_id from v2_fixture)),

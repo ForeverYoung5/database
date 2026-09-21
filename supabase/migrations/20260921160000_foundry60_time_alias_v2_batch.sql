@@ -29,11 +29,18 @@
 -- Process-shaped name path, never invented) and whose `@type`/`@uri` convention comes from the frozen
 -- before reference with the target id/version substituted. The claimed canonical reference must equal it.
 -- Processes move only the reviewed amount leaves of the named exchange instances (original stored literal,
--- exact numeric) and, for the affected reference processes, the exact functional-unit text leaf — bound to
--- this process's own reference-flow exchange and to one of the alias exchanges this action carries. The
--- internal pointer `flowInformation.quantitativeReference.referenceToReferenceFlowProperty` never moves, and
--- no arbitrary dotted path may target other text. The stored exchange key set is closed, so an absolute
--- uncertainty bound fails closed instead of being scaled.
+-- exact numeric) and, for the affected reference processes, the exact functional-unit text leaf. Source
+-- numbers are their own namespace: `mutation.exchanges[].source_exchange_number` and the functional unit's
+-- `source_exchange_number` are the original EcoSpold numbers (for example 730045), while
+-- `@dataSetInternalID` and `quantitativeReference.referenceToReferenceFlow` are TIDAS internal ids ("1").
+-- The reference exchange is therefore bound by the TIDAS internal id first; the original source number then
+-- binds the functional unit to that exchange's reviewed source tuple, whose stored `generalComment` must
+-- name the same number when it exists; and the reviewed leading quantity must equal that exchange's own
+-- stored source quantity, so a functional unit can never move over a physically different amount. The
+-- internal pointers `flowInformation.quantitativeReference.referenceToReferenceFlowProperty` and
+-- `quantitativeReference.referenceToReferenceFlow` never move, and no arbitrary dotted path may target other
+-- text. The stored exchange key set is closed, so an absolute uncertainty bound fails closed instead of
+-- being scaled.
 
 create or replace function private.dataset_alias_v2_error(p_code text, p_status integer, p_message text, p_details jsonb default '{}'::jsonb)
 returns text
@@ -465,11 +472,12 @@ begin
           if jsonb_typeof(v_entry) <> 'object'
             or exists (
               select 1 from jsonb_object_keys(v_entry) as key(name)
-              where key.name <> all (array['index', 'internal_id', 'flow_id', 'flow_version', 'direction',
-                'before_amount', 'after_amount'])
+              where key.name <> all (array['index', 'internal_id', 'source_exchange_number', 'flow_id',
+                'flow_version', 'direction', 'before_amount', 'after_amount'])
             )
-            or (v_entry->>'index') !~ '^[0-9]+$'
+            or coalesce(v_entry->>'index', '') !~ '^[0-9]+$'
             or coalesce(v_entry->>'internal_id', '') = ''
+            or coalesce(v_entry->>'source_exchange_number', '') !~ '^[0-9]{1,18}$'
             or coalesce(v_entry->>'flow_id', '') = ''
             or coalesce(v_entry->>'flow_version', '') = ''
             or coalesce(v_entry->>'direction', '') = ''
@@ -480,7 +488,7 @@ begin
               where claimed->>'id' = v_entry->>'flow_id' and claimed->>'version' = v_entry->>'flow_version'
             ) then
             perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
-              'Every exchange instance must carry exactly the reviewed keys and name a claimed alias flow',
+              'Every exchange instance must carry exactly the reviewed keys — including the original EcoSpold source exchange number, which is a different namespace from the TIDAS internal id — and name a claimed alias flow',
               jsonb_build_object('action_id', v_action->>'action_id'));
           end if;
         end loop;
@@ -488,22 +496,59 @@ begin
           declare
             v_fu jsonb := v_action->'mutation'->'functional_unit';
             v_fu_source text := v_fu->>'source_exchange_number';
-            v_ref_exchange text := v_action->'expected_json_ordered' #>> '{processDataSet,processInformation,quantitativeReference,referenceToReferenceFlow}';
+            v_fu_quantity text;
+            v_reference_internal text := v_action->'expected_json_ordered' #>> '{processDataSet,processInformation,quantitativeReference,referenceToReferenceFlow}';
+            v_reference_entry jsonb;
+            v_stored_comment text;
           begin
             if jsonb_typeof(v_fu) <> 'object'
               or exists (
                 select 1 from jsonb_object_keys(v_fu) as key(name)
                 where key.name <> all (array['path', 'before_text', 'after_text', 'source_exchange_number'])
               )
-              or coalesce(v_fu_source, '') = ''
-              or coalesce(v_ref_exchange, '') = ''
-              or v_fu_source is distinct from v_ref_exchange
-              or not exists (
-                select 1 from jsonb_array_elements(v_action->'mutation'->'exchanges') as entry
-                where entry->>'internal_id' = v_fu_source
-              ) then
+              or coalesce(v_fu_source, '') !~ '^[0-9]{1,18}$'
+              or coalesce(v_reference_internal, '') = '' then
               perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_RULE_VIOLATION', 400,
-                'A functional-unit mutation must be the reference-flow exchange of this process and one of its bound alias exchanges',
+                'The functional-unit block carries exactly the reviewed keys: path, before and after text and the original source exchange number',
+                jsonb_build_object('action_id', v_action->>'action_id'));
+            end if;
+            -- Step 1: the process reference exchange is bound by its TIDAS internal id — the frozen internal
+            -- pointer — never by the original EcoSpold number, which is a different namespace.
+            select entry into v_reference_entry
+            from jsonb_array_elements(v_action->'mutation'->'exchanges') as entry
+            where entry->>'internal_id' = v_reference_internal;
+            if v_reference_entry is null then
+              perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_RULE_VIOLATION', 400,
+                'The functional-unit process reference exchange (TIDAS internal id) is not among the bound alias exchanges',
+                jsonb_build_object('action_id', v_action->>'action_id'));
+            end if;
+            -- Step 2: the original source number binds the functional unit to that exchange's reviewed
+            -- source tuple.
+            if (v_reference_entry->>'source_exchange_number') is distinct from v_fu_source then
+              perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_RULE_VIOLATION', 400,
+                'The functional-unit source exchange number is not the reference exchange''s reviewed source number',
+                jsonb_build_object('action_id', v_action->>'action_id'));
+            end if;
+            -- Step 3: the reviewed leading quantity must be that exchange's own source quantity, so a
+            -- functional unit can never be moved over a physically different amount.
+            v_fu_quantity := substring(v_fu->>'before_text' from '^[0-9.]+');
+            if v_fu_quantity is null
+              or not private.dataset_alias_v2_amount_grammar_ok(v_fu_quantity)
+              or not private.dataset_alias_v2_amount_grammar_ok(v_reference_entry->>'before_amount')
+              or (v_fu_quantity)::numeric is distinct from (v_reference_entry->>'before_amount')::numeric then
+              perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_RULE_VIOLATION', 400,
+                'The functional-unit quantity is not the reference exchange''s reviewed source quantity',
+                jsonb_build_object('action_id', v_action->>'action_id'));
+            end if;
+            -- Step 4: when the stored reference exchange carries the reviewed source comment, it must name
+            -- the same source tuple; a claim contradicting the stored source row fails closed.
+            select stored_exchange.value->>'generalComment' into v_stored_comment
+            from jsonb_array_elements(coalesce(v_action->'expected_json_ordered' #> '{processDataSet,exchanges,exchange}', '[]'::jsonb)) as stored_exchange
+            where stored_exchange.value->>'@dataSetInternalID' = v_reference_internal;
+            if v_stored_comment is not null
+              and v_stored_comment !~ ('(^|[^0-9])' || v_fu_source || '([^0-9]|$)') then
+              perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
+                'The reviewed source comment of the reference exchange does not carry the declared source exchange number',
                 jsonb_build_object('action_id', v_action->>'action_id'));
             end if;
           end;
