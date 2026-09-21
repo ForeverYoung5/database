@@ -75,6 +75,7 @@ jobs:
           supabase test db supabase/tests/20260921_foundry60_time_alias_v2_batch.sql
           supabase test db supabase/tests/20260922_foundry60_time_alias_v2_protected.sql
           supabase test db supabase/tests/20260923_foundry60_time_alias_v2_rollback.sql
+          supabase test db supabase/tests/20260924_foundry60_time_alias_v2_terminal.sql
           supabase test db supabase/tests/20260915_result_process_state_120.sql
           supabase test db supabase/tests/20260915_result_process_lifecycle_protection.sql
           supabase test db supabase/tests/20260915_result_process_product_read_isolation.sql

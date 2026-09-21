@@ -414,6 +414,7 @@ def main() -> int:
         "supabase test db supabase/tests/20260921_foundry60_time_alias_v2_batch.sql",
         "supabase test db supabase/tests/20260922_foundry60_time_alias_v2_protected.sql",
         "supabase test db supabase/tests/20260923_foundry60_time_alias_v2_rollback.sql",
+        "supabase test db supabase/tests/20260924_foundry60_time_alias_v2_terminal.sql",
         "supabase test db supabase/tests/20260919_portal_navigation_v1.sql",
         "supabase test db supabase/tests/20260919_portal_catalog_summary_bounded.sql",
         '"public", "api", "graphql_public"',

@@ -26,6 +26,7 @@ declare
   v_terminal_update_count integer := 0;
   v_terminal_update_status text;
   v_batch_proof jsonb;
+  v_terminal_proof jsonb;
   v_category text;
   v_now timestamp with time zone := pg_catalog.clock_timestamp();
 begin
@@ -441,12 +442,26 @@ begin
     v_category := 'failed';
   end if;
 
+  -- The strict terminal proof exists only for a genuinely successful execution whose live primary
+  -- closure AND every derivative child causal terminal proof still pass on this read. Everything else —
+  -- pending, failed, indeterminate or drifted — reports null, never a fabricated observation.
+  if v_category = 'passed'
+    and v_request.status = 'completed'
+    and v_primary_closure_ok
+    and v_batch_proof is not null
+    and v_batch_proof->>'status' = 'completed'
+    and coalesce((v_batch_proof->>'causal_terminal_proof')::boolean, false) is true
+    and coalesce((v_batch_proof->>'membership_exact')::boolean, false) is true then
+    v_terminal_proof := util.read_dataset_alias_execution_v2_terminal_proof(v_actor, v_preflight.plan);
+  end if;
+
   return jsonb_build_object(
     'ok', true,
     'command', 'cmd_dataset_alias_execution_read_v2',
     'schema_version', 'dataset-alias-execution-status.v2',
     'request_id', p_request_id,
     'status', v_category,
+    'terminal_proof', v_terminal_proof,
     'execution_status', v_request.status,
     'retry_allowed', false,
     'actor_user_id', v_actor,

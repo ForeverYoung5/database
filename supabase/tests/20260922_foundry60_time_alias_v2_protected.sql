@@ -22,7 +22,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth, private;
 
-select plan(67);
+select plan(68);
 
 -- ------------------------------------------------------------------------------------------------
 -- Fixture: the CLI's own before images, seeded exactly as emitted (the generated block also clears
@@ -404,6 +404,11 @@ select is(
 create temp table v2_read as
   select api.cmd_dataset_alias_execution_read_v2('fcfbc113-8d7e-575c-a7f3-ba5abfbf2265'::uuid) as result;
 
+select is(
+  (select result->'terminal_proof' is not distinct from 'null'::jsonb from v2_read),
+  true,
+  'a pending execution carries a null terminal proof (never a fabricated observation)'
+);
 select is((select result->>'ok' from v2_read), 'true', 'the terminal read succeeds');
 select is((select result->>'status' from v2_read), 'pending', 'the read reports the derivative closure as pending, never a completed run');
 select is((select result->>'execution_status' from v2_read), 'derivatives_pending', 'the execution status is the committed primary');
