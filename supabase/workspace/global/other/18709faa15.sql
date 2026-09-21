@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "private"."dataset_alias_v2_derivative_target_ok"("p_target" "jsonb") IS 'Six-key derivative target row (table,id,version,user_id,state_code,baseline_snapshot_sha256) as the existing derivative snapshot owner emits it.';

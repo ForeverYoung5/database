@@ -669,6 +669,714 @@ COMMENT ON FUNCTION "api"."cmd_dataset_alias_execution_admit_guarded"("p_request
 
 
 
+CREATE OR REPLACE FUNCTION "api"."cmd_dataset_alias_execution_admit_v2_guarded"("p_request" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    SET "lock_timeout" TO '5s'
+    SET "statement_timeout" TO '10s'
+    AS $_$
+declare
+  v_actor uuid := auth.uid();
+  v_schema_version constant text := 'dataset-alias-execution-admit.v2';
+  v_request_id uuid;
+  v_preflight util.dataset_alias_execution_v2_preflights%rowtype;
+  v_token text;
+  v_gate_results jsonb;
+  v_gate jsonb;
+  v_gate_receipt util.dataset_alias_execution_v2_gate_receipts%rowtype;
+  v_gate_name text;
+  v_expectation_name text;
+  v_captured_at timestamp with time zone;
+  v_now timestamp with time zone;
+  v_gate_results_sha256 text;
+  v_admission_request_sha256 text;
+  v_nonce text;
+  v_nonce_sha256 text;
+  v_service_key text;
+  v_net_request_id bigint;
+  v_dispatch_error jsonb;
+begin
+  if v_actor is null then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'AUTH_REQUIRED',
+      'status', 401,
+      'message', 'Authentication required'
+    );
+  end if;
+
+  if p_request is not null and pg_column_size(p_request) > 65536 then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_ADMISSION_TOO_LARGE',
+      'status', 413,
+      'message', 'Protected admission request exceeds 64 KiB'
+    );
+  end if;
+
+  if jsonb_typeof(p_request) is distinct from 'object'
+    or not (p_request ?& array[
+      'schema_version',
+      'request_id',
+      'preflight_token',
+      'preflight_proof_sha256',
+      'gate_results'
+    ])
+    or exists (
+      select 1
+      from jsonb_object_keys(p_request) as request_key(key)
+      where request_key.key <> all (array[
+        'schema_version',
+        'request_id',
+        'preflight_token',
+        'preflight_proof_sha256',
+        'gate_results'
+      ])
+    )
+    or p_request->>'schema_version' is distinct from v_schema_version
+    or jsonb_typeof(p_request->'request_id') is distinct from 'string'
+    or (p_request->>'request_id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    or jsonb_typeof(p_request->'preflight_token') is distinct from 'string'
+    or (p_request->>'preflight_token') !~ '^[a-f0-9]{64}$'
+    or jsonb_typeof(p_request->'preflight_proof_sha256') is distinct from 'string'
+    or (p_request->>'preflight_proof_sha256') !~ '^[a-f0-9]{64}$'
+    or jsonb_typeof(p_request->'gate_results') is distinct from 'object' then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_ADMISSION_INVALID_REQUEST',
+      'status', 400,
+      'message', 'Admission request must match dataset-alias-execution-admit.v1 exactly'
+    );
+  end if;
+
+  v_request_id := (p_request->>'request_id')::uuid;
+  v_token := p_request->>'preflight_token';
+  v_gate_results := p_request->'gate_results';
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(v_actor::text || ':' || v_request_id::text, 0)
+  );
+
+  select preflight.*
+  into v_preflight
+  from util.dataset_alias_execution_v2_preflights as preflight
+  where preflight.id = v_request_id
+    and preflight.actor_user_id = v_actor
+  for update;
+
+  if v_preflight.id is null then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_NOT_FOUND',
+      'status', 404,
+      'message', 'No actor-owned protected preflight exists for this request ID'
+    );
+  end if;
+
+  v_now := pg_catalog.clock_timestamp();
+
+  if v_preflight.consumed_at is not null
+    or exists (
+      select 1
+      from util.dataset_alias_execution_v2_requests as request
+      where request.id = v_request_id
+    ) then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_ATTEMPT_ALREADY_CONSUMED',
+      'status', 409,
+      'message', 'The protected attempt was already consumed; use status/readback only'
+    );
+  end if;
+
+  if v_now > v_preflight.expires_at then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_EXPIRED',
+      'status', 409,
+      'message', 'The 180-second server preflight window expired before admission'
+    );
+  end if;
+
+  if util.dataset_alias_execution_v2_sha256(v_token)
+      is distinct from v_preflight.token_sha256
+    or p_request->>'preflight_proof_sha256'
+      is distinct from v_preflight.preflight_proof_sha256 then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_PROOF_MISMATCH',
+      'status', 409,
+      'message', 'Preflight token or proof does not match the durable server record'
+    );
+  end if;
+
+  if not (v_gate_results ?& array[
+      'primary_support_plan',
+      'execution_unused',
+      'derivative_quiescence'
+    ])
+    or exists (
+      select 1
+      from jsonb_object_keys(v_gate_results) as gate_key(key)
+      where gate_key.key <> all (array[
+        'primary_support_plan',
+        'execution_unused',
+        'derivative_quiescence'
+      ])
+    ) then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_GATE_SET_MISMATCH',
+      'status', 400,
+      'message', 'Exactly three protected gate results are required'
+    );
+  end if;
+
+  for v_gate_name, v_expectation_name in
+    select *
+    from (values
+      ('primary_support_plan'::text, 'primary_support_plan_sha256'::text),
+      ('execution_unused'::text, 'execution_unused_sha256'::text),
+      ('derivative_quiescence'::text, 'derivative_quiescence_sha256'::text)
+    ) as gate_map(gate_name, expectation_name)
+  loop
+    v_gate := v_gate_results->v_gate_name;
+    v_gate_receipt := null;
+
+    select receipt.*
+    into v_gate_receipt
+    from util.dataset_alias_execution_v2_gate_receipts as receipt
+    where receipt.preflight_id = v_request_id
+      and receipt.actor_user_id = v_actor
+      and receipt.gate_name = v_gate_name;
+
+    if jsonb_typeof(v_gate) is distinct from 'object'
+      or not (v_gate ?& array[
+        'expected_sha256',
+        'observed_sha256',
+        'status',
+        'captured_at'
+      ])
+      or exists (
+        select 1
+        from jsonb_object_keys(v_gate) as gate_field(key)
+        where gate_field.key <> all (array[
+          'expected_sha256',
+          'observed_sha256',
+          'status',
+          'captured_at'
+        ])
+      )
+      or v_gate_receipt.preflight_id is null
+      or v_gate->>'expected_sha256'
+        is distinct from v_gate_receipt.expected_sha256
+      or v_gate->>'observed_sha256'
+        is distinct from v_gate_receipt.observed_sha256
+      or v_gate->>'status' is distinct from v_gate_receipt.status
+      or v_gate_receipt.expected_sha256
+        is distinct from v_preflight.gate_expectations->>v_expectation_name
+      or jsonb_typeof(v_gate->'captured_at') is distinct from 'string' then
+      return jsonb_build_object(
+        'ok', false,
+        'code', 'ALIAS_EXECUTION_GATE_FAILED',
+        'status', 409,
+        'message', 'A protected gate is missing, failed, or bound to the wrong digest',
+        'gate', v_gate_name
+      );
+    end if;
+
+    begin
+      v_captured_at := (v_gate->>'captured_at')::timestamp with time zone;
+    exception
+      when others then
+        return jsonb_build_object(
+          'ok', false,
+          'code', 'ALIAS_EXECUTION_GATE_TIMESTAMP_INVALID',
+          'status', 400,
+          'message', 'A protected gate timestamp is invalid',
+          'gate', v_gate_name
+        );
+    end;
+
+    if v_captured_at is distinct from v_gate_receipt.captured_at
+      or v_captured_at < v_preflight.completed_at
+      or v_captured_at > v_now + interval '5 seconds'
+      or v_captured_at > v_preflight.expires_at then
+      return jsonb_build_object(
+        'ok', false,
+        'code', 'ALIAS_EXECUTION_GATE_OUTSIDE_WINDOW',
+        'status', 409,
+        'message', 'All gate evidence must be captured inside the server preflight window',
+        'gate', v_gate_name
+      );
+    end if;
+  end loop;
+
+  if pg_catalog.clock_timestamp() > v_preflight.expires_at then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_EXPIRED',
+      'status', 409,
+      'message', 'The 180-second server preflight window expired during admission validation'
+    );
+  end if;
+
+  v_gate_results_sha256 :=
+    util.dataset_alias_execution_v2_sha256(v_gate_results::text);
+  v_admission_request_sha256 :=
+    util.dataset_alias_execution_v2_sha256(p_request::text);
+  v_nonce := pg_catalog.encode(extensions.gen_random_bytes(32), 'hex');
+  v_nonce_sha256 := util.dataset_alias_execution_v2_sha256(v_nonce);
+
+  insert into util.dataset_alias_execution_v2_requests (
+    id,
+    actor_user_id,
+    plan_sha256,
+    operation_id,
+    plan_request_sha256,
+    freeze_sha256,
+    approval_identity_sha256,
+    approval_text_sha256,
+    derivative_target_set_sha256,
+    preflight_proof_sha256,
+    admission_request_sha256,
+    gate_results,
+    gate_results_sha256,
+    nonce_sha256,
+    attempt_count,
+    dispatch_count,
+    status,
+    admitted_at
+  ) values (
+    v_request_id,
+    v_actor,
+    v_preflight.plan_sha256,
+    v_preflight.operation_id,
+    v_preflight.plan_request_sha256,
+    v_preflight.bindings->>'freeze_sha256',
+    v_preflight.bindings->>'approval_identity_sha256',
+    v_preflight.bindings->>'approval_text_sha256',
+    v_preflight.bindings->>'derivative_target_set_sha256',
+    v_preflight.preflight_proof_sha256,
+    v_admission_request_sha256,
+    v_gate_results,
+    v_gate_results_sha256,
+    v_nonce_sha256,
+    1,
+    0,
+    'dispatching',
+    v_now
+  );
+
+  update util.dataset_alias_execution_v2_preflights
+  set consumed_at = v_now
+  where id = v_request_id;
+
+  begin
+    v_service_key := util.project_secret_key();
+    v_net_request_id := net.http_post(
+      url => util.project_url()
+        || '/rest/v1/rpc/cmd_dataset_alias_execution_execute_v2',
+      headers => jsonb_build_object(
+        'Content-Type', 'application/json',
+        'Authorization', 'Bearer ' || v_service_key,
+        'apikey', v_service_key
+      ),
+      body => jsonb_build_object(
+        'p_request_id', v_request_id,
+        'p_nonce', v_nonce
+      ),
+      timeout_milliseconds => 70000
+    );
+
+    if v_net_request_id is null then
+      raise exception using
+        errcode = 'P0001',
+        message = 'pg_net returned no request ID';
+    end if;
+
+    update util.dataset_alias_execution_v2_requests
+    set
+      dispatch_count = 1,
+      net_request_id = v_net_request_id,
+      status = 'dispatched',
+      dispatched_at = pg_catalog.clock_timestamp(),
+      updated_at = pg_catalog.clock_timestamp()
+    where id = v_request_id;
+  exception
+    when others then
+      v_dispatch_error := jsonb_build_object(
+        'phase', 'dispatch',
+        'code', 'ALIAS_EXECUTION_DISPATCH_FAILED',
+        'sqlstate', sqlstate,
+        'message', sqlerrm
+      );
+
+      update util.dataset_alias_execution_v2_requests
+      set
+        status = 'failed',
+        terminal_at = pg_catalog.clock_timestamp(),
+        last_error = v_dispatch_error,
+        updated_at = pg_catalog.clock_timestamp()
+      where id = v_request_id;
+  end;
+
+  if v_dispatch_error is not null then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_DISPATCH_FAILED',
+      'status', 'failed',
+      'request_id', v_request_id,
+      'attempt_count', 1,
+      'dispatch_count', 0,
+      'attempt_consumed', true,
+      'retry_allowed', false,
+      'preflight_proof_sha256', v_preflight.preflight_proof_sha256,
+      'admission_request_sha256', v_admission_request_sha256,
+      'gate_results_sha256', v_gate_results_sha256
+    );
+  end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'command', 'cmd_dataset_alias_execution_admit_v2_guarded',
+    'schema_version', v_schema_version,
+    'request_id', v_request_id,
+    'plan_sha256', v_preflight.plan_sha256,
+    'operation_id', v_preflight.operation_id,
+    'plan_request_sha256', v_preflight.plan_request_sha256,
+    'preflight_proof_sha256', v_preflight.preflight_proof_sha256,
+    'admission_request_sha256', v_admission_request_sha256,
+    'gate_results_sha256', v_gate_results_sha256,
+    'attempt_count', 1,
+    'dispatch_count', 1,
+    'net_request_id', v_net_request_id::text,
+    'status', 'dispatched',
+    'attempt_consumed', true,
+    'retry_allowed', false
+  );
+exception
+  when lock_not_available then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_ADMISSION_LOCK_BUSY',
+      'status', 409,
+      'message', 'Protected admission could not acquire its bounded lock'
+    );
+  when unique_violation then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_ATTEMPT_ALREADY_CONSUMED',
+      'status', 409,
+      'message', 'The request or sealed approval identity already consumed its only attempt'
+    );
+end;
+$_$;
+
+
+ALTER FUNCTION "api"."cmd_dataset_alias_execution_admit_v2_guarded"("p_request" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "api"."cmd_dataset_alias_execution_admit_v2_guarded"("p_request" "jsonb") IS 'Consumes one actor-owned unexpired preflight token, binds three passed gate digests, persists attempt_count=1, and enqueues at most one service executor request. Repeated admission is rejected and status/readback never redispatches.';
+
+
+
+CREATE OR REPLACE FUNCTION "api"."cmd_dataset_alias_execution_execute_v2"("p_request_id" "uuid", "p_nonce" "text") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    SET "lock_timeout" TO '5s'
+    SET "statement_timeout" TO '60s'
+    AS $_$
+declare
+  v_request util.dataset_alias_execution_v2_requests%rowtype;
+  v_preflight util.dataset_alias_execution_v2_preflights%rowtype;
+  v_alias_result jsonb;
+  v_primary_closure jsonb;
+  v_batch_result jsonb;
+  v_alias_audit_count integer;
+  v_failure jsonb;
+  v_committed_at timestamp with time zone;
+begin
+  if not coalesce(util.is_service_request(), false) then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'SERVICE_ROLE_REQUIRED',
+      'status', 403,
+      'message', 'Service role is required'
+    );
+  end if;
+
+  if p_request_id is null
+    or p_nonce is null
+    or p_nonce !~ '^[a-f0-9]{64}$' then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_INVALID_SERVICE_REQUEST',
+      'status', 400,
+      'message', 'Exact request ID and executor nonce are required'
+    );
+  end if;
+
+  select request.*
+  into v_request
+  from util.dataset_alias_execution_v2_requests as request
+  where request.id = p_request_id
+  for update;
+
+  if v_request.id is null then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_REQUEST_NOT_FOUND',
+      'status', 404,
+      'message', 'Protected execution request not found'
+    );
+  end if;
+
+  if util.dataset_alias_execution_v2_sha256(p_nonce)
+      is distinct from v_request.nonce_sha256 then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_NONCE_MISMATCH',
+      'status', 403,
+      'message', 'Executor nonce does not match the admitted request'
+    );
+  end if;
+
+  if v_request.status is distinct from 'dispatched'
+    or v_request.dispatch_count <> 1 then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_ALREADY_STARTED',
+      'status', 409,
+      'message', 'The one-shot executor may start only once',
+      'request_status', v_request.status,
+      'retry_allowed', false
+    );
+  end if;
+
+  select preflight.*
+  into v_preflight
+  from util.dataset_alias_execution_v2_preflights as preflight
+  where preflight.id = p_request_id
+    and preflight.actor_user_id = v_request.actor_user_id;
+
+  if v_preflight.id is null
+    or v_preflight.consumed_at is null
+    or v_preflight.preflight_proof_sha256
+      is distinct from v_request.preflight_proof_sha256 then
+    update util.dataset_alias_execution_v2_requests
+    set
+      status = 'indeterminate',
+      terminal_at = pg_catalog.clock_timestamp(),
+      last_error = jsonb_build_object(
+        'phase', 'executor_precondition',
+        'code', 'ALIAS_EXECUTION_PREFLIGHT_LEDGER_MISMATCH'
+      ),
+      updated_at = pg_catalog.clock_timestamp()
+    where id = p_request_id;
+
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_LEDGER_MISMATCH',
+      'status', 'indeterminate',
+      'retry_allowed', false
+    );
+  end if;
+
+  update util.dataset_alias_execution_v2_requests
+  set
+    status = 'running',
+    started_at = pg_catalog.clock_timestamp(),
+    updated_at = pg_catalog.clock_timestamp()
+  where id = p_request_id;
+
+  -- The service request remains authenticated by its secret headers.  Only
+  -- auth.uid()/auth.email() are rebound so the existing owner-draft alias
+  -- validators execute against the originally admitted actor.
+  perform pg_catalog.set_config(
+    'request.jwt.claim.sub',
+    v_request.actor_user_id::text,
+    true
+  );
+  perform pg_catalog.set_config(
+    'request.jwt.claim.email',
+    v_preflight.actor_email,
+    true
+  );
+
+  begin
+    v_alias_result := private.cmd_dataset_alias_plan_v2_guarded(v_preflight.plan);
+
+    if coalesce((v_alias_result->>'ok')::boolean, false) is not true
+      or coalesce((v_alias_result->>'idempotent_replay')::boolean, true)
+      or v_alias_result->>'plan_sha256' is distinct from v_request.plan_sha256
+      or v_alias_result->>'operation_id' is distinct from v_request.operation_id
+      or v_alias_result->>'plan_request_sha256'
+        is distinct from v_request.plan_request_sha256
+      or (v_alias_result #>> '{counts,action_count}') is distinct from (v_preflight.plan #>> '{expected,action_count}')
+      or (v_alias_result #>> '{counts,exchange_count}') is distinct from (v_preflight.plan #>> '{expected,exchange_count}') then
+      v_failure := jsonb_build_object(
+        'phase', 'alias',
+        'code', 'ALIAS_EXECUTION_PRIMARY_REJECTED',
+        'result', coalesce(v_alias_result, '{}'::jsonb)
+      );
+      raise exception using
+        errcode = 'P0001',
+        message = 'Protected primary alias execution rejected';
+    end if;
+
+    -- The audit topology is the one the plan declared and the plan executor already verified: one row
+    -- audit per action, one summary per batch and the whole-plan summary. The ledger is counted here,
+    -- never trusted from the executor's response.
+    select count(*)
+    into v_alias_audit_count
+    from private.command_audit_log as audit
+    where audit.actor_user_id = v_request.actor_user_id
+      and audit.payload->>'plan_sha256' = v_request.plan_sha256
+      and (
+        (
+          audit.command = 'cmd_dataset_alias_batch_v2_guarded'
+          and audit.payload->>'record_type' in ('row', 'plan')
+        )
+        or (
+          audit.command = 'cmd_dataset_alias_plan_v2_guarded'
+          and audit.payload->>'record_type' = 'plan_summary'
+        )
+      );
+
+    if v_alias_audit_count is distinct from
+      (v_preflight.plan #>> '{expected,audit_count}')::bigint then
+      v_failure := jsonb_build_object(
+        'phase', 'alias_audit',
+        'code', 'ALIAS_EXECUTION_AUDIT_COUNT_MISMATCH',
+        'expected', (v_preflight.plan #>> '{expected,audit_count}')::bigint,
+        'observed', v_alias_audit_count
+      );
+      raise exception using
+        errcode = 'P0001',
+        message = 'Protected alias audit set is incomplete';
+    end if;
+
+    v_primary_closure :=
+      util.read_dataset_alias_execution_v2_primary_closure(
+        v_request.actor_user_id,
+        v_preflight.plan
+      );
+
+    if coalesce(
+        (v_primary_closure->>'live_closure_proof')::boolean,
+        false
+      ) is not true
+      or v_primary_closure->>'row_count' is distinct from (v_preflight.plan #>> '{expected,action_count}')
+      or v_primary_closure->>'exchange_count' is distinct from (v_preflight.plan #>> '{expected,exchange_count}')
+      or v_primary_closure->>'invalid_action_count' is distinct from '0' then
+      v_failure := jsonb_build_object(
+        'phase', 'primary_closure',
+        'code', 'ALIAS_EXECUTION_PRIMARY_CLOSURE_MISMATCH',
+        'proof', coalesce(v_primary_closure, '{}'::jsonb)
+      );
+      raise exception using
+        errcode = 'P0001',
+        message = 'Protected primary/support live closure is incomplete';
+    end if;
+
+    v_batch_result := util.admit_dataset_derivative_rebuild_batch(
+      v_request.actor_user_id,
+      v_request.id,
+      v_request.plan_sha256,
+      v_request.operation_id,
+      'PROTECTED_ALIAS_DERIVATIVE_CLOSURE',
+      v_preflight.derivative_targets
+    );
+
+    if coalesce((v_batch_result->>'ok')::boolean, false) is not true
+      or (v_batch_result->>'target_count')::integer is distinct from
+        (v_preflight.plan #>> '{expected,derivative_target_count}')::integer
+      or coalesce(v_batch_result->>'flow_count', v_batch_result->>'flows')::integer is distinct from
+        (select count(*) from jsonb_array_elements(v_preflight.derivative_targets) as target where target->>'table' = 'flows')
+      or coalesce(v_batch_result->>'process_count', v_batch_result->>'processes')::integer is distinct from
+        (select count(*) from jsonb_array_elements(v_preflight.derivative_targets) as target where target->>'table' = 'processes') then
+      v_failure := jsonb_build_object(
+        'phase', 'derivative_batch',
+        'code', 'ALIAS_EXECUTION_DERIVATIVE_ADMISSION_MISMATCH',
+        'result', coalesce(v_batch_result, '{}'::jsonb)
+      );
+      raise exception using
+        errcode = 'P0001',
+        message = 'Protected derivative batch admission rejected';
+    end if;
+
+    v_committed_at := pg_catalog.clock_timestamp();
+
+    update util.dataset_alias_execution_v2_requests
+    set
+      status = 'derivatives_pending',
+      primary_committed_at = v_committed_at,
+      alias_result = v_alias_result || jsonb_build_object(
+        'primary_closure', v_primary_closure
+      ),
+      derivative_admission = v_batch_result,
+      updated_at = v_committed_at
+    where id = p_request_id;
+  exception
+    when others then
+      if v_failure is null then
+        v_failure := jsonb_build_object(
+          'phase', 'executor',
+          'code', 'ALIAS_EXECUTION_TRANSACTION_FAILED',
+          'sqlstate', sqlstate,
+          'message', sqlerrm
+        );
+      end if;
+  end;
+
+  if v_failure is not null then
+    update util.dataset_alias_execution_v2_requests
+    set
+      status = 'failed',
+      terminal_at = pg_catalog.clock_timestamp(),
+      last_error = v_failure,
+      updated_at = pg_catalog.clock_timestamp()
+    where id = p_request_id;
+
+    return jsonb_build_object(
+      'ok', false,
+      'command', 'cmd_dataset_alias_execution_execute_v2',
+      'request_id', p_request_id,
+      'status', 'failed',
+      'primary_rolled_back', true,
+      'retry_allowed', false,
+      'error', v_failure
+    );
+  end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'command', 'cmd_dataset_alias_execution_execute_v2',
+    'request_id', p_request_id,
+    'status', 'derivatives_pending',
+    'plan_sha256', v_request.plan_sha256,
+    'operation_id', v_request.operation_id,
+    'plan_request_sha256', v_request.plan_request_sha256,
+    'primary_committed_at', v_committed_at,
+    'row_count', (select (preflight.plan #>> '{expected,action_count}')::integer from util.dataset_alias_execution_v2_preflights as preflight where preflight.id = v_request.id),
+    'exchange_count', (select (preflight.plan #>> '{expected,exchange_count}')::integer from util.dataset_alias_execution_v2_preflights as preflight where preflight.id = v_request.id),
+    'alias_audit_count', (select (preflight.plan #>> '{expected,audit_count}')::integer from util.dataset_alias_execution_v2_preflights as preflight where preflight.id = v_request.id),
+    'primary_closure', v_primary_closure,
+    'derivative_target_count', (select (preflight.plan #>> '{expected,derivative_target_count}')::integer from util.dataset_alias_execution_v2_preflights as preflight where preflight.id = v_request.id),
+    'retry_allowed', false
+  );
+end;
+$_$;
+
+
+ALTER FUNCTION "api"."cmd_dataset_alias_execution_execute_v2"("p_request_id" "uuid", "p_nonce" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "api"."cmd_dataset_alias_execution_execute_v2"("p_request_id" "uuid", "p_nonce" "text") IS 'Service-only, nonce-bound, non-replayable executor. It commits either the exact 52 alias rows/59 exchanges/55 alias audits plus all 50 derivative child requests in one transaction, or none of those business effects.';
+
+
+
 CREATE OR REPLACE FUNCTION "api"."cmd_dataset_alias_execution_gate_guarded"("p_request_id" "uuid", "p_preflight_token" "text", "p_gate_name" "text") RETURNS "jsonb"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -1196,6 +1904,537 @@ ALTER FUNCTION "api"."cmd_dataset_alias_execution_gate_guarded"("p_request_id" "
 
 
 COMMENT ON FUNCTION "api"."cmd_dataset_alias_execution_gate_guarded"("p_request_id" "uuid", "p_preflight_token" "text", "p_gate_name" "text") IS 'Captures one of exactly three actor-owned post-preflight live gates. Primary/support is rollback-simulated again; unused execution and derivative quiescence are read directly. Each passed receipt is persisted once inside the same 180-second server window.';
+
+
+
+CREATE OR REPLACE FUNCTION "api"."cmd_dataset_alias_execution_gate_v2_guarded"("p_request_id" "uuid", "p_preflight_token" "text", "p_gate_name" "text") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    SET "lock_timeout" TO '5s'
+    SET "statement_timeout" TO '55s'
+    AS $_$
+declare
+  v_actor uuid := auth.uid();
+  v_preflight util.dataset_alias_execution_v2_preflights%rowtype;
+  v_expected_name text;
+  v_expected_sha256 text;
+  v_material jsonb;
+  v_observed_sha256 text;
+  v_receipt_material jsonb;
+  v_receipt_sha256 text;
+  v_captured_at timestamp with time zone;
+  v_alias_result jsonb;
+  v_batch_result jsonb;
+  v_simulation_passed boolean := false;
+  v_execution_count integer := 0;
+  v_alias_audit_count integer := 0;
+  v_derivative_child_count integer := 0;
+  v_snapshot_drift_count integer := 0;
+  v_active_rebuild_count integer := 0;
+  v_http_count integer := 0;
+  v_extraction_count integer := 0;
+  v_embedding_count integer := 0;
+  v_pending_count integer := 0;
+  v_failure_material jsonb;
+  v_failure_sha256 text;
+  v_target jsonb;
+  v_snapshot jsonb;
+  v_existing_gate_count integer := 0;
+begin
+  if v_actor is null then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'AUTH_REQUIRED',
+      'status', 401,
+      'message', 'Authentication required'
+    );
+  end if;
+
+  if p_request_id is null
+    or p_preflight_token is null
+    or p_preflight_token !~ '^[a-f0-9]{64}$'
+    or p_gate_name not in (
+      'primary_support_plan',
+      'execution_unused',
+      'derivative_quiescence'
+    ) then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_GATE_INVALID_REQUEST',
+      'status', 400,
+      'message', 'Exact request ID, preflight token, and known gate name are required'
+    );
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(
+      v_actor::text || ':' || p_request_id::text || ':' || p_gate_name,
+      0
+    )
+  );
+
+  select preflight.*
+  into v_preflight
+  from util.dataset_alias_execution_v2_preflights as preflight
+  where preflight.id = p_request_id
+    and preflight.actor_user_id = v_actor
+  for update;
+
+  if v_preflight.id is null then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_NOT_FOUND',
+      'status', 404,
+      'message', 'No actor-owned protected preflight exists for this request ID'
+    );
+  end if;
+
+  if v_preflight.consumed_at is not null then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_ATTEMPT_ALREADY_CONSUMED',
+      'status', 409,
+      'message', 'Admission already consumed this preflight; gates are read-only history now'
+    );
+  end if;
+
+  if pg_catalog.clock_timestamp() > v_preflight.expires_at then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_EXPIRED',
+      'status', 409,
+      'message', 'The 180-second server preflight window expired before all gates completed'
+    );
+  end if;
+
+  if util.dataset_alias_execution_v2_sha256(p_preflight_token)
+      is distinct from v_preflight.token_sha256 then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_TOKEN_MISMATCH',
+      'status', 403,
+      'message', 'Preflight token does not match the durable server record'
+    );
+  end if;
+
+  if exists (
+    select 1
+    from util.dataset_alias_execution_v2_gate_receipts as receipt
+    where receipt.preflight_id = p_request_id
+      and receipt.gate_name = p_gate_name
+  ) then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_GATE_ALREADY_CAPTURED',
+      'status', 409,
+      'message', 'Each live gate is captured at most once; freeze again after a lost gate response'
+    );
+  end if;
+
+  select count(*)::integer
+  into v_existing_gate_count
+  from util.dataset_alias_execution_v2_gate_receipts as receipt
+  where receipt.preflight_id = p_request_id
+    and receipt.actor_user_id = v_actor;
+
+  if (
+      p_gate_name = 'primary_support_plan'
+      and v_existing_gate_count <> 0
+    ) or (
+      p_gate_name = 'execution_unused'
+      and (
+        v_existing_gate_count <> 1
+        or not exists (
+          select 1
+          from util.dataset_alias_execution_v2_gate_receipts as receipt
+          where receipt.preflight_id = p_request_id
+            and receipt.actor_user_id = v_actor
+            and receipt.gate_name = 'primary_support_plan'
+        )
+      )
+    ) or (
+      p_gate_name = 'derivative_quiescence'
+      and (
+        v_existing_gate_count <> 2
+        or not exists (
+          select 1
+          from util.dataset_alias_execution_v2_gate_receipts as receipt
+          where receipt.preflight_id = p_request_id
+            and receipt.actor_user_id = v_actor
+            and receipt.gate_name = 'primary_support_plan'
+        )
+        or not exists (
+          select 1
+          from util.dataset_alias_execution_v2_gate_receipts as receipt
+          where receipt.preflight_id = p_request_id
+            and receipt.actor_user_id = v_actor
+            and receipt.gate_name = 'execution_unused'
+        )
+      )
+    ) then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_GATE_ORDER_MISMATCH',
+      'status', 409,
+      'message', 'Live gates must be captured exactly once in primary/support, execution-unused, derivative-quiescence order'
+    );
+  end if;
+
+  v_expected_name := case p_gate_name
+    when 'primary_support_plan' then 'primary_support_plan_sha256'
+    when 'execution_unused' then 'execution_unused_sha256'
+    when 'derivative_quiescence' then 'derivative_quiescence_sha256'
+  end;
+  v_expected_sha256 := v_preflight.gate_expectations->>v_expected_name;
+
+  if p_gate_name = 'primary_support_plan' then
+    begin
+      v_alias_result := private.cmd_dataset_alias_plan_v2_guarded(v_preflight.plan);
+      if coalesce((v_alias_result->>'ok')::boolean, false) is not true
+        or coalesce((v_alias_result->>'idempotent_replay')::boolean, true)
+        or (v_alias_result #>> '{counts,action_count}') is distinct from (v_preflight.plan #>> '{expected,action_count}')
+        or (v_alias_result #>> '{counts,exchange_count}') is distinct from (v_preflight.plan #>> '{expected,exchange_count}') then
+        raise exception using
+          errcode = 'P0001',
+          message = 'Primary/support simulation rejected';
+      end if;
+
+      v_batch_result := util.admit_dataset_derivative_rebuild_batch(
+        v_actor,
+        p_request_id,
+        v_preflight.plan_sha256,
+        v_preflight.operation_id,
+        'PROTECTED_ALIAS_DERIVATIVE_CLOSURE',
+        v_preflight.derivative_targets
+      );
+
+      if coalesce((v_batch_result->>'ok')::boolean, false) is not true
+        or (v_batch_result->>'target_count')::integer
+          is distinct from (v_preflight.plan #>> '{expected,derivative_target_count}')::integer
+        or coalesce(v_batch_result->>'flow_count', v_batch_result->>'flows')::integer
+          is distinct from (select count(*) from jsonb_array_elements(v_preflight.derivative_targets) as target where target->>'table' = 'flows')
+        or coalesce(v_batch_result->>'process_count', v_batch_result->>'processes')::integer
+          is distinct from (select count(*) from jsonb_array_elements(v_preflight.derivative_targets) as target where target->>'table' = 'processes') then
+        raise exception using
+          errcode = 'P0001',
+          message = 'Derivative batch simulation rejected';
+      end if;
+
+      raise exception using
+        errcode = 'P0002',
+        message = 'Protected primary/support gate rollback';
+    exception
+      when sqlstate 'P0002' then
+        v_simulation_passed := true;
+      when others then
+        v_simulation_passed := false;
+    end;
+
+    if not v_simulation_passed then
+      return jsonb_build_object(
+        'ok', false,
+        'code', 'ALIAS_EXECUTION_PRIMARY_SUPPORT_GATE_FAILED',
+        'status', 409,
+        'message', 'Primary/support plan drifted after preflight'
+      );
+    end if;
+
+    v_material := jsonb_build_object(
+      'schema_version', 'dataset-alias-execution-gate-material.v2',
+      'gate', p_gate_name,
+      'request_id', p_request_id,
+      'actor_user_id', v_actor,
+      'plan_request_sha256', v_preflight.plan_request_sha256,
+      'derivative_targets_sha256', v_preflight.derivative_targets_sha256,
+      'plan_rows', jsonb_array_length(v_preflight.plan->'actions'),
+      'plan_exchanges', (v_preflight.plan #>> '{expected,exchange_count}')::integer,
+      'alias_audits', (v_preflight.plan #>> '{expected,audit_count}')::integer,
+      'derivative_targets', jsonb_array_length(v_preflight.derivative_targets),
+      'rollback_simulation_passed', true
+    );
+  elsif p_gate_name = 'execution_unused' then
+    select count(*)::integer
+    into v_execution_count
+    from util.dataset_alias_execution_v2_requests as request
+    where request.actor_user_id = v_actor
+      and request.approval_identity_sha256 =
+        v_preflight.bindings->>'approval_identity_sha256';
+
+    select count(*)::integer
+    into v_alias_audit_count
+    from private.command_audit_log as audit
+    where audit.actor_user_id = v_actor
+      and (
+        (
+          audit.command = 'cmd_dataset_alias_batch_v2_guarded'
+          and audit.payload->>'plan_sha256' = v_preflight.plan_sha256
+          and audit.payload->>'operation_id' = v_preflight.operation_id
+        )
+        or (
+          audit.command = 'cmd_dataset_alias_plan_v2_guarded'
+          and audit.payload->>'plan_request_sha256' =
+            v_preflight.plan_request_sha256
+        )
+      );
+
+    select count(*)::integer
+    into v_derivative_child_count
+    from util.dataset_derivative_rebuild_requests as request
+    where request.actor_user_id = v_actor
+      and request.batch_id = p_request_id;
+
+    if v_execution_count <> 0
+      or v_alias_audit_count <> 0
+      or v_derivative_child_count <> 0 then
+      return jsonb_build_object(
+        'ok', false,
+        'code', 'ALIAS_EXECUTION_UNUSED_GATE_FAILED',
+        'status', 409,
+        'message', 'The sealed execution identity already has durable effects'
+      );
+    end if;
+
+    v_material := jsonb_build_object(
+      'schema_version', 'dataset-alias-execution-gate-material.v2',
+      'gate', p_gate_name,
+      'request_id', p_request_id,
+      'actor_user_id', v_actor,
+      'plan_request_sha256', v_preflight.plan_request_sha256,
+      'sealed_execution_rows', v_execution_count,
+      'alias_audit_rows', v_alias_audit_count,
+      'derivative_child_rows', v_derivative_child_count
+    );
+  else
+    for v_target in
+      select target_item.value
+      from jsonb_array_elements(v_preflight.derivative_targets) as target_item(value)
+    loop
+      begin
+        v_snapshot := util.dataset_derivative_rebuild_snapshot(
+          v_target->>'table',
+          (v_target->>'id')::uuid,
+          v_target->>'version'
+        );
+      exception
+        when others then
+          v_snapshot := null;
+      end;
+
+      if v_snapshot is null
+        or v_snapshot->>'user_id' is distinct from v_actor::text
+        or v_snapshot->>'state_code' is distinct from '0'
+        or v_snapshot->>'snapshot_sha256'
+          is distinct from v_target->>'baseline_snapshot_sha256' then
+        v_snapshot_drift_count := v_snapshot_drift_count + 1;
+      end if;
+    end loop;
+
+    select count(*)::integer
+    into v_active_rebuild_count
+    from util.dataset_derivative_rebuild_requests as request
+    where request.status not in ('completed', 'stale', 'failed')
+      and exists (
+        select 1
+        from jsonb_array_elements(v_preflight.derivative_targets) as target_item(value)
+        where request.target_table = target_item.value->>'table'
+          and request.target_id = (target_item.value->>'id')::uuid
+          and request.target_version = target_item.value->>'version'
+      );
+
+    select count(*)::integer
+    into v_http_count
+    from net.http_request_queue as request
+    where exists (
+      select 1
+      from jsonb_array_elements(v_preflight.derivative_targets) as target_item(value)
+      where util.dataset_derivative_rebuild_http_body_matches(
+        request.body,
+        target_item.value->>'table',
+        (target_item.value->>'id')::uuid,
+        target_item.value->>'version'
+      )
+    );
+
+    select count(*)::integer
+    into v_extraction_count
+    from pgmq.q_dataset_extraction_jobs as job
+    where exists (
+      select 1
+      from jsonb_array_elements(v_preflight.derivative_targets) as target_item(value)
+      where job.message->>'schema' = 'public'
+        and job.message->>'table' = target_item.value->>'table'
+        and job.message->>'id' = target_item.value->>'id'
+        and btrim(job.message->>'version') = target_item.value->>'version'
+    );
+
+    select count(*)::integer
+    into v_embedding_count
+    from pgmq.q_embedding_jobs as job
+    where exists (
+      select 1
+      from jsonb_array_elements(v_preflight.derivative_targets) as target_item(value)
+      where job.message->>'schema' = 'public'
+        and job.message->>'table' = target_item.value->>'table'
+        and job.message->>'id' = target_item.value->>'id'
+        and btrim(job.message->>'version') = target_item.value->>'version'
+        and job.message->>'embeddingColumn' = 'embedding_ft'
+    );
+
+    select count(*)::integer
+    into v_pending_count
+    from util.pending_embedding_jobs as pending
+    where pending.schema_name = 'public'
+      and pending.embedding_column = 'embedding_ft'
+      and pending.status = 'pending'
+      and exists (
+        select 1
+        from jsonb_array_elements(v_preflight.derivative_targets) as target_item(value)
+        where pending.table_name = target_item.value->>'table'
+          and pending.record_id = target_item.value->>'id'
+          and btrim(pending.record_version) = target_item.value->>'version'
+      );
+
+    select coalesce(
+      jsonb_agg(
+        jsonb_build_object(
+          'id', failure.id,
+          'queue_name', failure.queue_name,
+          'msg_id', failure.msg_id,
+          'read_count', failure.read_count,
+          'reason', failure.reason,
+          'message', failure.message,
+          'failed_at', failure.failed_at
+        ) order by failure.id
+      ),
+      '[]'::jsonb
+    )
+    into v_failure_material
+    from util.embedding_job_failures as failure
+    where exists (
+      select 1
+      from jsonb_array_elements(v_preflight.derivative_targets) as target_item(value)
+      where failure.message->>'table' = target_item.value->>'table'
+        and failure.message->>'id' = target_item.value->>'id'
+        and btrim(failure.message->>'version') = target_item.value->>'version'
+    );
+    v_failure_sha256 :=
+      util.dataset_alias_execution_v2_sha256(v_failure_material::text);
+
+    if v_snapshot_drift_count <> 0
+      or v_active_rebuild_count <> 0
+      or v_http_count <> 0
+      or v_extraction_count <> 0
+      or v_embedding_count <> 0
+      or v_pending_count <> 0
+      or v_failure_sha256 is distinct from v_preflight.failure_baseline_sha256 then
+      return jsonb_build_object(
+        'ok', false,
+        'code', 'ALIAS_EXECUTION_DERIVATIVE_QUIESCENCE_GATE_FAILED',
+        'status', 409,
+        'message', 'Derivative baselines, queues, fences, or failure ledger drifted after preflight'
+      );
+    end if;
+
+    v_material := jsonb_build_object(
+      'schema_version', 'dataset-alias-execution-gate-material.v2',
+      'gate', p_gate_name,
+      'request_id', p_request_id,
+      'actor_user_id', v_actor,
+      'derivative_targets_sha256', v_preflight.derivative_targets_sha256,
+      'snapshot_drift_count', v_snapshot_drift_count,
+      'active_rebuild_count', v_active_rebuild_count,
+      'http_request_count', v_http_count,
+      'extraction_job_count', v_extraction_count,
+      'embedding_job_count', v_embedding_count,
+      'pending_embedding_count', v_pending_count,
+      'failure_baseline_sha256', v_failure_sha256
+    );
+  end if;
+
+  v_captured_at := pg_catalog.clock_timestamp();
+  if v_captured_at > v_preflight.expires_at then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_GATE_WINDOW_EXPIRED',
+      'status', 409,
+      'message', 'The live gate completed after the 180-second server window'
+    );
+  end if;
+
+  v_observed_sha256 := util.dataset_alias_execution_v2_sha256(v_material::text);
+  if v_observed_sha256 is distinct from v_expected_sha256 then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_GATE_EVIDENCE_MISMATCH',
+      'status', 409,
+      'message', 'The live gate evidence does not match the server-owned preflight expectation'
+    );
+  end if;
+
+  v_receipt_material := jsonb_build_object(
+    'schema_version', 'dataset-alias-execution-gate-receipt.v2',
+    'request_id', p_request_id,
+    'actor_user_id', v_actor,
+    'preflight_proof_sha256', v_preflight.preflight_proof_sha256,
+    'gate', p_gate_name,
+    'expected_sha256', v_expected_sha256,
+    'observed_sha256', v_observed_sha256,
+    'status', 'passed',
+    'captured_at', v_captured_at
+  );
+  v_receipt_sha256 :=
+    util.dataset_alias_execution_v2_sha256(v_receipt_material::text);
+
+  insert into util.dataset_alias_execution_v2_gate_receipts (
+    preflight_id,
+    actor_user_id,
+    gate_name,
+    expected_sha256,
+    observed_sha256,
+    material,
+    status,
+    captured_at,
+    receipt_sha256
+  ) values (
+    p_request_id,
+    v_actor,
+    p_gate_name,
+    v_expected_sha256,
+    v_observed_sha256,
+    v_material,
+    'passed',
+    v_captured_at,
+    v_receipt_sha256
+  );
+
+  return v_receipt_material || jsonb_build_object(
+    'ok', true,
+    'command', 'cmd_dataset_alias_execution_gate_v2_guarded',
+    'receipt_sha256', v_receipt_sha256
+  );
+exception
+  when lock_not_available then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_GATE_LOCK_BUSY',
+      'status', 409,
+      'message', 'Protected live gate could not acquire its bounded locks'
+    );
+  when unique_violation then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_GATE_ALREADY_CAPTURED',
+      'status', 409,
+      'message', 'A concurrent call already captured this live gate'
+    );
+end;
+$_$;
+
+
+ALTER FUNCTION "api"."cmd_dataset_alias_execution_gate_v2_guarded"("p_request_id" "uuid", "p_preflight_token" "text", "p_gate_name" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "api"."cmd_dataset_alias_execution_gate_v2_guarded"("p_request_id" "uuid", "p_preflight_token" "text", "p_gate_name" "text") IS 'Captures one of exactly three actor-owned post-preflight live gates. Primary/support is rollback-simulated again; unused execution and derivative quiescence are read directly. Each passed receipt is persisted once inside the same 180-second server window.';
 
 
 
@@ -2266,6 +3505,1060 @@ COMMENT ON FUNCTION "api"."cmd_dataset_alias_execution_preflight_guarded"("p_req
 
 
 
+CREATE OR REPLACE FUNCTION "api"."cmd_dataset_alias_execution_preflight_v2_guarded"("p_request" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    SET "lock_timeout" TO '5s'
+    SET "statement_timeout" TO '60s'
+    AS $_$
+declare
+  v_actor uuid := auth.uid();
+  v_actor_email text := auth.email();
+  v_schema_version constant text := 'dataset-alias-execution-preflight.v2';
+  v_request_id uuid;
+  v_environment text;
+  v_project_ref text;
+  v_server_context jsonb;
+  v_request_actor jsonb;
+  v_plan jsonb;
+  v_freeze jsonb;
+  v_approval jsonb;
+  v_expected_freeze jsonb;
+  v_expected_approval jsonb;
+  v_bindings jsonb;
+  v_expected jsonb;
+  v_input_targets jsonb;
+  v_targets jsonb;
+  v_sorted_targets jsonb;
+  v_gate_expectations jsonb;
+  v_primary_gate_material jsonb;
+  v_unused_gate_material jsonb;
+  v_quiescence_gate_material jsonb;
+  v_plan_sha256 text;
+  v_operation_id text;
+  v_plan_request_sha256 text;
+  v_alias_plan_request_sha256 text;
+  v_derivative_target_set_sha256 text;
+  v_derivative_baseline_set_sha256 text;
+  v_bindings_sha256 text;
+  v_expected_sha256 text;
+  v_targets_sha256 text;
+  v_gate_expectations_sha256 text;
+  v_failure_baseline_material jsonb;
+  v_failure_baseline_sha256 text;
+  v_request_sha256 text;
+  v_token text;
+  v_token_sha256 text;
+  v_proof_material jsonb;
+  v_proof_sha256 text;
+  v_completed_at timestamp with time zone;
+  v_expires_at timestamp with time zone;
+  v_target jsonb;
+  v_snapshot jsonb;
+  v_alias_result jsonb;
+  v_batch_result jsonb;
+  v_simulation_passed boolean := false;
+  v_simulation_error jsonb;
+  v_existing_id uuid;
+  v_execution_count integer := 0;
+  v_alias_audit_count integer := 0;
+  v_derivative_child_count integer := 0;
+  v_snapshot_drift_count integer := 0;
+  v_active_rebuild_count integer := 0;
+  v_http_count integer := 0;
+  v_extraction_count integer := 0;
+  v_embedding_count integer := 0;
+  v_pending_count integer := 0;
+begin
+  if v_actor is null then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'AUTH_REQUIRED',
+      'status', 401,
+      'message', 'Authentication required'
+    );
+  end if;
+
+  if nullif(v_actor_email, '') is null then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'AUTH_EMAIL_REQUIRED',
+      'status', 401,
+      'message', 'Authenticated email claim is required'
+    );
+  end if;
+
+  if p_request is not null and pg_column_size(p_request) > 67108864 then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_TOO_LARGE',
+      'status', 413,
+      'message', 'Protected preflight request exceeds 64 MiB'
+    );
+  end if;
+
+  if jsonb_typeof(p_request) is distinct from 'object'
+    or not (p_request ?& array[
+      'schema_version',
+      'request_id',
+      'environment',
+      'project_ref',
+      'actor',
+      'target_visibility',
+      'plan',
+      'freeze',
+      'approval',
+      'bindings',
+      'expected',
+      'derivative_targets'
+    ])
+    or exists (
+      select 1
+      from jsonb_object_keys(p_request) as request_key(key)
+      where request_key.key <> all (array[
+        'schema_version',
+        'request_id',
+        'environment',
+        'project_ref',
+        'actor',
+        'target_visibility',
+        'plan',
+        'freeze',
+        'approval',
+        'bindings',
+        'expected',
+        'derivative_targets'
+      ])
+    )
+    or p_request->>'schema_version' is distinct from v_schema_version
+    or jsonb_typeof(p_request->'request_id') is distinct from 'string'
+    or (p_request->>'request_id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    or p_request->>'environment' not in ('production', 'preview', 'local')
+    or jsonb_typeof(p_request->'project_ref') is distinct from 'string'
+    or nullif(btrim(p_request->>'project_ref'), '') is null
+    or octet_length(p_request->>'project_ref') > 128
+    or p_request->>'target_visibility' is distinct from 'owner_draft'
+    or jsonb_typeof(p_request->'actor') is distinct from 'object'
+    or jsonb_typeof(p_request->'plan') is distinct from 'object'
+    or jsonb_typeof(p_request->'freeze') is distinct from 'object'
+    or jsonb_typeof(p_request->'approval') is distinct from 'object'
+    or jsonb_typeof(p_request->'bindings') is distinct from 'object'
+    or jsonb_typeof(p_request->'expected') is distinct from 'object'
+    or jsonb_typeof(p_request->'derivative_targets') is distinct from 'array' then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_INVALID_REQUEST',
+      'status', 400,
+      'message', 'Preflight request must match dataset-alias-execution-preflight.v1 exactly'
+    );
+  end if;
+
+  v_request_id := (p_request->>'request_id')::uuid;
+  v_environment := p_request->>'environment';
+  v_project_ref := btrim(p_request->>'project_ref');
+  v_request_actor := p_request->'actor';
+  v_plan := p_request->'plan';
+  v_freeze := p_request->'freeze';
+  v_approval := p_request->'approval';
+  v_bindings := p_request->'bindings';
+  v_expected := p_request->'expected';
+  v_input_targets := p_request->'derivative_targets';
+
+  begin
+    v_server_context := util.dataset_alias_execution_v2_server_context();
+  exception
+    when others then
+      return jsonb_build_object(
+        'ok', false,
+        'code', 'ALIAS_EXECUTION_SERVER_CONTEXT_UNAVAILABLE',
+        'status', 409,
+        'message', 'Branch-local project identity could not be derived from trusted server configuration'
+      );
+  end;
+
+  if v_environment is distinct from v_server_context->>'environment'
+    or v_project_ref is distinct from v_server_context->>'project_ref' then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_SERVER_CONTEXT_MISMATCH',
+      'status', 409,
+      'message', 'Requested environment and project_ref do not match the connected database'
+    );
+  end if;
+
+  if not (v_request_actor ?& array['user_id', 'email'])
+    or exists (
+      select 1
+      from jsonb_object_keys(v_request_actor) as actor_key(key)
+      where actor_key.key <> all (array['user_id', 'email'])
+    )
+    or jsonb_typeof(v_request_actor->'user_id') is distinct from 'string'
+    or v_request_actor->>'user_id' is distinct from v_actor::text
+    or jsonb_typeof(v_request_actor->'email') is distinct from 'string'
+    or lower(btrim(v_request_actor->>'email'))
+      is distinct from lower(btrim(v_actor_email))
+    or octet_length(v_request_actor->>'email') > 320 then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_ACTOR_MISMATCH',
+      'status', 403,
+      'message', 'Preflight actor must match the authenticated user and email'
+    );
+  end if;
+
+  if not (v_bindings ?& array[
+      'plan_file_sha256',
+      'freeze_file_sha256',
+      'freeze_sha256',
+      'approval_file_sha256',
+      'approval_identity_sha256',
+      'approval_text_sha256',
+      'alias_plan_request_sha256',
+      'before_hash_set_sha256',
+      'desired_hash_set_sha256',
+      'exchange_rewrite_set_sha256',
+      'support_snapshot_set_sha256',
+      'derivative_baseline_set_sha256',
+      'derivative_target_set_sha256',
+      'toolchain_evidence_sha256'
+    ])
+    or exists (
+      select 1
+      from jsonb_object_keys(v_bindings) as binding_key(key)
+      where binding_key.key <> all (array[
+        'plan_file_sha256',
+        'freeze_file_sha256',
+        'freeze_sha256',
+        'approval_file_sha256',
+        'approval_identity_sha256',
+        'approval_text_sha256',
+        'alias_plan_request_sha256',
+        'before_hash_set_sha256',
+        'desired_hash_set_sha256',
+        'exchange_rewrite_set_sha256',
+        'support_snapshot_set_sha256',
+        'derivative_baseline_set_sha256',
+        'derivative_target_set_sha256',
+        'toolchain_evidence_sha256'
+      ])
+    )
+    or exists (
+      select 1
+      from jsonb_each(v_bindings) as binding_item(key, value)
+      where jsonb_typeof(binding_item.value) is distinct from 'string'
+        or (binding_item.value #>> '{}') !~ '^[a-f0-9]{64}$'
+    ) then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_INVALID_BINDINGS',
+      'status', 400,
+      'message', 'All protected artifact bindings must be exact SHA-256 values'
+    );
+  end if;
+
+  -- The protected expected block is the versioned plan's own claim block: the ten flat v1 counts plus
+  -- the versioned text-action count, as JSON numbers on the external wire.
+  if not (v_expected ?& array[
+      'action_count',
+      'batch_count',
+      'exchange_count',
+      'amount_field_count',
+      'unrelated_exchange_count',
+      'audit_count',
+      'flowproperty_count',
+      'flow_count',
+      'process_count',
+      'derivative_target_count',
+      'text_action_count'
+    ])
+    or exists (
+      select 1
+      from jsonb_object_keys(v_expected) as expected_key(key)
+      where expected_key.key <> all (array[
+        'action_count',
+        'batch_count',
+        'exchange_count',
+        'amount_field_count',
+        'unrelated_exchange_count',
+        'audit_count',
+        'flowproperty_count',
+        'flow_count',
+        'process_count',
+        'derivative_target_count',
+        'text_action_count'
+      ])
+    )
+    or exists (
+      select 1
+      from jsonb_each(v_expected) as expected_item(key, value)
+      where jsonb_typeof(expected_item.value) is distinct from 'number'
+    )
+    or v_expected is distinct from (v_plan->'expected') then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_INVALID_COUNTS',
+      'status', 400,
+      'message', 'Protected profile requires the plan-derived expected counts, and nothing else'
+    );
+  end if;
+
+  if jsonb_array_length(v_input_targets) <> (v_plan #>> '{expected,derivative_target_count}')::integer
+    or exists (
+      select 1
+      from jsonb_array_elements(v_input_targets) as target_item(value)
+      where jsonb_typeof(target_item.value) is distinct from 'object'
+        or not (target_item.value ?& array[
+          'table',
+          'id',
+          'version',
+          'user_id',
+          'state_code',
+          'baseline_snapshot_sha256'
+        ])
+        or exists (
+          select 1
+          from jsonb_object_keys(target_item.value) as target_key(key)
+          where target_key.key <> all (array[
+            'table',
+            'id',
+            'version',
+            'user_id',
+            'state_code',
+            'baseline_snapshot_sha256'
+          ])
+        )
+        or target_item.value->>'table' not in ('flows', 'processes')
+        or jsonb_typeof(target_item.value->'table') is distinct from 'string'
+        or jsonb_typeof(target_item.value->'id') is distinct from 'string'
+        or (target_item.value->>'id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        or jsonb_typeof(target_item.value->'version') is distinct from 'string'
+        or (target_item.value->>'version') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+        or jsonb_typeof(target_item.value->'user_id') is distinct from 'string'
+        or target_item.value->>'user_id' is distinct from v_actor::text
+        or jsonb_typeof(target_item.value->'state_code') is distinct from 'number'
+        or target_item.value->>'state_code' is distinct from '0'
+        or jsonb_typeof(target_item.value->'baseline_snapshot_sha256')
+          is distinct from 'string'
+        or (target_item.value->>'baseline_snapshot_sha256') !~ '^[a-f0-9]{64}$'
+    )
+    or (
+      select count(*)
+      from jsonb_array_elements(v_input_targets) as target_item(value)
+      where target_item.value->>'table' = 'flows'
+    ) <> (select count(*) from jsonb_array_elements(v_plan->'actions') as action_item(value) where action_item.value->>'table' = 'flows')
+    or (
+      select count(*)
+      from jsonb_array_elements(v_input_targets) as target_item(value)
+      where target_item.value->>'table' = 'processes'
+    ) <> (select count(*) from jsonb_array_elements(v_plan->'actions') as action_item(value) where action_item.value->>'table' = 'processes')
+    or (
+      select count(distinct (
+        target_item.value->>'table',
+        target_item.value->>'id',
+        target_item.value->>'version'
+      ))
+      from jsonb_array_elements(v_input_targets) as target_item(value)
+    ) <> (v_plan #>> '{expected,derivative_target_count}')::integer then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_INVALID_TARGETS',
+      'status', 400,
+      'message', 'Derivative targets must be the declared unique flows and processes owned by the actor at state_code 0'
+    );
+  end if;
+
+  select jsonb_agg(target_item.value order by
+    target_item.value->>'table',
+    target_item.value->>'id',
+    target_item.value->>'version'
+  )
+  into v_sorted_targets
+  from jsonb_array_elements(v_input_targets) as target_item(value);
+
+  if v_input_targets is distinct from v_sorted_targets then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_TARGET_ORDER',
+      'status', 400,
+      'message', 'Derivative targets must use stable table/id/version order'
+    );
+  end if;
+
+  if v_plan->>'schema_version' is distinct from 'dataset-alias-plan.v2'
+    or v_plan->>'target_visibility' is distinct from 'owner_draft'
+    or (v_plan->>'plan_sha256') !~ '^[a-f0-9]{64}$'
+    -- The claimed plan digest is the producer's canonical self-hash of the plan document minus its
+    -- own binding; admission verifies it before anything downstream reuses the label.
+    or util.dataset_alias_execution_v2_artifact_sha256(v_plan - 'plan_sha256')
+      is distinct from (v_plan->>'plan_sha256')
+    then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_INVALID_PLAN',
+      'status', 400,
+      'message', 'Protected preflight requires one owner-draft dataset-alias-plan.v1 request'
+    );
+  end if;
+
+  v_plan_sha256 := v_plan->>'plan_sha256';
+  v_operation_id := v_plan->>'plan_sha256';
+
+  select jsonb_agg(
+    jsonb_build_object(
+      'table', target_item.value->>'table',
+      'id', target_item.value->>'id',
+      'version', target_item.value->>'version',
+      'expected_json_ordered_sha256',
+        util.dataset_alias_execution_v2_sha256(
+          (action_item.value->'desired_json_ordered')::text
+        ),
+      'baseline_snapshot_sha256',
+        target_item.value->>'baseline_snapshot_sha256'
+    ) order by
+      target_item.value->>'table',
+      target_item.value->>'id',
+      target_item.value->>'version'
+  )
+  into v_targets
+  from jsonb_array_elements(v_plan->'actions') as action_item(value)
+  join jsonb_array_elements(v_input_targets) as target_item(value)
+    on target_item.value->>'table' = action_item.value->>'table'
+   and target_item.value->>'id' = action_item.value->>'id'
+   and target_item.value->>'version' = action_item.value->>'version'
+  where action_item.value->>'table' in ('flows', 'processes');
+
+  if jsonb_typeof(v_targets) is distinct from 'array'
+    or jsonb_array_length(v_targets) <> (v_plan #>> '{expected,derivative_target_count}')::integer then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_TARGET_PLAN_MISMATCH',
+      'status', 409,
+      'message', 'Derivative target identities must exactly match the declared flow/process plan actions'
+    );
+  end if;
+
+  -- The reviewed producer defines the plan request hash as the plan document with its own
+  -- `plan_sha256` binding removed (the plan's self-digest is exactly that value), the derivative
+  -- target set as the sorted `table:id@version` identity strings and the baseline set as the
+  -- sorted baseline digests. All three are recomputed here with the same canonical artifact
+  -- algorithm the producer uses, so neither side can drift without the other refusing.
+  v_alias_plan_request_sha256 :=
+    util.dataset_alias_execution_v2_artifact_sha256(v_plan - 'plan_sha256');
+
+  select util.dataset_alias_execution_v2_artifact_sha256(
+    jsonb_agg(target_identity order by target_identity collate "C")
+  )
+  into v_derivative_target_set_sha256
+  from (
+    select (target_item.value->>'table') || ':' || (target_item.value->>'id') || '@'
+      || (target_item.value->>'version') as target_identity
+    from jsonb_array_elements(v_input_targets) as target_item(value)
+  ) as target_identities;
+
+  select util.dataset_alias_execution_v2_artifact_sha256(
+    jsonb_agg(baseline order by baseline collate "C")
+  )
+  into v_derivative_baseline_set_sha256
+  from (
+    select target_item.value->>'baseline_snapshot_sha256' as baseline
+    from jsonb_array_elements(v_input_targets) as target_item(value)
+  ) as target_baselines;
+
+  if v_bindings->>'alias_plan_request_sha256'
+      is distinct from v_alias_plan_request_sha256
+    or v_bindings->>'derivative_target_set_sha256'
+      is distinct from v_derivative_target_set_sha256
+    or v_bindings->>'derivative_baseline_set_sha256'
+      is distinct from v_derivative_baseline_set_sha256 then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_ARTIFACT_SET_MISMATCH',
+      'status', 409,
+      'message', 'The approved alias request or derivative target sets do not match server recomputation'
+    );
+  end if;
+
+  v_expected_freeze := jsonb_build_object(
+    'schema_version', 'dataset-alias-execution-freeze.v2',
+    'environment', v_environment,
+    'project_ref', v_project_ref,
+    'account', v_request_actor,
+    'target_visibility', 'owner_draft',
+    -- The freeze binds the plan file, the plan digest and the plan's own versioned content. The
+    -- internal operation identity is the plan digest and stays server-side: the approved envelope
+    -- carries no separate operation id.
+    'plan', jsonb_build_object(
+      'plan_file_sha256', v_bindings->>'plan_file_sha256',
+      'plan_sha256', v_plan_sha256
+    ),
+    'target_snapshots', v_plan->'target_snapshots',
+    'source_evidence', v_plan->'source_evidence',
+    'sets', jsonb_build_object(
+      'alias_plan_request_sha256',
+        v_bindings->>'alias_plan_request_sha256',
+      'before_hash_set_sha256',
+        v_bindings->>'before_hash_set_sha256',
+      'desired_hash_set_sha256',
+        v_bindings->>'desired_hash_set_sha256',
+      'exchange_rewrite_set_sha256',
+        v_bindings->>'exchange_rewrite_set_sha256',
+      'support_snapshot_set_sha256',
+        v_bindings->>'support_snapshot_set_sha256',
+      'derivative_baseline_set_sha256',
+        v_bindings->>'derivative_baseline_set_sha256',
+      'derivative_target_set_sha256',
+        v_bindings->>'derivative_target_set_sha256',
+      'toolchain_evidence_sha256',
+        v_bindings->>'toolchain_evidence_sha256'
+    ),
+    'expected', v_expected,
+    'derivative_targets', v_input_targets,
+    'policy', jsonb_build_object(
+      'state_code_changes', 0,
+      'save_draft', 0,
+      'deletes', 0,
+      'rebuild_derivatives', 0,
+      'unitgroup_actions', 0,
+      'person_distance_actions', 0,
+      'max_admit_posts', 1,
+      'automatic_retry', false
+    ),
+    'freeze_sha256', v_bindings->>'freeze_sha256'
+  );
+
+  if v_freeze is distinct from v_expected_freeze
+    or util.dataset_alias_execution_v2_artifact_sha256(
+      v_freeze - 'freeze_sha256'
+    ) is distinct from v_bindings->>'freeze_sha256' then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_FREEZE_MISMATCH',
+      'status', 409,
+      'message', 'The production freeze envelope or canonical freeze hash is invalid'
+    );
+  end if;
+
+  begin
+    perform (v_approval->>'approved_at_utc')::timestamp with time zone;
+  exception
+    when others then
+      return jsonb_build_object(
+        'ok', false,
+        'code', 'ALIAS_EXECUTION_PREFLIGHT_APPROVAL_MISMATCH',
+        'status', 409,
+        'message', 'The exact approval timestamp is invalid'
+      );
+  end;
+
+  v_expected_approval := jsonb_build_object(
+    'schema_version', 'dataset-alias-execution-approval.v2',
+    'approved_at_utc', v_approval->>'approved_at_utc',
+    'environment', v_environment,
+    'project_ref', v_project_ref,
+    'account', v_request_actor,
+    'target_visibility', 'owner_draft',
+    'plan_sha256', v_plan_sha256,
+    'plan_file_sha256', v_bindings->>'plan_file_sha256',
+    'freeze_file_sha256', v_bindings->>'freeze_file_sha256',
+    'freeze_sha256', v_bindings->>'freeze_sha256',
+    'approval_text_sha256', v_bindings->>'approval_text_sha256',
+    'max_admit_posts', 1,
+    'automatic_retry', false,
+    'approval_identity_sha256', v_bindings->>'approval_identity_sha256'
+  );
+
+  if v_approval is distinct from v_expected_approval
+    or util.dataset_alias_execution_v2_artifact_sha256(
+      v_approval - 'approval_identity_sha256'
+    ) is distinct from v_bindings->>'approval_identity_sha256' then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_APPROVAL_MISMATCH',
+      'status', 409,
+      'message', 'The approval identity does not bind this exact production freeze and alias request'
+    );
+  end if;
+
+  select preflight.id
+  into v_existing_id
+  from util.dataset_alias_execution_v2_preflights as preflight
+  where preflight.id = v_request_id
+     or (
+       preflight.actor_user_id = v_actor
+       and preflight.approval_identity_sha256 =
+         v_bindings->>'approval_identity_sha256'
+     )
+  limit 1;
+
+  if v_existing_id is not null then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_APPROVAL_ALREADY_USED',
+      'status', 409,
+      'message', 'This request ID or exact approval identity already created a protected preflight; freeze and approve again'
+    );
+  end if;
+
+  for v_target in
+    select target_item.value
+    from jsonb_array_elements(v_targets) as target_item(value)
+  loop
+    begin
+      v_snapshot := util.dataset_derivative_rebuild_snapshot(
+        v_target->>'table',
+        (v_target->>'id')::uuid,
+        v_target->>'version'
+      );
+    exception
+      when others then
+        v_snapshot := null;
+    end;
+
+    if v_snapshot is null
+      or v_snapshot->>'user_id' is distinct from v_actor::text
+      or v_snapshot->>'state_code' is distinct from '0'
+      or v_snapshot->>'json_sha256' is distinct from v_snapshot->>'json_ordered_sha256'
+      or v_snapshot->>'snapshot_sha256'
+        is distinct from v_target->>'baseline_snapshot_sha256' then
+      return jsonb_build_object(
+        'ok', false,
+        'code', 'ALIAS_EXECUTION_PREFLIGHT_BASELINE_DRIFT',
+        'status', 409,
+        'message', 'A derivative target no longer matches its owner-draft baseline snapshot'
+      );
+    end if;
+  end loop;
+
+  v_plan_request_sha256 := util.dataset_alias_execution_v2_sha256(v_plan::text);
+  v_bindings_sha256 := util.dataset_alias_execution_v2_sha256(v_bindings::text);
+  v_expected_sha256 := util.dataset_alias_execution_v2_sha256(v_expected::text);
+  v_targets_sha256 := util.dataset_alias_execution_v2_sha256(v_targets::text);
+  select coalesce(
+    jsonb_agg(
+      jsonb_build_object(
+        'id', failure.id,
+        'queue_name', failure.queue_name,
+        'msg_id', failure.msg_id,
+        'read_count', failure.read_count,
+        'reason', failure.reason,
+        'message', failure.message,
+        'failed_at', failure.failed_at
+      ) order by failure.id
+    ),
+    '[]'::jsonb
+  )
+  into v_failure_baseline_material
+  from util.embedding_job_failures as failure
+  where exists (
+    select 1
+    from jsonb_array_elements(v_targets) as target_item(value)
+    where failure.message->>'table' = target_item.value->>'table'
+      and failure.message->>'id' = target_item.value->>'id'
+      and btrim(failure.message->>'version') = target_item.value->>'version'
+  );
+  v_failure_baseline_sha256 :=
+    util.dataset_alias_execution_v2_sha256(v_failure_baseline_material::text);
+  v_request_sha256 := util.dataset_alias_execution_v2_sha256(p_request::text);
+
+  -- The simulation creates all normal alias writes, audits, webhook work, and
+  -- derivative fences inside this exception block.  The controlled P0002
+  -- exception always rolls those effects back before a durable token exists.
+  begin
+    v_alias_result := private.cmd_dataset_alias_plan_v2_guarded(v_plan);
+    if coalesce((v_alias_result->>'ok')::boolean, false) is not true
+      or coalesce((v_alias_result->>'idempotent_replay')::boolean, true)
+      or (v_alias_result #>> '{counts,action_count}') is distinct from (v_plan #>> '{expected,action_count}')
+      or (v_alias_result #>> '{counts,exchange_count}') is distinct from (v_plan #>> '{expected,exchange_count}') then
+      v_simulation_error := jsonb_build_object(
+        'phase', 'alias',
+        'result', coalesce(v_alias_result, '{}'::jsonb)
+      );
+      raise exception using
+        errcode = 'P0001',
+        message = 'Protected alias simulation rejected';
+    end if;
+
+    v_batch_result := util.admit_dataset_derivative_rebuild_batch(
+      v_actor,
+      v_request_id,
+      v_plan_sha256,
+      v_operation_id,
+      'PROTECTED_ALIAS_DERIVATIVE_CLOSURE',
+      v_targets
+    );
+
+    if coalesce((v_batch_result->>'ok')::boolean, false) is not true
+      or (v_batch_result->>'target_count')::integer is distinct from (v_plan #>> '{expected,derivative_target_count}')::integer
+      or (v_batch_result->>'flow_count')::integer is distinct from (select count(*) from jsonb_array_elements(v_targets) as target where target->>'table' = 'flows')
+      or (v_batch_result->>'process_count')::integer is distinct from (select count(*) from jsonb_array_elements(v_targets) as target where target->>'table' = 'processes') then
+      v_simulation_error := jsonb_build_object(
+        'phase', 'derivative_batch',
+        'result', coalesce(v_batch_result, '{}'::jsonb)
+      );
+      raise exception using
+        errcode = 'P0001',
+        message = 'Protected derivative batch simulation rejected';
+    end if;
+
+    raise exception using
+      errcode = 'P0002',
+      message = 'Protected execution preflight simulation rollback';
+  exception
+    when sqlstate 'P0002' then
+      v_simulation_passed := true;
+    when others then
+      v_simulation_passed := false;
+      if v_simulation_error is null then
+        v_simulation_error := jsonb_build_object(
+          'phase', 'unexpected',
+          'sqlstate', sqlstate,
+          'message', sqlerrm
+        );
+      end if;
+  end;
+
+  if not v_simulation_passed then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_SIMULATION_FAILED',
+      'status', 409,
+      'message', 'The exact protected plan failed rollback-only server simulation',
+      'evidence', v_simulation_error
+    );
+  end if;
+
+  select count(*)::integer
+  into v_execution_count
+  from util.dataset_alias_execution_v2_requests as request
+  where request.actor_user_id = v_actor
+    and request.approval_identity_sha256 =
+      v_bindings->>'approval_identity_sha256';
+
+  select count(*)::integer
+  into v_alias_audit_count
+  from private.command_audit_log as audit
+  where audit.actor_user_id = v_actor
+    and (
+      (
+        audit.command = 'cmd_dataset_alias_batch_v2_guarded'
+        and audit.payload->>'plan_sha256' = v_plan_sha256
+        and audit.payload->>'operation_id' = v_operation_id
+      )
+      or (
+        audit.command = 'cmd_dataset_alias_plan_v2_guarded'
+        and audit.payload->>'plan_request_sha256' = v_plan_request_sha256
+      )
+    );
+
+  select count(*)::integer
+  into v_derivative_child_count
+  from util.dataset_derivative_rebuild_requests as request
+  where request.actor_user_id = v_actor
+    and request.batch_id = v_request_id;
+
+  for v_target in
+    select target_item.value
+    from jsonb_array_elements(v_targets) as target_item(value)
+  loop
+    begin
+      v_snapshot := util.dataset_derivative_rebuild_snapshot(
+        v_target->>'table',
+        (v_target->>'id')::uuid,
+        v_target->>'version'
+      );
+    exception
+      when others then
+        v_snapshot := null;
+    end;
+
+    if v_snapshot is null
+      or v_snapshot->>'user_id' is distinct from v_actor::text
+      or v_snapshot->>'state_code' is distinct from '0'
+      or v_snapshot->>'snapshot_sha256'
+        is distinct from v_target->>'baseline_snapshot_sha256' then
+      v_snapshot_drift_count := v_snapshot_drift_count + 1;
+    end if;
+  end loop;
+
+  select count(*)::integer
+  into v_active_rebuild_count
+  from util.dataset_derivative_rebuild_requests as request
+  where request.status not in ('completed', 'stale', 'failed')
+    and exists (
+      select 1
+      from jsonb_array_elements(v_targets) as target_item(value)
+      where request.target_table = target_item.value->>'table'
+        and request.target_id = (target_item.value->>'id')::uuid
+        and request.target_version = target_item.value->>'version'
+    );
+
+  select count(*)::integer
+  into v_http_count
+  from net.http_request_queue as request
+  where exists (
+    select 1
+    from jsonb_array_elements(v_targets) as target_item(value)
+    where util.dataset_derivative_rebuild_http_body_matches(
+      request.body,
+      target_item.value->>'table',
+      (target_item.value->>'id')::uuid,
+      target_item.value->>'version'
+    )
+  );
+
+  select count(*)::integer
+  into v_extraction_count
+  from pgmq.q_dataset_extraction_jobs as job
+  where exists (
+    select 1
+    from jsonb_array_elements(v_targets) as target_item(value)
+    where job.message->>'schema' = 'public'
+      and job.message->>'table' = target_item.value->>'table'
+      and job.message->>'id' = target_item.value->>'id'
+      and btrim(job.message->>'version') = target_item.value->>'version'
+  );
+
+  select count(*)::integer
+  into v_embedding_count
+  from pgmq.q_embedding_jobs as job
+  where exists (
+    select 1
+    from jsonb_array_elements(v_targets) as target_item(value)
+    where job.message->>'schema' = 'public'
+      and job.message->>'table' = target_item.value->>'table'
+      and job.message->>'id' = target_item.value->>'id'
+      and btrim(job.message->>'version') = target_item.value->>'version'
+      and job.message->>'embeddingColumn' = 'embedding_ft'
+  );
+
+  select count(*)::integer
+  into v_pending_count
+  from util.pending_embedding_jobs as pending
+  where pending.schema_name = 'public'
+    and pending.embedding_column = 'embedding_ft'
+    and pending.status = 'pending'
+    and exists (
+      select 1
+      from jsonb_array_elements(v_targets) as target_item(value)
+      where pending.table_name = target_item.value->>'table'
+        and pending.record_id = target_item.value->>'id'
+        and btrim(pending.record_version) = target_item.value->>'version'
+    );
+
+  if v_execution_count <> 0
+    or v_alias_audit_count <> 0
+    or v_derivative_child_count <> 0
+    or v_snapshot_drift_count <> 0
+    or v_active_rebuild_count <> 0
+    or v_http_count <> 0
+    or v_extraction_count <> 0
+    or v_embedding_count <> 0
+    or v_pending_count <> 0 then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_NOT_QUIESCENT',
+      'status', 409,
+      'message', 'The exact approval identity, targets, or derivative queues are not unused and quiescent'
+    );
+  end if;
+
+  v_primary_gate_material := jsonb_build_object(
+    'schema_version', 'dataset-alias-execution-gate-material.v2',
+    'gate', 'primary_support_plan',
+    'request_id', v_request_id,
+    'actor_user_id', v_actor,
+    'plan_request_sha256', v_plan_request_sha256,
+    'derivative_targets_sha256', v_targets_sha256,
+    'plan_rows', jsonb_array_length(v_plan->'actions'),
+    'plan_exchanges', (v_plan #>> '{expected,exchange_count}')::integer,
+    'alias_audits', (v_plan #>> '{expected,audit_count}')::integer,
+    'derivative_targets', jsonb_array_length(v_input_targets),
+    'rollback_simulation_passed', true
+  );
+  v_unused_gate_material := jsonb_build_object(
+    'schema_version', 'dataset-alias-execution-gate-material.v2',
+    'gate', 'execution_unused',
+    'request_id', v_request_id,
+    'actor_user_id', v_actor,
+    'plan_request_sha256', v_plan_request_sha256,
+    'sealed_execution_rows', v_execution_count,
+    'alias_audit_rows', v_alias_audit_count,
+    'derivative_child_rows', v_derivative_child_count
+  );
+  v_quiescence_gate_material := jsonb_build_object(
+    'schema_version', 'dataset-alias-execution-gate-material.v2',
+    'gate', 'derivative_quiescence',
+    'request_id', v_request_id,
+    'actor_user_id', v_actor,
+    'derivative_targets_sha256', v_targets_sha256,
+    'snapshot_drift_count', v_snapshot_drift_count,
+    'active_rebuild_count', v_active_rebuild_count,
+    'http_request_count', v_http_count,
+    'extraction_job_count', v_extraction_count,
+    'embedding_job_count', v_embedding_count,
+    'pending_embedding_count', v_pending_count,
+    'failure_baseline_sha256', v_failure_baseline_sha256
+  );
+  v_gate_expectations := jsonb_build_object(
+    'primary_support_plan_sha256',
+      util.dataset_alias_execution_v2_sha256(v_primary_gate_material::text),
+    'execution_unused_sha256',
+      util.dataset_alias_execution_v2_sha256(v_unused_gate_material::text),
+    'derivative_quiescence_sha256',
+      util.dataset_alias_execution_v2_sha256(v_quiescence_gate_material::text)
+  );
+  v_gate_expectations_sha256 :=
+    util.dataset_alias_execution_v2_sha256(v_gate_expectations::text);
+
+  select preflight.id
+  into v_existing_id
+  from util.dataset_alias_execution_v2_preflights as preflight
+  where preflight.id = v_request_id
+     or (
+       preflight.actor_user_id = v_actor
+       and preflight.preflight_request_sha256 = v_request_sha256
+     )
+  limit 1;
+
+  if v_existing_id is not null then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_ALREADY_EXISTS',
+      'status', 409,
+      'message', 'A preflight request ID or exact request was already used; tokens are never replayed'
+    );
+  end if;
+
+  v_completed_at := pg_catalog.clock_timestamp();
+  v_expires_at := v_completed_at + interval '180 seconds';
+  v_token := pg_catalog.encode(extensions.gen_random_bytes(32), 'hex');
+  v_token_sha256 := util.dataset_alias_execution_v2_sha256(v_token);
+  v_proof_material := jsonb_build_object(
+    'schema_version', 'dataset-alias-execution-preflight-proof.v2',
+    'request_id', v_request_id,
+    'actor_user_id', v_actor,
+    'environment', v_environment,
+    'project_ref', v_project_ref,
+    'server_context_sha256',
+      util.dataset_alias_execution_v2_sha256(v_server_context::text),
+    'plan_sha256', v_plan_sha256,
+    'operation_id', v_operation_id,
+    'alias_plan_request_sha256', v_alias_plan_request_sha256,
+    'freeze_sha256', v_bindings->>'freeze_sha256',
+    'approval_identity_sha256',
+      v_bindings->>'approval_identity_sha256',
+    'plan_request_sha256', v_plan_request_sha256,
+    'bindings_sha256', v_bindings_sha256,
+    'expected_sha256', v_expected_sha256,
+    'derivative_targets_sha256', v_targets_sha256,
+    'gate_expectations', v_gate_expectations,
+    'gate_expectations_sha256', v_gate_expectations_sha256,
+    'failure_baseline_sha256', v_failure_baseline_sha256,
+    'preflight_request_sha256', v_request_sha256,
+    'completed_at', v_completed_at,
+    'expires_at', v_expires_at
+  );
+  v_proof_sha256 := util.dataset_alias_execution_v2_sha256(v_proof_material::text);
+
+  insert into util.dataset_alias_execution_v2_preflights (
+    id,
+    actor_user_id,
+    actor_email,
+    environment,
+    project_ref,
+    target_visibility,
+    plan,
+    freeze_envelope,
+    approval_envelope,
+    plan_sha256,
+    operation_id,
+    plan_request_sha256,
+    bindings,
+    bindings_sha256,
+    expected,
+    expected_sha256,
+    derivative_targets,
+    derivative_targets_sha256,
+    gate_expectations,
+    gate_expectations_sha256,
+    failure_baseline_sha256,
+    preflight_request_sha256,
+    preflight_proof_sha256,
+    freeze_sha256,
+    approval_identity_sha256,
+    token_sha256,
+    completed_at,
+    expires_at
+  ) values (
+    v_request_id,
+    v_actor,
+    lower(btrim(v_actor_email)),
+    v_environment,
+    v_project_ref,
+    'owner_draft',
+    v_plan,
+    v_freeze,
+    v_approval,
+    v_plan_sha256,
+    v_operation_id,
+    v_plan_request_sha256,
+    v_bindings,
+    v_bindings_sha256,
+    v_expected,
+    v_expected_sha256,
+    v_targets,
+    v_targets_sha256,
+    v_gate_expectations,
+    v_gate_expectations_sha256,
+    v_failure_baseline_sha256,
+    v_request_sha256,
+    v_proof_sha256,
+    v_bindings->>'freeze_sha256',
+    v_bindings->>'approval_identity_sha256',
+    v_token_sha256,
+    v_completed_at,
+    v_expires_at
+  );
+
+  return v_proof_material || jsonb_build_object(
+    'ok', true,
+    'command', 'cmd_dataset_alias_execution_preflight_v2_guarded',
+    'preflight_token', v_token,
+    'preflight_proof_sha256', v_proof_sha256,
+    'simulation', jsonb_build_object(
+      'plan_rows', jsonb_array_length(v_plan->'actions'),
+      'plan_exchanges', (v_plan #>> '{expected,exchange_count}')::integer,
+      'alias_audits', (v_plan #>> '{expected,audit_count}')::integer,
+      'derivative_targets', jsonb_array_length(v_input_targets),
+      'rolled_back', true
+    )
+  );
+exception
+  when lock_not_available then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_LOCK_BUSY',
+      'status', 409,
+      'message', 'Protected preflight could not acquire its bounded locks'
+    );
+  when unique_violation then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_PREFLIGHT_CONCURRENT_CONFLICT',
+      'status', 409,
+      'message', 'A concurrent preflight consumed the same request identity'
+    );
+end;
+$_$;
+
+
+ALTER FUNCTION "api"."cmd_dataset_alias_execution_preflight_v2_guarded"("p_request" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "api"."cmd_dataset_alias_execution_preflight_v2_guarded"("p_request" "jsonb") IS 'Rollback-only server validation for the exact owner-draft 52-row/59-exchange alias plan plus its sorted 23-flow/27-process derivative closure. A successful call persists one non-replayable token that expires 180 seconds after simulation completes.';
+
+
+
 CREATE OR REPLACE FUNCTION "api"."cmd_dataset_alias_execution_read"("p_request_id" "uuid") RETURNS "jsonb"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -2777,6 +5070,535 @@ ALTER FUNCTION "api"."cmd_dataset_alias_execution_read"("p_request_id" "uuid") O
 
 
 COMMENT ON FUNCTION "api"."cmd_dataset_alias_execution_read"("p_request_id" "uuid") IS 'Actor-only status and reconciliation for one protected attempt. It may monotonically classify durable evidence as derivatives_pending/completed/failed/indeterminate, but it never dispatches, retries, replays, or changes dataset rows.';
+
+
+
+CREATE OR REPLACE FUNCTION "api"."cmd_dataset_alias_execution_read_v2"("p_request_id" "uuid") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    SET "lock_timeout" TO '2s'
+    SET "statement_timeout" TO '60s'
+    AS $$
+declare
+  v_actor uuid := auth.uid();
+  v_preflight util.dataset_alias_execution_v2_preflights%rowtype;
+  v_request util.dataset_alias_execution_v2_requests%rowtype;
+  v_gate_receipts jsonb := '[]'::jsonb;
+  v_gate_count integer := 0;
+  v_alias_audit_count integer := 0;
+  v_derivative_child_count integer := 0;
+  v_derivative_flow_count integer := 0;
+  v_derivative_process_count integer := 0;
+  v_primary_closure jsonb;
+  v_primary_closure_ok boolean := false;
+  v_active_dispatch_grace boolean := false;
+  v_initial_request_status text;
+  v_initial_request_updated_at timestamp with time zone;
+  v_proof_request_status text;
+  v_proof_request_updated_at timestamp with time zone;
+  v_request_changed_during_read boolean := false;
+  v_batch_proof_read boolean := false;
+  v_terminal_update_count integer := 0;
+  v_terminal_update_status text;
+  v_batch_proof jsonb;
+  v_category text;
+  v_now timestamp with time zone := pg_catalog.clock_timestamp();
+begin
+  if v_actor is null then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'AUTH_REQUIRED',
+      'status', 401,
+      'message', 'Authentication required'
+    );
+  end if;
+
+  if p_request_id is null then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_READ_INVALID_REQUEST',
+      'status', 400,
+      'message', 'Exact protected execution request ID is required'
+    );
+  end if;
+
+  select preflight.*
+  into v_preflight
+  from util.dataset_alias_execution_v2_preflights as preflight
+  where preflight.id = p_request_id
+    and preflight.actor_user_id = v_actor;
+
+  if v_preflight.id is null then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_REQUEST_NOT_FOUND',
+      'status', 404,
+      'message', 'No actor-owned protected preflight or execution exists'
+    );
+  end if;
+
+  select
+    coalesce(
+      jsonb_agg(
+        jsonb_build_object(
+          'gate', receipt.gate_name,
+          'expected_sha256', receipt.expected_sha256,
+          'observed_sha256', receipt.observed_sha256,
+          'status', receipt.status,
+          'captured_at', receipt.captured_at,
+          'receipt_sha256', receipt.receipt_sha256
+        ) order by receipt.captured_at, receipt.gate_name
+      ),
+      '[]'::jsonb
+    ),
+    count(*)::integer
+  into v_gate_receipts, v_gate_count
+  from util.dataset_alias_execution_v2_gate_receipts as receipt
+  where receipt.preflight_id = p_request_id
+    and receipt.actor_user_id = v_actor;
+
+  select request.*
+  into v_request
+  from util.dataset_alias_execution_v2_requests as request
+  where request.id = p_request_id
+    and request.actor_user_id = v_actor;
+
+  if v_request.id is null then
+    return jsonb_build_object(
+      'ok', true,
+      'command', 'cmd_dataset_alias_execution_read_v2',
+      'schema_version', 'dataset-alias-execution-status.v2',
+      'request_id', p_request_id,
+      'status', 'indeterminate',
+      'execution_status', 'not_admitted',
+      'code', case
+        when v_preflight.consumed_at is null
+          then 'ALIAS_EXECUTION_NOT_ADMITTED'
+        else 'ALIAS_EXECUTION_ADMISSION_LEDGER_MISSING'
+      end,
+      'retry_allowed', false,
+      'actor_user_id', v_actor,
+      'environment', v_preflight.environment,
+      'project_ref', v_preflight.project_ref,
+      'plan_sha256', v_preflight.plan_sha256,
+      'operation_id', v_preflight.operation_id,
+      'plan_request_sha256', v_preflight.plan_request_sha256,
+      'preflight_proof_sha256', v_preflight.preflight_proof_sha256,
+      'preflight_completed_at', v_preflight.completed_at,
+      'preflight_expires_at', v_preflight.expires_at,
+      'preflight_consumed_at', v_preflight.consumed_at,
+      'gate_count', v_gate_count,
+      'gates', v_gate_receipts
+    );
+  end if;
+
+  v_initial_request_status := v_request.status;
+  v_initial_request_updated_at := v_request.updated_at;
+
+  v_active_dispatch_grace :=
+    v_request.status in ('dispatching', 'dispatched', 'running')
+    and v_now <= v_request.admitted_at + interval '120 seconds';
+
+  if v_active_dispatch_grace then
+    -- Do not run the heavyweight live closure while the one-shot executor may
+    -- be committing.  Apart from wasting work, a status lock/readback race
+    -- must never delay or misclassify the only authorized mutation attempt.
+    v_primary_closure := jsonb_build_object(
+      'ok', false,
+      'schema_version', 'dataset-alias-primary-closure.v1',
+      'code', 'ALIAS_EXECUTION_PRIMARY_CLOSURE_PENDING',
+      'live_closure_proof', false
+    );
+  else
+
+  select count(*)::integer
+  into v_alias_audit_count
+  from private.command_audit_log as audit
+  where audit.actor_user_id = v_actor
+    and audit.payload->>'plan_sha256' = v_request.plan_sha256
+    and (
+      (
+        audit.command = 'cmd_dataset_alias_batch_v2_guarded'
+        and audit.payload->>'record_type' in ('row', 'plan')
+      )
+      or (
+        audit.command = 'cmd_dataset_alias_plan_v2_guarded'
+        and audit.payload->>'record_type' = 'plan_summary'
+      )
+    );
+
+  select
+    count(*)::integer,
+    count(*) filter (where target_table = 'flows')::integer,
+    count(*) filter (where target_table = 'processes')::integer
+  into
+    v_derivative_child_count,
+    v_derivative_flow_count,
+    v_derivative_process_count
+  from util.dataset_derivative_rebuild_requests as child
+  where child.actor_user_id = v_actor
+    and child.batch_id = p_request_id;
+
+  v_primary_closure :=
+    util.read_dataset_alias_execution_v2_primary_closure(
+      v_actor,
+      v_preflight.plan
+    );
+  v_primary_closure_ok := coalesce(
+    (v_primary_closure->>'live_closure_proof')::boolean,
+    false
+  );
+
+  if v_request.status in ('dispatching', 'dispatched', 'running') then
+    if v_alias_audit_count = (v_preflight.plan #>> '{expected,audit_count}')::integer
+      and v_derivative_child_count =
+        (v_preflight.plan #>> '{expected,derivative_target_count}')::integer
+      and v_derivative_flow_count = (
+        select count(*)::integer from jsonb_array_elements(v_preflight.derivative_targets) as target
+        where target->>'table' = 'flows'
+      )
+      and v_derivative_process_count = (
+        select count(*)::integer from jsonb_array_elements(v_preflight.derivative_targets) as target
+        where target->>'table' = 'processes'
+      )
+      and v_primary_closure_ok then
+      update util.dataset_alias_execution_v2_requests
+      set
+        status = 'derivatives_pending',
+        primary_committed_at = coalesce(primary_committed_at, updated_at),
+        updated_at = v_now
+      where id = p_request_id
+        and status in ('dispatching', 'dispatched', 'running');
+    elsif (
+        v_alias_audit_count > 0
+        or v_derivative_child_count > 0
+      ) and not v_primary_closure_ok then
+      update util.dataset_alias_execution_v2_requests
+      set
+        status = 'indeterminate',
+        terminal_at = v_now,
+        last_error = jsonb_build_object(
+          'phase', 'reconcile',
+          'code', 'ALIAS_EXECUTION_PRIMARY_CLOSURE_MISMATCH',
+          'primary_closure', v_primary_closure,
+          'retry_allowed', false
+        ),
+        updated_at = v_now
+      where id = p_request_id
+        and status in ('dispatching', 'dispatched', 'running');
+    elsif v_now > v_request.admitted_at + interval '120 seconds' then
+      update util.dataset_alias_execution_v2_requests
+      set
+        status = 'indeterminate',
+        terminal_at = v_now,
+        last_error = jsonb_build_object(
+          'phase', 'reconcile',
+          'code', 'ALIAS_EXECUTION_DISPATCH_OUTCOME_INDETERMINATE',
+          'alias_audit_count', v_alias_audit_count,
+          'derivative_child_count', v_derivative_child_count,
+          'retry_allowed', false
+        ),
+        updated_at = v_now
+      where id = p_request_id
+        and status in ('dispatching', 'dispatched', 'running');
+    end if;
+  end if;
+
+  select request.*
+  into v_request
+  from util.dataset_alias_execution_v2_requests as request
+  where request.id = p_request_id
+    and request.actor_user_id = v_actor;
+
+  v_request_changed_during_read :=
+    v_request.status is distinct from v_initial_request_status
+    or v_request.updated_at is distinct from v_initial_request_updated_at;
+
+  if v_request_changed_during_read then
+    -- VOLATILE PL/pgSQL statements can observe different READ COMMITTED
+    -- snapshots.  If the executor or this reconciliation pass advanced the
+    -- ledger after the first read, none of the evidence cached above is safe
+    -- to use for another monotonic classification.  Return an explicit
+    -- read-only conflict so the caller can poll again from the new state;
+    -- execution admission and dispatch remain permanently non-retryable.
+    return jsonb_build_object(
+      'ok', false,
+      'command', 'cmd_dataset_alias_execution_read_v2',
+      'schema_version', 'dataset-alias-execution-status.v2',
+      'request_id', p_request_id,
+      'code', 'ALIAS_EXECUTION_READ_STATE_CHANGED',
+      'status', 409,
+      'execution_status', v_request.status,
+      'retry_allowed', false,
+      'read_retry_allowed', true,
+      'message', 'Execution state changed during readback; poll status again without redispatching'
+    );
+  end if;
+
+  v_proof_request_status := v_request.status;
+  v_proof_request_updated_at := v_request.updated_at;
+
+  if v_derivative_child_count > 0
+    or v_request.status in ('derivatives_pending', 'completed') then
+    v_batch_proof_read := true;
+    -- The versioned alias cohort's derivative batch is its own size; the shape-specific v1 alias
+    -- reader pins the fifty-target cohort and cannot read it, so the generalized reader that accepts
+    -- any declared batch shape is the one this versioned read uses.
+    v_batch_proof := util.read_dataset_derivative_rebuild_batch_any(
+      v_actor,
+      p_request_id
+    );
+
+    select request.*
+    into v_request
+    from util.dataset_alias_execution_v2_requests as request
+    where request.id = p_request_id
+      and request.actor_user_id = v_actor;
+
+    if v_request.status is distinct from v_proof_request_status
+      or v_request.updated_at is distinct from v_proof_request_updated_at then
+      -- The derivative proof can be substantially more expensive than the
+      -- parent-ledger read.  A different reader or the executor may classify
+      -- the request while that proof is being assembled, so the cached proof
+      -- must not be applied to the newly visible parent state.
+      return jsonb_build_object(
+        'ok', false,
+        'command', 'cmd_dataset_alias_execution_read_v2',
+        'schema_version', 'dataset-alias-execution-status.v2',
+        'request_id', p_request_id,
+        'code', 'ALIAS_EXECUTION_READ_STATE_CHANGED',
+        'status', 409,
+        'execution_status', v_request.status,
+        'retry_allowed', false,
+        'read_retry_allowed', true,
+        'message', 'Execution state changed during readback; poll status again without redispatching'
+      );
+    end if;
+  end if;
+
+  if v_request.status = 'derivatives_pending' then
+    if v_alias_audit_count
+        is distinct from (v_preflight.plan #>> '{expected,audit_count}')::integer
+      or v_derivative_child_count
+        is distinct from (v_preflight.plan #>> '{expected,derivative_target_count}')::integer
+      or v_derivative_flow_count is distinct from (
+        select count(*)::integer from jsonb_array_elements(v_preflight.derivative_targets) as target
+        where target->>'table' = 'flows'
+      )
+      or v_derivative_process_count is distinct from (
+        select count(*)::integer from jsonb_array_elements(v_preflight.derivative_targets) as target
+        where target->>'table' = 'processes'
+      )
+      or not v_primary_closure_ok then
+      update util.dataset_alias_execution_v2_requests
+      set
+        status = 'indeterminate',
+        terminal_at = v_now,
+        terminal_proof = jsonb_build_object(
+          'primary_closure', v_primary_closure,
+          'derivative_closure', v_batch_proof
+        ),
+        last_error = jsonb_build_object(
+          'phase', 'readback',
+          'code', 'ALIAS_EXECUTION_PRIMARY_CLOSURE_MISMATCH',
+          'alias_audit_count', v_alias_audit_count,
+          'derivative_child_count', v_derivative_child_count,
+          'primary_closure', v_primary_closure
+        ),
+        updated_at = v_now
+      where id = p_request_id
+        and status = 'derivatives_pending';
+      get diagnostics v_terminal_update_count = row_count;
+      if v_terminal_update_count = 1 then
+        v_terminal_update_status := 'indeterminate';
+      end if;
+    elsif v_batch_proof->>'status' = 'completed'
+      and coalesce((v_batch_proof->>'causal_terminal_proof')::boolean, false) then
+      update util.dataset_alias_execution_v2_requests
+      set
+        status = 'completed',
+        terminal_at = v_now,
+        terminal_proof = jsonb_build_object(
+          'primary_closure', v_primary_closure,
+          'derivative_closure', v_batch_proof
+        ),
+        updated_at = v_now
+      where id = p_request_id
+        and status = 'derivatives_pending';
+      get diagnostics v_terminal_update_count = row_count;
+      if v_terminal_update_count = 1 then
+        v_terminal_update_status := 'completed';
+      end if;
+    elsif v_batch_proof->>'status' = 'failed' then
+      update util.dataset_alias_execution_v2_requests
+      set
+        status = 'failed',
+        terminal_at = v_now,
+        terminal_proof = jsonb_build_object(
+          'primary_closure', v_primary_closure,
+          'derivative_closure', v_batch_proof
+        ),
+        last_error = jsonb_build_object(
+          'phase', 'derivative_readback',
+          'code', coalesce(
+            v_batch_proof->>'code',
+            'ALIAS_EXECUTION_DERIVATIVE_CLOSURE_FAILED'
+          )
+        ),
+        updated_at = v_now
+      where id = p_request_id
+        and status = 'derivatives_pending';
+      get diagnostics v_terminal_update_count = row_count;
+      if v_terminal_update_count = 1 then
+        v_terminal_update_status := 'failed';
+      end if;
+    end if;
+  end if;
+
+  select request.*
+  into v_request
+  from util.dataset_alias_execution_v2_requests as request
+  where request.id = p_request_id
+    and request.actor_user_id = v_actor;
+
+  if v_batch_proof_read
+    and (
+      v_request.status is distinct from v_proof_request_status
+      or v_request.updated_at is distinct from v_proof_request_updated_at
+    )
+    and not (
+      v_terminal_update_count = 1
+      and v_request.status is not distinct from v_terminal_update_status
+      and v_request.updated_at is not distinct from v_now
+    ) then
+    -- A conditional terminal update with ROW_COUNT = 1 is this invocation's
+    -- own monotonic classification.  Any other parent transition invalidates
+    -- the cached derivative proof and must be retried as read-only polling.
+    return jsonb_build_object(
+      'ok', false,
+      'command', 'cmd_dataset_alias_execution_read_v2',
+      'schema_version', 'dataset-alias-execution-status.v2',
+      'request_id', p_request_id,
+      'code', 'ALIAS_EXECUTION_READ_STATE_CHANGED',
+      'status', 409,
+      'execution_status', v_request.status,
+      'retry_allowed', false,
+      'read_retry_allowed', true,
+      'message', 'Execution state changed during readback; poll status again without redispatching'
+    );
+  end if;
+
+  end if;
+
+  v_category := case v_request.status
+    when 'completed' then 'passed'
+    when 'failed' then 'failed'
+    when 'indeterminate' then 'indeterminate'
+    else 'pending'
+  end;
+
+  -- A stored completion is not allowed to hide later live-state drift during
+  -- an independent readback.  The immutable ledger remains completed, but the
+  -- fresh response fails closed if its current causal proof no longer passes.
+  if v_request.status = 'completed'
+    and (
+      not v_primary_closure_ok
+      or v_batch_proof is null
+      or v_batch_proof->>'status' is distinct from 'completed'
+      or coalesce((v_batch_proof->>'causal_terminal_proof')::boolean, false)
+        is not true
+    ) then
+    v_category := 'failed';
+  end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'command', 'cmd_dataset_alias_execution_read_v2',
+    'schema_version', 'dataset-alias-execution-status.v2',
+    'request_id', p_request_id,
+    'status', v_category,
+    'execution_status', v_request.status,
+    'retry_allowed', false,
+    'actor_user_id', v_actor,
+    'environment', v_preflight.environment,
+    'project_ref', v_preflight.project_ref,
+    'target_visibility', v_preflight.target_visibility,
+    'plan_sha256', v_request.plan_sha256,
+    'operation_id', v_request.operation_id,
+    'plan_request_sha256', v_request.plan_request_sha256,
+    'freeze_sha256', v_request.freeze_sha256,
+    'approval_identity_sha256', v_request.approval_identity_sha256,
+    'approval_text_sha256', v_request.approval_text_sha256,
+    'derivative_target_set_sha256', v_request.derivative_target_set_sha256,
+    'server_derivative_targets_sha256',
+      v_preflight.derivative_targets_sha256,
+    'preflight_proof_sha256', v_request.preflight_proof_sha256,
+    'admission_request_sha256', v_request.admission_request_sha256,
+    'gate_results_sha256', v_request.gate_results_sha256,
+    'attempt_count', v_request.attempt_count,
+    'dispatch_count', v_request.dispatch_count,
+    'net_request_id', v_request.net_request_id::text,
+    'preflight_completed_at', v_preflight.completed_at,
+    'preflight_expires_at', v_preflight.expires_at,
+    'preflight_consumed_at', v_preflight.consumed_at,
+    'admitted_at', v_request.admitted_at,
+    'dispatched_at', v_request.dispatched_at,
+    'started_at', v_request.started_at,
+    'primary_committed_at', v_request.primary_committed_at,
+    'terminal_at', v_request.terminal_at,
+    'gate_count', v_gate_count,
+    'gates', v_gate_receipts,
+    'primary_readback', jsonb_build_object(
+      'row_count', case
+        when v_alias_audit_count = (select (preflight.plan #>> '{expected,audit_count}')::integer from util.dataset_alias_execution_v2_preflights as preflight where preflight.id = v_request.id) and v_primary_closure_ok then (select (preflight.plan #>> '{expected,action_count}')::integer from util.dataset_alias_execution_v2_preflights as preflight where preflight.id = v_request.id)
+        else null
+      end,
+      'exchange_count', case
+        when v_alias_audit_count = (select (preflight.plan #>> '{expected,audit_count}')::integer from util.dataset_alias_execution_v2_preflights as preflight where preflight.id = v_request.id) and v_primary_closure_ok then (select (preflight.plan #>> '{expected,exchange_count}')::integer from util.dataset_alias_execution_v2_preflights as preflight where preflight.id = v_request.id)
+        else null
+      end,
+      'alias_audit_count', v_alias_audit_count,
+      'live_closure_proof', v_primary_closure_ok,
+      'closure', v_primary_closure
+    ),
+    'derivative_readback', coalesce(
+      v_batch_proof,
+      jsonb_build_object(
+        'schema_version', 'dataset-derivative-rebuild-batch-status.v1',
+        'batch_id', p_request_id,
+        'status', 'not_started',
+        'code', 'DERIVATIVE_BATCH_NOT_STARTED',
+        'proof_level', 'none',
+        'proof_deferred', false,
+        'target_count', v_derivative_child_count,
+        'flow_count', v_derivative_flow_count,
+        'process_count', v_derivative_process_count,
+        'completed_count', 0,
+        'nonterminal_count', 0,
+        'failed_count', 0,
+        'invalid_proof_count', null,
+        'causal_terminal_proof', false,
+        'targets', '[]'::jsonb
+      )
+    ),
+    'error', v_request.last_error
+  );
+exception
+  when lock_not_available then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'ALIAS_EXECUTION_READ_LOCK_BUSY',
+      'status', 'indeterminate',
+      'message', 'Protected execution status row is busy; readback did not retry or redispatch'
+    );
+end;
+$$;
+
+
+ALTER FUNCTION "api"."cmd_dataset_alias_execution_read_v2"("p_request_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "api"."cmd_dataset_alias_execution_read_v2"("p_request_id" "uuid") IS 'Actor-only status and reconciliation for one protected attempt. It may monotonically classify durable evidence as derivatives_pending/completed/failed/indeterminate, but it never dispatches, retries, replays, or changes dataset rows.';
 
 
 
@@ -34476,6 +37298,853 @@ COMMENT ON FUNCTION "private"."cmd_dataset_alias_batch_guarded"("p_batch" "jsonb
 
 
 
+CREATE OR REPLACE FUNCTION "private"."cmd_dataset_alias_batch_v2_guarded"("p_batch" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    SET "lock_timeout" TO '5s'
+    AS $_$
+declare
+  v_actor uuid := auth.uid();
+  v_schema_version constant text := 'dataset-alias-batch.v2';
+  v_command constant text := 'cmd_dataset_alias_batch_v2_guarded';
+  v_text_path constant text := 'processDataSet.processInformation.quantitativeReference.functionalUnitOrOther.#text';
+  v_batch_id text;
+  v_plan_sha256 text;
+  v_factor text;
+  v_actions jsonb;
+  v_text_actions jsonb;
+  v_action_count integer;
+  v_action jsonb;
+  v_reference jsonb;
+  v_alias_fp_id text;
+  v_alias_fp_version text;
+  v_alias_fp_source_ug_id text;
+  v_alias_fp_source_ug_version text;
+  v_target_fp jsonb;
+  v_target_ug jsonb;
+  v_source_ug jsonb;
+  v_prepared jsonb := '[]'::jsonb;
+  v_derived jsonb;
+  v_entry jsonb;
+  v_live_flows jsonb;
+  v_batch_flows jsonb;
+  v_live_occurrences jsonb;
+  v_batch_occurrences jsonb;
+  v_claim_text_actions jsonb;
+  v_moved_text_actions jsonb;
+  v_occurrence_count integer;
+  v_amount_field_count integer;
+  v_selected_exchanges integer := 0;
+  v_unrelated integer;
+  v_text_count integer := 0;
+  v_fresh_count integer := 0;
+  v_replayed_count integer := 0;
+  v_prior_summary jsonb;
+  v_hint text;
+  v_detail text;
+begin
+  if v_actor is null then
+    return jsonb_build_object('ok', false, 'code', 'AUTH_REQUIRED', 'status', 401, 'message', 'Authentication required');
+  end if;
+
+  begin  -- one subtransaction: every post-start refusal raises, so nothing partial survives
+    if jsonb_typeof(p_batch) is distinct from 'object' then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400, 'The v2 batch must be one JSON object');
+    end if;
+    if exists (
+      select 1 from jsonb_object_keys(p_batch) as key(name)
+      where key.name <> all (array[
+        'schema_version', 'batch_id', 'plan_sha256', 'dimension', 'factor', 'target_visibility',
+        'target_snapshots', 'source_evidence', 'source_alias', 'counts', 'text_actions', 'actions'
+      ])
+    ) then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400, 'Unknown batch keys are refused');
+    end if;
+    if p_batch->>'schema_version' is distinct from v_schema_version
+      or p_batch->>'dimension' is distinct from 'time'
+      or p_batch->>'target_visibility' is distinct from 'owner_draft'
+      or p_batch->>'factor' is distinct from private.dataset_alias_v2_factor()::text
+      or (p_batch->>'plan_sha256') !~ '^[a-f0-9]{64}$'
+      or nullif(btrim(p_batch->>'batch_id'), '') is null
+      or jsonb_typeof(p_batch->'actions') is distinct from 'array'
+      or jsonb_typeof(p_batch->'text_actions') is distinct from 'array'
+      or jsonb_typeof(p_batch->'counts') is distinct from 'object'
+      or jsonb_typeof(p_batch->'target_snapshots') is distinct from 'object'
+      or jsonb_typeof(p_batch->'source_evidence') is distinct from 'object' then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
+        'Batch envelope, dimension, factor, plan identity, counts, text actions, snapshots or action list is invalid');
+    end if;
+    v_batch_id := btrim(p_batch->>'batch_id');
+    v_plan_sha256 := p_batch->>'plan_sha256';
+    v_factor := p_batch->>'factor';
+    v_actions := p_batch->'actions';
+    v_text_actions := p_batch->'text_actions';
+    v_action_count := jsonb_array_length(v_actions);
+    if v_action_count < 1 or v_action_count > 4096 or jsonb_array_length(v_text_actions) > 4096 then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400, 'A v2 batch carries between one and 4096 actions and at most 4096 text actions');
+    end if;
+
+    -- Counts, snapshot and evidence blocks carry exactly the reviewed keys with checked shapes; nothing is
+    -- echoed unread and nothing defaults when a value is missing or malformed. `amount_field_count` is the
+    -- reviewed two-amount-fields-per-bound-exchange derivation.
+    if exists (
+      select 1 from jsonb_object_keys(p_batch->'counts') as key(name)
+      where key.name <> all (array['action_count', 'flow_count', 'process_count', 'exchange_count',
+        'amount_field_count', 'unrelated_exchange_count', 'flowproperty_count'])
+    ) or (select count(*) from jsonb_object_keys(p_batch->'counts')) <> 7
+      or (p_batch #>> '{counts,action_count}') !~ '^[0-9]+$'
+      or (p_batch #>> '{counts,flow_count}') !~ '^[0-9]+$'
+      or (p_batch #>> '{counts,process_count}') !~ '^[0-9]+$'
+      or (p_batch #>> '{counts,exchange_count}') !~ '^[0-9]+$'
+      or (p_batch #>> '{counts,amount_field_count}') !~ '^[0-9]+$'
+      or (p_batch #>> '{counts,unrelated_exchange_count}') !~ '^[0-9]+$'
+      or (p_batch #>> '{counts,flowproperty_count}') !~ '^[0-9]+$' then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
+        'The counts block must carry exactly the seven reviewed numeric keys');
+    end if;
+    if exists (
+      select 1 from jsonb_object_keys(p_batch->'target_snapshots') as key(name)
+      where key.name <> all (array['flowproperty', 'unitgroup'])
+    )
+      or jsonb_typeof(p_batch->'target_snapshots'->'flowproperty') is distinct from 'object'
+      or jsonb_typeof(p_batch->'target_snapshots'->'unitgroup') is distinct from 'object'
+      or (p_batch #>> '{target_snapshots,flowproperty,id}') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      or (p_batch #>> '{target_snapshots,unitgroup,id}') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      or (p_batch #>> '{target_snapshots,flowproperty,version}') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+      or (p_batch #>> '{target_snapshots,unitgroup,version}') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+      or (p_batch #>> '{target_snapshots,flowproperty,sha256}') !~ '^[a-f0-9]{64}$'
+      or (p_batch #>> '{target_snapshots,unitgroup,sha256}') !~ '^[a-f0-9]{64}$' then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
+        'The target snapshot block must carry exactly the target flow property and unit group with their digests');
+    end if;
+    if exists (
+      select 1 from jsonb_object_keys(p_batch->'source_evidence') as key(name)
+      where key.name <> all (array['sha256', 'exchange_count', 'source_unitgroup', 'source_flowproperty'])
+    ) or (p_batch #>> '{source_evidence,sha256}') !~ '^[a-f0-9]{64}$'
+      or (p_batch #>> '{source_evidence,exchange_count}') !~ '^[0-9]+$'
+      or jsonb_typeof(p_batch->'source_evidence'->'source_unitgroup') is distinct from 'object'
+      or exists (
+        select 1 from jsonb_object_keys(p_batch->'source_evidence'->'source_unitgroup') as key(name)
+        where key.name <> all (array['id', 'version', 'sha256'])
+      )
+      or (p_batch #>> '{source_evidence,source_unitgroup,id}') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      or (p_batch #>> '{source_evidence,source_unitgroup,version}') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+      or (p_batch #>> '{source_evidence,source_unitgroup,sha256}') !~ '^[a-f0-9]{64}$'
+      or jsonb_typeof(p_batch->'source_evidence'->'source_flowproperty') is distinct from 'object'
+      or exists (
+        select 1 from jsonb_object_keys(p_batch->'source_evidence'->'source_flowproperty') as key(name)
+        where key.name <> all (array['id', 'version', 'sha256'])
+      )
+      or (p_batch #>> '{source_evidence,source_flowproperty,id}') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      or (p_batch #>> '{source_evidence,source_flowproperty,version}') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+      or (p_batch #>> '{source_evidence,source_flowproperty,sha256}') !~ '^[a-f0-9]{64}$' then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
+        'The source evidence block must carry exactly the reviewed digest, exchange count, source unit group and complete source flow property snapshots');
+    end if;
+
+    -- Locks: unit groups inside the boundary so no concurrent factor or snapshot change can race.
+    lock table public.flowproperties, public.unitgroups, public.flows, public.processes
+      in share row exclusive mode;
+
+    -- Target and source evidence are read from the locked rows, never trusted from the envelope.
+    select json_ordered::jsonb into v_target_fp
+    from public.flowproperties
+    where id = (p_batch #>> '{target_snapshots,flowproperty,id}')::uuid
+      and version = p_batch #>> '{target_snapshots,flowproperty,version}';
+    select json_ordered::jsonb into v_target_ug
+    from public.unitgroups
+    where id = (p_batch #>> '{target_snapshots,unitgroup,id}')::uuid
+      and version = p_batch #>> '{target_snapshots,unitgroup,version}';
+    select json_ordered::jsonb into v_source_ug
+    from public.unitgroups
+    where id = (p_batch #>> '{source_evidence,source_unitgroup,id}')::uuid
+      and version = p_batch #>> '{source_evidence,source_unitgroup,version}';
+    if v_target_fp is null or v_target_ug is null or v_source_ug is null then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409, 'The declared target flow property, target unit group or source unit group does not exist');
+    end if;
+    if private.dataset_alias_v2_payload_sha256(v_target_fp) is distinct from p_batch #>> '{target_snapshots,flowproperty,sha256}'
+      or private.dataset_alias_v2_payload_sha256(v_target_ug) is distinct from p_batch #>> '{target_snapshots,unitgroup,sha256}'
+      or private.dataset_alias_v2_payload_sha256(v_source_ug) is distinct from p_batch #>> '{source_evidence,source_unitgroup,sha256}' then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409, 'Snapshot content does not match the declared binding',
+        jsonb_build_object('fp_observed', private.dataset_alias_v2_payload_sha256(v_target_fp),
+          'fp_declared', p_batch #>> '{target_snapshots,flowproperty,sha256}',
+          'ug_observed', private.dataset_alias_v2_payload_sha256(v_target_ug),
+          'ug_declared', p_batch #>> '{target_snapshots,unitgroup,sha256}',
+          'source_observed', private.dataset_alias_v2_payload_sha256(v_source_ug),
+          'source_declared', p_batch #>> '{source_evidence,source_unitgroup,sha256}'));
+    end if;
+    -- The target flow property must reference exactly this target unit group, and that unit group must carry the
+    -- reviewed factor for its hour unit plus an unmodified year base.
+    if v_target_fp #>> '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@refObjectId}'
+        is distinct from p_batch #>> '{target_snapshots,unitgroup,id}'
+      or not exists (
+        select 1
+        from jsonb_array_elements(coalesce(v_target_ug #> '{unitGroupDataSet,unitGroupInformation,quantitativeReference,referenceToReferenceUnit}', '[]'::jsonb)) as unit
+        where unit->>'@unitName' = 'hr' and (unit->>'meanValue')::numeric = private.dataset_alias_v2_factor()
+      )
+      or not exists (
+        select 1
+        from jsonb_array_elements(coalesce(v_target_ug #> '{unitGroupDataSet,unitGroupInformation,quantitativeReference,referenceToReferenceUnit}', '[]'::jsonb)) as unit
+        where unit->>'@unitName' = 'a' and (unit->>'meanValue')::numeric = 1
+      ) then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_FACTOR_UNSUPPORTED', 409,
+        'The target unit group does not carry the reviewed year base and exact hour factor');
+    end if;
+
+    -- The claimed flow and occurrence sets are aggregated before the structural scan, so every exchange
+    -- instance and text action can be bound to a claimed flow or process inside the same pass. The shapes
+    -- are pre-guarded so a malformed action cannot raise here; the scan below refuses it properly.
+    select coalesce(jsonb_agg(jsonb_build_object('id', (a->>'id')::uuid, 'version', a->>'version') order by (a->>'id')::uuid, a->>'version'), '[]'::jsonb)
+      into v_batch_flows
+    from jsonb_array_elements(v_actions) as a
+    where a->>'table' = 'flows'
+      and (a->>'id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
+    select coalesce(jsonb_agg(jsonb_build_object('process_id', (a->>'id')::uuid, 'process_version', a->>'version', 'index', (e->>'index')::integer, 'internal_id', e->>'internal_id', 'direction', e->>'direction') order by (a->>'id')::uuid, a->>'version', (e->>'index')::integer), '[]'::jsonb)
+      into v_batch_occurrences
+    from jsonb_array_elements(v_actions) as a
+    cross join lateral jsonb_array_elements(coalesce(a->'mutation'->'exchanges', '[]'::jsonb)) as e
+    where a->>'table' = 'processes'
+      and (a->>'id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      and (e->>'index') ~ '^[0-9]+$';
+
+    -- Structural scan: identity, closed keys, claimed canonical digests, the alias property identified from
+    -- the frozen before payloads, the per-table mutation contracts, and the set of processes whose
+    -- functional-unit leaf the batch claims to move.
+    for v_action in select * from jsonb_array_elements(v_actions) loop
+      if jsonb_typeof(v_action) <> 'object' then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400, 'Every action must be one JSON object');
+      end if;
+      if v_action->>'table' not in ('flows', 'processes') then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400, 'Every action must name the flows or processes table');
+      end if;
+      if exists (
+        select 1 from jsonb_object_keys(v_action) as key(name)
+        where key.name <> all (
+          case when v_action->>'table' = 'flows'
+            then array['action_id', 'table', 'id', 'version', 'expected_state_code', 'expected_modified_at',
+              'expected_json_ordered', 'desired_json_ordered', 'before_sha256', 'desired_sha256',
+              'source_flowproperty', 'mutation']
+            else array['action_id', 'table', 'id', 'version', 'expected_state_code', 'expected_modified_at',
+              'expected_json_ordered', 'desired_json_ordered', 'before_sha256', 'desired_sha256',
+              'quantitative_reference', 'mutation']
+          end)
+      ) or v_action->'desired_json_ordered' is null then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400, 'Unknown action keys, or a missing desired claim');
+      end if;
+      if (v_action->>'id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        or (v_action->>'version') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+        or (v_action->>'expected_state_code')::integer is distinct from 0
+        or jsonb_typeof(v_action->'expected_json_ordered') is distinct from 'object'
+        or jsonb_typeof(v_action->'mutation') is distinct from 'object'
+        or coalesce(v_action->>'expected_modified_at', '1970-01-01T00:00:00Z') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'
+        or (v_action->>'before_sha256') !~ '^[a-f0-9]{64}$'
+        or (v_action->>'desired_sha256') !~ '^[a-f0-9]{64}$' then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
+          'Action identity, table, state, before payload, claimed digests, mutation or timestamp is invalid',
+          jsonb_build_object('action_id', v_action->>'action_id'));
+      end if;
+      -- The claimed digests must be the server's own canonical digests of the claimed payloads: hash parity
+      -- with the producer is checked, never assumed.
+      if private.dataset_alias_v2_payload_sha256(v_action->'expected_json_ordered') is distinct from v_action->>'before_sha256'
+        or private.dataset_alias_v2_payload_sha256(v_action->'desired_json_ordered') is distinct from v_action->>'desired_sha256' then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_DERIVE_MISMATCH', 409,
+          'A claimed before or desired digest is not the canonical digest of the claimed payload',
+          jsonb_build_object('action_id', v_action->>'action_id'));
+      end if;
+      if v_action->>'table' = 'flows' then
+        -- Scope eligibility (root decision, Product flow only): every repaired flow must start from a
+        -- Product flow. Missing, Elementary flow and Waste flow are refused before any write, so the
+        -- maintenance path cannot silently widen to elementary or waste datasets.
+        if v_action->'expected_json_ordered' #>> '{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}' is distinct from 'Product flow' then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
+            'Every flow action must start from a Product flow; a missing or non-product typeOfDataSet is refused',
+            jsonb_build_object('action_id', v_action->>'action_id'));
+        end if;
+        if exists (
+          select 1 from jsonb_object_keys(v_action->'mutation') as key(name)
+          where key.name <> all (array['reference'])
+        ) or jsonb_typeof(v_action->'mutation'->'reference') is distinct from 'object'
+          or exists (
+            select 1 from jsonb_object_keys(v_action->'mutation'->'reference') as key(name)
+            where key.name <> all (array['@refObjectId', '@type', '@uri', '@version', 'common:shortDescription'])
+          )
+          or (v_action #>> '{mutation,reference,@refObjectId}') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          or coalesce(v_action #>> '{mutation,reference,@type}', '') = ''
+          or coalesce(v_action #>> '{mutation,reference,@uri}', '') = ''
+          or (v_action #>> '{mutation,reference,@version}') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+          or jsonb_typeof(v_action->'mutation'->'reference'->'common:shortDescription') is distinct from 'object'
+          or coalesce(v_action #>> '{mutation,reference,common:shortDescription,#text}', '') = '' then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
+            'A flow action carries exactly the deployed five-key target reference as its mutation',
+            jsonb_build_object('action_id', v_action->>'action_id'));
+        end if;
+        -- The claimed source flow property must be the one the frozen before payload references.
+        if coalesce(v_action->'source_flowproperty'->>'id', '') = ''
+          or coalesce(v_action->'source_flowproperty'->>'version', '') = ''
+          or (v_action #>> '{source_flowproperty,id}') is distinct from
+             (private.dataset_alias_v2_flow_reference(v_action->'expected_json_ordered') #>> '{@refObjectId}')
+          or (v_action #>> '{source_flowproperty,version}') is distinct from
+             (private.dataset_alias_v2_flow_reference(v_action->'expected_json_ordered') #>> '{@version}') then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_DERIVE_MISMATCH', 409,
+            'A flow action does not name the flow property its frozen before payload references',
+            jsonb_build_object('action_id', v_action->>'action_id'));
+        end if;
+        v_alias_fp_id := coalesce(v_alias_fp_id, private.dataset_alias_v2_flow_reference(v_action->'expected_json_ordered') #>> '{@refObjectId}');
+        v_alias_fp_version := coalesce(v_alias_fp_version, private.dataset_alias_v2_flow_reference(v_action->'expected_json_ordered') #>> '{@version}');
+        if private.dataset_alias_v2_flow_reference(v_action->'expected_json_ordered') #>> '{@refObjectId}' is distinct from v_alias_fp_id
+          or private.dataset_alias_v2_flow_reference(v_action->'expected_json_ordered') #>> '{@version}' is distinct from v_alias_fp_version then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_CLOSURE_MISMATCH', 409, 'Every flow action must start from the same alias flow property');
+        end if;
+      else
+        if exists (
+          select 1 from jsonb_object_keys(v_action->'mutation') as key(name)
+          where key.name <> all (array['exchanges'])
+        ) or jsonb_typeof(v_action->'mutation'->'exchanges') is distinct from 'array'
+          or jsonb_array_length(v_action->'mutation'->'exchanges') < 1
+          or (v_action #>> '{quantitative_reference}') is distinct from
+             (v_action->'expected_json_ordered' #>> '{processDataSet,processInformation,quantitativeReference,referenceToReferenceFlow}')
+          or coalesce(v_action->>'quantitative_reference', '') = '' then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
+            'A process action carries its bound exchange instances, its quantitative reference and nothing else',
+            jsonb_build_object('action_id', v_action->>'action_id'));
+        end if;
+        for v_entry in select * from jsonb_array_elements(v_action->'mutation'->'exchanges') loop
+          if jsonb_typeof(v_entry) <> 'object'
+            or exists (
+              select 1 from jsonb_object_keys(v_entry) as key(name)
+              where key.name <> all (array['index', 'internal_id', 'flow_id', 'flow_version', 'direction',
+                'before_amount', 'after_amount', 'before_resulting_amount', 'after_resulting_amount'])
+            )
+            or coalesce(v_entry->>'index', '') !~ '^[0-9]+$'
+            or coalesce(v_entry->>'internal_id', '') = ''
+            or coalesce(v_entry->>'flow_id', '') = ''
+            or coalesce(v_entry->>'flow_version', '') = ''
+            or coalesce(v_entry->>'direction', '') = ''
+            or v_entry->>'before_amount' is null
+            or v_entry->>'after_amount' is null
+            or v_entry->>'before_resulting_amount' is null
+            or v_entry->>'after_resulting_amount' is null
+            or not exists (
+              select 1 from jsonb_array_elements(v_batch_flows) as claimed
+              where claimed->>'id' = v_entry->>'flow_id' and claimed->>'version' = v_entry->>'flow_version'
+            ) then
+            perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
+              'Every exchange instance must carry exactly the reviewed keys and name a claimed alias flow',
+              jsonb_build_object('action_id', v_action->>'action_id'));
+          end if;
+        end loop;
+        if (select count(distinct entry->>'internal_id')
+              from jsonb_array_elements(v_action->'mutation'->'exchanges') as entry)
+           <> jsonb_array_length(v_action->'mutation'->'exchanges') then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
+            'Exchange instances within one action carry distinct internal ids',
+            jsonb_build_object('action_id', v_action->>'action_id'));
+        end if;
+      end if;
+    end loop;
+
+    -- The text-action block is the authority for functional-unit moves and must agree, entry by entry, with
+    -- the claimed payloads: the frozen before leaf, the anchored-rule after leaf, the process's own
+    -- reference-flow exchange bound by its TIDAS internal id, that exchange's reviewed source quantity, and
+    -- the reviewed source number carried by the stored source comment when the row records one. The block's
+    -- process set must be exactly the set of claimed processes whose functional-unit leaf moves.
+    select coalesce(jsonb_agg(jsonb_build_object('id', (t->>'id')::uuid, 'version', t->>'version') order by (t->>'id')::uuid, t->>'version'), '[]'::jsonb)
+      into v_claim_text_actions
+    from jsonb_array_elements(v_text_actions) as t
+    where (t->>'table') = 'processes'
+      and (t->>'id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
+    select coalesce(jsonb_agg(jsonb_build_object('id', (a->>'id')::uuid, 'version', a->>'version') order by (a->>'id')::uuid, a->>'version'), '[]'::jsonb)
+      into v_moved_text_actions
+    from jsonb_array_elements(v_actions) as a
+    where a->>'table' = 'processes'
+      and (a->>'id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      and (a->'expected_json_ordered' #>> '{processDataSet,processInformation,quantitativeReference,functionalUnitOrOther,#text}')
+          is distinct from
+          (a->'desired_json_ordered' #>> '{processDataSet,processInformation,quantitativeReference,functionalUnitOrOther,#text}');
+    for v_entry in select * from jsonb_array_elements(v_text_actions) loop
+      declare
+        v_text_before text := v_entry->>'before_text';
+        v_text_after text := v_entry->>'after_text';
+        v_text_source text := v_entry->>'source_exchange_number';
+        v_action_match jsonb;
+        v_reference_internal text;
+        v_reference_entry jsonb;
+        v_stored_comment text;
+        v_quantity text;
+      begin
+        if jsonb_typeof(v_entry) <> 'object'
+          or exists (
+            select 1 from jsonb_object_keys(v_entry) as key(name)
+            where key.name <> all (array['table', 'id', 'version', 'before_text', 'after_text', 'source_exchange_number'])
+          )
+          or (v_entry->>'table') is distinct from 'processes'
+          or coalesce(v_entry->>'id', '') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          or coalesce(v_entry->>'version', '') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+          or v_text_before is null
+          or v_text_after is null
+          or coalesce(v_text_source, '') !~ '^[0-9]{1,18}$' then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_RULE_VIOLATION', 400,
+            'Every text action carries exactly the reviewed keys, a process identity and the original source exchange number');
+        end if;
+        select a into v_action_match
+        from jsonb_array_elements(v_actions) as a
+        where a->>'table' = 'processes' and a->>'id' = v_entry->>'id' and a->>'version' = v_entry->>'version';
+        if v_action_match is null then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_RULE_VIOLATION', 400,
+            'A text action names a process the batch does not claim',
+            jsonb_build_object('action_id', v_entry->>'id'));
+        end if;
+        if (v_action_match->'expected_json_ordered' #>> '{processDataSet,processInformation,quantitativeReference,functionalUnitOrOther,#text}') is distinct from v_text_before
+          or (v_action_match->'desired_json_ordered' #>> '{processDataSet,processInformation,quantitativeReference,functionalUnitOrOther,#text}') is distinct from v_text_after
+          or private.dataset_alias_v2_fu_apply_rule(v_text_before) is distinct from v_text_after then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_BLOCK_MISMATCH', 409,
+            'A text action does not agree byte-for-byte with the claimed before and desired functional-unit leaves under the anchored rule',
+            jsonb_build_object('action_id', v_entry->>'id'));
+        end if;
+        -- Step 1: the process reference exchange is bound by its TIDAS internal id — the frozen internal
+        -- pointer — never by the original EcoSpold number, which is a different namespace.
+        v_reference_internal := v_action_match->'expected_json_ordered' #>> '{processDataSet,processInformation,quantitativeReference,referenceToReferenceFlow}';
+        select entry into v_reference_entry
+        from jsonb_array_elements(v_action_match->'mutation'->'exchanges') as entry
+        where entry->>'internal_id' = v_reference_internal;
+        if v_reference_entry is null or coalesce(v_reference_internal, '') = '' then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_RULE_VIOLATION', 400,
+            'The functional-unit process reference exchange (TIDAS internal id) is not among the bound alias exchanges',
+            jsonb_build_object('action_id', v_entry->>'id'));
+        end if;
+        -- Step 2: the reviewed leading quantity must be that exchange's own source quantity, so a functional
+        -- unit can never be moved over a physically different amount.
+        v_quantity := substring(v_text_before from '^[0-9.]+');
+        if v_quantity is null
+          or not private.dataset_alias_v2_amount_grammar_ok(v_quantity)
+          or not private.dataset_alias_v2_amount_grammar_ok(v_reference_entry->>'before_amount')
+          or (v_quantity)::numeric is distinct from (v_reference_entry->>'before_amount')::numeric then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_RULE_VIOLATION', 400,
+            'The functional-unit quantity is not the reference exchange''s reviewed source quantity',
+            jsonb_build_object('action_id', v_entry->>'id'));
+        end if;
+        -- Step 3: when the stored reference exchange carries the reviewed source comment, it must name the
+        -- declared source tuple; a text action contradicting the stored source row fails closed.
+        select stored_exchange.value->>'generalComment' into v_stored_comment
+        from jsonb_array_elements(coalesce(v_action_match->'expected_json_ordered' #> '{processDataSet,exchanges,exchange}', '[]'::jsonb)) as stored_exchange
+        where stored_exchange.value->>'@dataSetInternalID' = v_reference_internal;
+        if v_stored_comment is not null
+          and v_stored_comment !~ ('(^|[^0-9])' || v_text_source || '([^0-9]|$)') then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
+            'The reviewed source comment of the reference exchange does not carry the declared source exchange number',
+            jsonb_build_object('action_id', v_entry->>'id'));
+        end if;
+      end;
+    end loop;
+    if v_claim_text_actions is distinct from v_moved_text_actions then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_BLOCK_MISMATCH', 409,
+        'The text-action block must name exactly the claimed processes whose functional-unit leaf moves',
+        jsonb_build_object('text_actions', v_claim_text_actions, 'moved', v_moved_text_actions));
+    end if;
+    v_text_count := jsonb_array_length(v_claim_text_actions);
+
+    if (select count(*) from jsonb_array_elements(v_actions) as a where a->>'table' = 'flows')
+        <> (select count(distinct (a->>'id') || '|' || (a->>'version')) from jsonb_array_elements(v_actions) as a where a->>'table' = 'flows')
+      or (select count(*) from jsonb_array_elements(v_actions) as a where a->>'table' = 'processes')
+        <> (select count(distinct (a->>'id') || '|' || (a->>'version')) from jsonb_array_elements(v_actions) as a where a->>'table' = 'processes') then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400, 'Duplicate action identities are refused');
+    end if;
+    if v_alias_fp_id is null then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400, 'A v2 batch needs at least one flow action to identify the alias property');
+    end if;
+
+    -- The alias flow property must reference the declared source unit group; together with the target
+    -- pointer and the two flow-property names this is the whole support evidence the plan binds.
+    declare
+      v_alias_fp_row jsonb;
+      v_alias_fp_name jsonb;
+    begin
+      select json_ordered::jsonb into v_alias_fp_row
+      from public.flowproperties
+      where id = v_alias_fp_id::uuid and version = v_alias_fp_version;
+      if v_alias_fp_row is null then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409, 'The alias flow property named by the frozen before payloads does not exist');
+      end if;
+      if v_alias_fp_row #>> '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@refObjectId}'
+          is distinct from p_batch #>> '{source_evidence,source_unitgroup,id}'
+        or v_alias_fp_row #>> '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@version}'
+          is distinct from p_batch #>> '{source_evidence,source_unitgroup,version}' then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
+          'The alias flow property does not reference the declared source unit group');
+      end if;
+      v_alias_fp_source_ug_id := p_batch #>> '{source_evidence,source_unitgroup,id}';
+      v_alias_fp_source_ug_version := p_batch #>> '{source_evidence,source_unitgroup,version}';
+      -- The frozen source flow property snapshot is the complete current payload, not only its
+      -- identity: the lock holds the row, so a payload that moved after the freeze — including a
+      -- name-only change — is refused here even though the identity digest still matches.
+      if p_batch->'source_evidence'->'source_flowproperty' is null
+        or (p_batch #>> '{source_evidence,source_flowproperty,id}')
+          is distinct from v_alias_fp_id
+        or (p_batch #>> '{source_evidence,source_flowproperty,version}')
+          is distinct from v_alias_fp_version
+        or (p_batch #>> '{source_evidence,source_flowproperty,sha256}')
+          is distinct from private.dataset_alias_v2_payload_sha256(v_alias_fp_row) then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
+          'The frozen source flow property snapshot is not the complete locked current source flow property payload');
+      end if;
+      -- The reviewed plan binds the source alias identity, not the alias row's whole payload: its
+      -- digest is the canonical hash of the {id, version} tuple. The row itself is bound by the
+      -- identity check below and by the declared source unit group the row must actually reference,
+      -- so the alias content cannot move without the identity or the unit-group pointer moving too.
+      if p_batch->'source_alias' is not null
+        and (p_batch #>> '{source_alias,sha256}') is distinct from
+          private.dataset_alias_v2_payload_sha256(
+            jsonb_build_object('id', v_alias_fp_id, 'version', v_alias_fp_version)) then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
+          'The declared source alias digest is not the canonical identity digest of the alias the plan runs against');
+      end if;
+      if p_batch->'source_alias' is not null
+        and ((p_batch #>> '{source_alias,id}') is distinct from v_alias_fp_id
+          or (p_batch #>> '{source_alias,version}') is distinct from v_alias_fp_version) then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
+          'The declared source alias identity is not the alias the frozen before payloads reference');
+      end if;
+    end;
+
+    -- The derived reference is the deployed five-key shape (root-verified against the live BAFU Time flow
+    -- property snapshot): @refObjectId/@type/@uri/@version plus one language-tagged common:shortDescription
+    -- object projected from the locked target row's own
+    -- flowPropertyDataSet.flowPropertiesInformation.dataSetInformation["common:name"] — never from a
+    -- Process-shaped name path and never invented. @type and the @uri convention come from the frozen
+    -- before reference with the target id/version substituted; every flow action's claimed reference must
+    -- equal it exactly.
+    declare
+      v_before_reference jsonb := (
+        select private.dataset_alias_v2_flow_reference(a->'expected_json_ordered')
+        from jsonb_array_elements(v_actions) as a
+        where a->>'table' = 'flows'
+        limit 1
+      );
+      v_before_uri text := coalesce(v_before_reference->>'@uri', '');
+      v_target_description jsonb := v_target_fp #> '{flowPropertyDataSet,flowPropertiesInformation,dataSetInformation,common:name}';
+      v_target_id text := p_batch #>> '{target_snapshots,flowproperty,id}';
+      v_target_version text := p_batch #>> '{target_snapshots,flowproperty,version}';
+      v_derived_uri text;
+    begin
+      if jsonb_typeof(v_before_reference) <> 'object'
+        or jsonb_typeof(v_target_description) <> 'object'
+        or coalesce(v_target_description->>'#text', '') = '' then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
+          'The target flow property must carry its language-tagged common:name object and the before reference must be an object');
+      end if;
+      if position(v_alias_fp_id in v_before_uri) = 0 then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
+          'The frozen before reference does not carry the alias flow-property id in its @uri');
+      end if;
+      v_derived_uri := replace(replace(v_before_uri, v_alias_fp_id, v_target_id), v_alias_fp_version, v_target_version);
+      v_reference := jsonb_build_object(
+        '@refObjectId', v_target_id,
+        '@type', v_before_reference->>'@type',
+        '@uri', v_derived_uri,
+        '@version', v_target_version,
+        'common:shortDescription', v_target_description
+      );
+      if v_reference->>'@type' is null
+        or position(v_target_id in v_derived_uri) = 0
+        or v_derived_uri !~ '\.json$' then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
+          'The derived reference needs the reviewed type and the .json uri convention from the frozen before reference');
+      end if;
+      if exists (
+        select 1 from jsonb_array_elements(v_actions) as a
+        where a->>'table' = 'flows' and a->'mutation'->'reference' is distinct from v_reference
+      ) then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
+          'A flow action''s declared target reference is not the canonical reference derived from the locked target row',
+          jsonb_build_object('derived_reference', v_reference));
+      end if;
+    end;
+
+    -- Validation and derivation pass: no writes yet. Every action is classified from the locked row and
+    -- every fresh claim must equal the server derivation. A batch is either entirely fresh or an exact
+    -- resubmission of an applied plan; a mixture is refused because an all-or-none plan cannot be half
+    -- applied.
+    for v_action in select * from jsonb_array_elements(v_actions) loop
+      declare
+        v_before jsonb := v_action->'expected_json_ordered';
+        v_claim jsonb := v_action->'desired_json_ordered';
+        v_table text := v_action->>'table';
+        v_row_state integer;
+        v_row_modified timestamptz;
+        v_row_payload jsonb;
+        v_text_claim jsonb;
+      begin
+        execute format('select state_code, modified_at, json_ordered::jsonb from public.%I where id = $1 and version = $2', v_table)
+          into v_row_state, v_row_modified, v_row_payload using (v_action->>'id')::uuid, v_action->>'version';
+        if v_row_state is not distinct from 0 and v_row_payload is not distinct from v_before
+          and (not (v_action ? 'expected_modified_at')
+               or v_row_modified is not distinct from (v_action->>'expected_modified_at')::timestamptz) then
+          if v_table = 'flows' then
+            v_derived := private.dataset_alias_v2_replace_flow_reference(v_before, v_reference);
+          else
+            v_derived := v_before;
+            for v_entry in select * from jsonb_array_elements(coalesce(v_action->'mutation'->'exchanges', '[]'::jsonb)) loop
+              v_derived := private.dataset_alias_v2_replace_exchange_amounts(v_derived, v_entry);
+              if v_derived is null then
+                perform private.dataset_alias_v2_deny('ALIAS_V2_DERIVE_MISMATCH', 409,
+                  'An exchange instance does not bind the stored row', jsonb_build_object('action_id', v_action->>'action_id'));
+              end if;
+            end loop;
+            select t into v_text_claim
+            from jsonb_array_elements(v_text_actions) as t
+            where t->>'id' = v_action->>'id' and t->>'version' = v_action->>'version';
+            if v_text_claim is not null then
+              v_derived := private.dataset_alias_v2_replace_fu_text(v_derived, jsonb_build_object(
+                'path', v_text_path,
+                'before_text', v_text_claim->>'before_text',
+                'after_text', v_text_claim->>'after_text'));
+              if v_derived is null then
+                perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_RULE_VIOLATION', 400,
+                  'The functional-unit text is not the reviewed leaf under the anchored rule',
+                  jsonb_build_object('action_id', v_action->>'action_id'));
+              end if;
+            end if;
+          end if;
+          if v_derived is null or v_derived is not distinct from v_before then
+            perform private.dataset_alias_v2_deny('ALIAS_V2_DERIVE_MISMATCH', 409, 'The derivation produced no real change', jsonb_build_object('action_id', v_action->>'action_id'));
+          end if;
+          if v_claim is distinct from v_derived then
+            perform private.dataset_alias_v2_deny('ALIAS_V2_DERIVE_MISMATCH', 409, 'The claimed desired payload differs from the server derivation', jsonb_build_object('action_id', v_action->>'action_id'));
+          end if;
+          v_fresh_count := v_fresh_count + 1;
+          v_prepared := v_prepared || jsonb_build_array(jsonb_build_object(
+            'action_id', v_action->>'action_id', 'table', v_table, 'id', v_action->>'id', 'version', v_action->>'version',
+            'expected_modified_at', v_action->'expected_modified_at', 'observed_modified_at', to_jsonb(v_row_modified),
+            'before', v_before, 'desired', v_derived));
+        elsif v_row_state is not distinct from 0 and v_row_payload = v_claim then
+          v_replayed_count := v_replayed_count + 1;
+          v_prepared := v_prepared || jsonb_build_array(jsonb_build_object(
+            'action_id', v_action->>'action_id', 'table', v_table, 'id', v_action->>'id', 'version', v_action->>'version',
+            'before', v_before, 'desired', v_claim, 'replayed', true));
+        else
+          perform private.dataset_alias_v2_deny('ALIAS_V2_ACTION_DRIFT', 409, 'An action no longer matches its frozen before content, owner, state or version', jsonb_build_object('action_id', v_action->>'action_id'));
+        end if;
+      end;
+    end loop;
+    if v_fresh_count > 0 and v_replayed_count > 0 then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_REPLAY_CONFLICT', 409,
+        'A batch cannot mix fresh and already-applied actions; submit the frozen plan once or resubmit it exactly',
+        jsonb_build_object('fresh', v_fresh_count, 'replayed', v_replayed_count));
+    end if;
+
+    -- Claim-internal counts, the complement inside the selected processes and the source evidence count.
+    for v_action in select * from jsonb_array_elements(v_actions) where value->>'table' = 'processes' loop
+      select v_selected_exchanges + coalesce(jsonb_array_length(v_action->'expected_json_ordered' #> '{processDataSet,exchanges,exchange}'), 0) into v_selected_exchanges;
+    end loop;
+    v_occurrence_count := jsonb_array_length(v_batch_occurrences);
+    v_amount_field_count := v_occurrence_count * 2;
+    v_unrelated := v_selected_exchanges - v_occurrence_count;
+    if (p_batch #>> '{counts,action_count}')::integer is distinct from v_action_count
+      or (p_batch #>> '{counts,flow_count}')::integer is distinct from jsonb_array_length(v_batch_flows)
+      or (p_batch #>> '{counts,process_count}')::integer is distinct from v_action_count - jsonb_array_length(v_batch_flows)
+      or (p_batch #>> '{counts,exchange_count}')::integer is distinct from v_occurrence_count
+      or (p_batch #>> '{counts,amount_field_count}')::integer is distinct from v_amount_field_count
+      or (p_batch #>> '{counts,unrelated_exchange_count}')::integer is distinct from v_unrelated
+      or (p_batch #>> '{counts,flowproperty_count}')::integer is distinct from 0 then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_COUNT_MISMATCH', 409, 'Derived live counts differ from the submitted plan counts',
+        jsonb_build_object('actions', v_action_count, 'flows', jsonb_array_length(v_batch_flows),
+          'occurrences', v_occurrence_count, 'amount_fields', v_amount_field_count, 'unrelated', v_unrelated));
+    end if;
+    if (p_batch #>> '{source_evidence,exchange_count}')::integer is distinct from v_occurrence_count then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
+        'The source evidence exchange count is not the batch exchange count',
+        jsonb_build_object('recomputed_exchange_count', v_occurrence_count));
+    end if;
+
+    if v_replayed_count = 0 then
+      -- Exact reference closure: every live consumer of the alias property, any owner, any state.
+      select coalesce(jsonb_agg(jsonb_build_object('table', 'flows', 'id', f.id, 'version', f.version, 'state_code', f.state_code, 'user_id', f.user_id) order by f.id, f.version), '[]'::jsonb)
+        into v_live_flows
+      from public.flows f
+      where private.dataset_alias_jsonb_array_v1(
+          f.json_ordered::jsonb #> '{flowDataSet,flowProperties,flowProperty}'
+        ) @> jsonb_build_array(jsonb_build_object(
+          'referenceToFlowPropertyDataSet',
+          jsonb_build_object('@refObjectId', v_alias_fp_id, '@version', v_alias_fp_version)
+        ));
+      -- One common keyed projection on both sides: the live consumer set must be exactly the claimed set,
+      -- and no live consumer may be foreign or outside the owner-draft state.
+      if (select coalesce(jsonb_agg(jsonb_build_object('id', live->>'id', 'version', live->>'version') order by live->>'id', live->>'version'), '[]'::jsonb)
+            from jsonb_array_elements(v_live_flows) as live)
+          is distinct from
+         (select coalesce(jsonb_agg(jsonb_build_object('id', claimed->>'id', 'version', claimed->>'version') order by claimed->>'id', claimed->>'version'), '[]'::jsonb)
+            from jsonb_array_elements(v_batch_flows) as claimed)
+        or exists (
+          select 1 from jsonb_array_elements(v_live_flows) as live
+          where (live->>'state_code')::integer <> 0 or (live->>'user_id')::uuid <> v_actor
+        ) then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_CLOSURE_MISMATCH', 409,
+          'The live reference closure of the alias property differs from the claimed flow set, or holds a foreign or non-draft consumer',
+          jsonb_build_object('live_flows', v_live_flows, 'claimed_flows', v_batch_flows));
+      end if;
+
+      -- Exact Process/exchange occurrences of those flows, any owner and any state.
+      select coalesce(jsonb_agg(jsonb_build_object('process_id', p.id, 'process_version', p.version, 'state_code', p.state_code, 'user_id', p.user_id, 'index', exchange.ordinality - 1, 'internal_id', exchange.value->>'@dataSetInternalID', 'direction', exchange.value->>'exchangeDirection') order by p.id, p.version, exchange.ordinality), '[]'::jsonb)
+        into v_live_occurrences
+      from public.processes p
+      cross join lateral jsonb_array_elements(coalesce(p.json_ordered::jsonb #> '{processDataSet,exchanges,exchange}', '[]'::jsonb)) with ordinality as exchange
+      where exists (
+        select 1 from jsonb_array_elements(v_batch_flows) as claimed
+        where claimed->>'id' = exchange.value->'referenceToFlowDataSet'->>'@refObjectId'
+          and claimed->>'version' = exchange.value->'referenceToFlowDataSet'->>'@version'
+      );
+      if jsonb_array_length(v_live_occurrences) <> jsonb_array_length(v_batch_occurrences)
+        or exists (
+          select 1 from jsonb_array_elements(v_batch_occurrences) as claimed
+          where not exists (
+            select 1 from jsonb_array_elements(v_live_occurrences) as live
+            where live->>'process_id' = claimed->>'process_id' and live->>'process_version' = claimed->>'process_version'
+              and live->>'index' = claimed->>'index' and live->>'internal_id' = claimed->>'internal_id'
+              and live->>'direction' = claimed->>'direction'
+          )
+        )
+        or exists (
+          select 1 from jsonb_array_elements(v_live_occurrences) as live
+          where (live->>'state_code')::integer <> 0 or (live->>'user_id')::uuid <> v_actor
+        ) then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_CLOSURE_MISMATCH', 409,
+          'The live exchange occurrences of the alias flows differ from the claimed instances, or hold a foreign or non-draft consumer',
+          jsonb_build_object('live_occurrences', v_live_occurrences, 'claimed_occurrences', v_batch_occurrences));
+      end if;
+
+      -- Write pass: only after every action validated. Any raise here unwinds the whole subtransaction.
+      declare
+        v_committed_modified_at timestamptz;
+        v_committed_payload jsonb;
+        v_summary_id bigint;
+        v_audit_rows jsonb := '[]'::jsonb;
+        v_row_audit_id bigint;
+      begin
+        for v_action in select * from jsonb_array_elements(v_prepared) loop
+          v_committed_modified_at := null;
+          v_committed_payload := null;
+          execute format(
+            'update public.%I as t set json_ordered = $1::json, modified_at = now()
+              where t.id = $2 and t.version = $3 and t.user_id = $4 and t.state_code = $5
+                and t.json_ordered::jsonb is not distinct from $6
+            returning t.modified_at, t.json_ordered::jsonb', v_action->>'table')
+            into v_committed_modified_at, v_committed_payload
+            using v_action->'desired', (v_action->>'id')::uuid, v_action->>'version', v_actor, 0,
+              v_action->'before';
+          if v_committed_modified_at is null or v_committed_payload is distinct from v_action->'desired' then
+            perform private.dataset_alias_v2_deny('ALIAS_V2_ACTION_DRIFT', 409, 'The guarded update lost its precondition', jsonb_build_object('action_id', v_action->>'action_id'));
+          end if;
+          insert into private.command_audit_log (command, actor_user_id, target_table, target_id, target_version, payload)
+          values (v_command, v_actor, v_action->>'table', (v_action->>'id')::uuid, v_action->>'version',
+            jsonb_build_object(
+              'record_type', 'row', 'schema_version', v_schema_version, 'plan_sha256', v_plan_sha256,
+              'batch_id', v_batch_id, 'dimension', 'time', 'factor', v_factor,
+              'target_visibility', 'owner_draft', 'action_id', v_action->>'action_id',
+              'expected_state_code', 0, 'expected_modified_at', v_action->'expected_modified_at',
+              'observed_modified_at', v_action->'observed_modified_at',
+              'committed_modified_at', to_jsonb(v_committed_modified_at),
+              'before_sha256', private.dataset_alias_v2_payload_sha256(v_action->'before'),
+              'after_sha256', private.dataset_alias_v2_payload_sha256(v_action->'desired'),
+              'hash_algorithm', 'dataset-alias-canonical-json-v1-sha256'))
+          returning id into v_row_audit_id;
+          v_audit_rows := v_audit_rows || jsonb_build_array(jsonb_build_object('action_id', v_action->>'action_id', 'audit_id', v_row_audit_id::text, 'after_sha256', private.dataset_alias_v2_payload_sha256(v_action->'desired')));
+        end loop;
+
+        insert into private.command_audit_log (command, actor_user_id, target_table, payload)
+        values (v_command, v_actor, 'flows', jsonb_build_object(
+          'record_type', 'plan', 'schema_version', v_schema_version, 'plan_sha256', v_plan_sha256,
+          'batch_id', v_batch_id, 'dimension', 'time', 'factor', v_factor,
+          'action_count', v_action_count, 'fresh_actions', v_action_count, 'replayed_actions', 0,
+          'text_action_count', v_text_count,
+          'source_evidence', p_batch->'source_evidence',
+          'target_snapshots', p_batch->'target_snapshots',
+          'counts', jsonb_build_object('action_count', v_action_count, 'flow_count', jsonb_array_length(v_batch_flows),
+            'process_count', v_action_count - jsonb_array_length(v_batch_flows),
+            'exchange_count', v_occurrence_count, 'amount_field_count', v_amount_field_count,
+            'unrelated_exchange_count', v_unrelated)))
+        returning id into v_summary_id;
+
+        return jsonb_build_object('ok', true, 'code', 'ALIAS_V2_BATCH_APPLIED', 'status', 200,
+          'idempotent_replay', false, 'plan_sha256', v_plan_sha256, 'batch_id', v_batch_id,
+          'counts', jsonb_build_object('action_count', v_action_count, 'flow_count', jsonb_array_length(v_batch_flows),
+            'process_count', v_action_count - jsonb_array_length(v_batch_flows),
+            'exchange_count', v_occurrence_count, 'amount_field_count', v_amount_field_count,
+            'unrelated_exchange_count', v_unrelated, 'text_action_count', v_text_count),
+          'audit', jsonb_build_object('plan_summary_id', v_summary_id, 'rows', v_audit_rows));
+      end;
+    else
+      -- Exact resubmission of an applied plan: every action already holds its claimed desired state. The
+      -- durable proof is the committed audit chain plus the stored plan summary; nothing is written and the
+      -- original closure is not re-asserted (it was proven when the plan applied).
+      declare
+        v_proof_id bigint;
+        v_summary_payload jsonb;
+      begin
+        for v_action in select * from jsonb_array_elements(v_prepared) loop
+          select audit_log.id into v_proof_id
+          from private.command_audit_log as audit_log
+          where audit_log.command = v_command
+            and audit_log.actor_user_id = v_actor
+            and audit_log.target_table = v_action->>'table'
+            and audit_log.target_id = (v_action->>'id')::uuid
+            and audit_log.target_version = v_action->>'version'
+            and audit_log.payload->>'record_type' = 'row'
+            and audit_log.payload->>'plan_sha256' = v_plan_sha256
+            and audit_log.payload->>'action_id' = v_action->>'action_id'
+            and audit_log.payload->>'after_sha256' = private.dataset_alias_v2_payload_sha256(v_action->'desired')
+          order by audit_log.id desc limit 1;
+          if v_proof_id is null then
+            perform private.dataset_alias_v2_deny('ALIAS_V2_REPLAY_UNPROVEN', 409,
+              'A desired-state row has no committed audit proof', jsonb_build_object('action_id', v_action->>'action_id'));
+          end if;
+        end loop;
+        select audit_log.id, audit_log.payload into v_proof_id, v_summary_payload
+        from private.command_audit_log as audit_log
+        where audit_log.command = v_command
+          and audit_log.actor_user_id = v_actor
+          and audit_log.payload->>'record_type' = 'plan'
+          and audit_log.payload->>'plan_sha256' = v_plan_sha256
+        order by audit_log.id desc limit 1;
+        if v_summary_payload is null
+          or v_summary_payload->'source_evidence' is distinct from p_batch->'source_evidence'
+          or v_summary_payload->'target_snapshots' is distinct from p_batch->'target_snapshots' then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_REPLAY_CONFLICT', 409,
+            'The resubmission diverges from the stored plan summary');
+        end if;
+        return jsonb_build_object('ok', true, 'code', 'ALIAS_V2_BATCH_REPLAYED', 'status', 200,
+          'idempotent_replay', true, 'plan_sha256', v_plan_sha256, 'batch_id', v_batch_id,
+          'counts', v_summary_payload->'counts'
+            || jsonb_build_object('text_action_count', v_summary_payload->'text_action_count'),
+          'audit', jsonb_build_object('plan_summary_id', v_proof_id, 'replayed_actions', v_action_count));
+      end;
+    end if;
+  exception
+    when lock_not_available then
+      return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_LOCK_TIMEOUT', 'status', 409,
+        'message', 'The v2 lock window could not be acquired; nothing was written');
+    when others then
+      -- All-or-none: the subtransaction's writes are already gone when this handler runs.
+      get stacked diagnostics v_hint = pg_exception_hint, v_detail = pg_exception_detail;
+      if sqlstate = 'P0001' then
+        return jsonb_build_object('ok', false, 'code', sqlerrm, 'status',
+          coalesce((nullif(v_hint, '')::jsonb->>'status')::integer, 409),
+          'message', v_detail,
+          'details', coalesce(nullif(v_hint, '')::jsonb->'details', '{}'::jsonb));
+      end if;
+      return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_INTERNAL_ERROR', 'status', 500,
+        'message', 'The v2 batch failed closed without writing');
+  end;
+end
+$_$;
+
+
+ALTER FUNCTION "private"."cmd_dataset_alias_batch_v2_guarded"("p_batch" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "private"."cmd_dataset_alias_batch_v2_guarded"("p_batch" "jsonb") IS 'Versioned guarded v2 batch executor: all-or-none validation-then-write, exact reference closure, recomputed target and source evidence, canonical digest parity, server-derived desired payloads, ordinary audit and exact replay. v1 untouched.';
+
+
+
 CREATE OR REPLACE FUNCTION "private"."cmd_dataset_alias_execution_execute"("p_request_id" "uuid", "p_nonce" "text") RETURNS "jsonb"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -35409,6 +39078,331 @@ ALTER FUNCTION "private"."cmd_dataset_alias_plan_guarded"("p_plan" "jsonb") OWNE
 
 
 COMMENT ON FUNCTION "private"."cmd_dataset_alias_plan_guarded"("p_plan" "jsonb") IS 'Internal owner-draft alias transaction used by the protected one-shot executor and rollback-only preflight. Direct authenticated/service-role API execution is revoked because this legacy function supports idempotent replay.';
+
+
+
+CREATE OR REPLACE FUNCTION "private"."cmd_dataset_alias_plan_v2_guarded"("p_plan" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    SET "lock_timeout" TO '5s'
+    AS $_$
+declare
+  v_actor uuid := auth.uid();
+  v_schema_version constant text := 'dataset-alias-plan.v2';
+  v_batch_schema_version constant text := 'dataset-alias-batch.v2';
+  v_command constant text := 'cmd_dataset_alias_plan_v2_guarded';
+  v_plan_sha256 text;
+  v_plan_request_sha256 text;
+  v_batch_id text;
+  v_expected jsonb;
+  v_dimension jsonb;
+  v_batch jsonb;
+  v_batch_result jsonb;
+  v_existing_summary jsonb;
+  v_summary_id bigint;
+  v_replay boolean;
+  v_audit_rows bigint;
+  v_batch_summary_rows bigint;
+begin
+  if v_actor is null then
+    return jsonb_build_object('ok', false, 'code', 'AUTH_REQUIRED', 'status', 401, 'message', 'Authentication required');
+  end if;
+
+  if p_plan is not null and pg_column_size(p_plan) > 67108864 then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 413,
+      'message', 'The v2 plan exceeds the 64 MiB database limit');
+  end if;
+
+  if not private.dataset_alias_v2_plan_keys_ok(p_plan) then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 400,
+      'message', 'Plan request must match dataset-alias-plan.v2 exactly');
+  end if;
+
+  if p_plan->>'schema_version' is distinct from v_schema_version
+    or (p_plan->>'plan_sha256') !~ '^[a-f0-9]{64}$'
+    or (p_plan->>'actor_id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    or p_plan->>'target_visibility' is distinct from 'owner_draft'
+    or jsonb_typeof(p_plan->'source_evidence') is distinct from 'object'
+    or jsonb_typeof(p_plan->'target_snapshots') is distinct from 'object'
+    or jsonb_typeof(p_plan->'expected') is distinct from 'object'
+    or jsonb_typeof(p_plan->'dimensions') is distinct from 'array'
+    or jsonb_typeof(p_plan->'text_actions') is distinct from 'array'
+    or jsonb_typeof(p_plan->'actions') is distinct from 'array'
+    or jsonb_array_length(p_plan->'actions') < 1 then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 400,
+      'message', 'Plan identity, actor, owner_draft visibility, source alias, evidence, expected counts, dimension, text actions and action list are required');
+  end if;
+
+  if (p_plan->>'actor_id')::uuid is distinct from v_actor then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 403,
+      'message', 'The plan is bound to another actor');
+  end if;
+
+  -- The ten flat expected keys of the real v1 contract plus the versioned text_action_count; all numeric.
+  -- The external producer emits JSON numbers (never quoted decimal strings), so the literal number type
+  -- is required here: a quoted count is a different wire shape and is refused rather than coerced.
+  if exists (
+    select 1 from jsonb_object_keys(p_plan->'expected') as key(name)
+    where key.name <> all (array[
+      'action_count', 'batch_count', 'exchange_count', 'amount_field_count', 'unrelated_exchange_count',
+      'audit_count', 'flowproperty_count', 'flow_count', 'process_count', 'derivative_target_count',
+      'text_action_count'
+    ])
+  ) or (select count(*) from jsonb_object_keys(p_plan->'expected')) <> 11
+    or exists (
+      select 1 from jsonb_each(p_plan->'expected') as entry(key, value)
+      where jsonb_typeof(entry.value) is distinct from 'number'
+    )
+    or (p_plan #>> '{expected,action_count}') !~ '^[0-9]+$'
+    or (p_plan #>> '{expected,batch_count}') !~ '^[0-9]+$'
+    or (p_plan #>> '{expected,exchange_count}') !~ '^[0-9]+$'
+    or (p_plan #>> '{expected,amount_field_count}') !~ '^[0-9]+$'
+    or (p_plan #>> '{expected,unrelated_exchange_count}') !~ '^[0-9]+$'
+    or (p_plan #>> '{expected,audit_count}') !~ '^[0-9]+$'
+    or (p_plan #>> '{expected,flowproperty_count}') !~ '^[0-9]+$'
+    or (p_plan #>> '{expected,flow_count}') !~ '^[0-9]+$'
+    or (p_plan #>> '{expected,process_count}') !~ '^[0-9]+$'
+    or (p_plan #>> '{expected,derivative_target_count}') !~ '^[0-9]+$'
+    or (p_plan #>> '{expected,text_action_count}') !~ '^[0-9]+$' then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 400,
+      'message', 'The expected block must carry exactly the ten flat v1 keys, and the versioned text_action_count, all numeric');
+  end if;
+  v_expected := p_plan->'expected';
+
+  -- Counts the plan declares about itself must hold before anything else runs.
+  if (v_expected->>'action_count')::integer is distinct from jsonb_array_length(p_plan->'actions')
+    or (v_expected->>'batch_count')::integer is distinct from jsonb_array_length(p_plan->'dimensions') then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 400,
+      'message', 'Declared action, batch or text-action counts do not match the plan itself');
+  end if;
+  if (v_expected->>'text_action_count')::integer is distinct from jsonb_array_length(p_plan->'text_actions') then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 400,
+      'message', 'The declared text-action count does not match the text-action block');
+  end if;
+
+  -- The external plan's source alias identity and source-evidence semantics.
+  if jsonb_typeof(p_plan->'source_alias') is distinct from 'object'
+    or coalesce(p_plan #>> '{source_alias,id}', '') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    or coalesce(p_plan #>> '{source_alias,version}', '') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+    or coalesce(p_plan #>> '{source_alias,sha256}', '') !~ '^[a-f0-9]{64}$'
+    or jsonb_typeof(p_plan->'source_evidence') is distinct from 'object'
+    or coalesce(p_plan #>> '{source_evidence,cohort_sha256}', '') !~ '^[a-f0-9]{64}$'
+    or (p_plan #>> '{source_evidence,cohort_sha256}') is distinct from (p_plan #>> '{source_evidence,expected_cohort_sha256}')
+    or coalesce(p_plan #>> '{source_evidence,original_source_unit}', '') = ''
+    or jsonb_typeof(p_plan #> '{source_evidence,exchange_count}') is distinct from 'number'
+    or jsonb_typeof(p_plan->'source_evidence'->'declared_source_unitgroup') is distinct from 'object'
+    -- The frozen source flow property snapshot: the complete payload of the alias the plan runs
+    -- against, bound by its own canonical digest and named by the same identity the alias digest
+    -- binds. The executor compares that digest against the locked row payload.
+    or jsonb_typeof(p_plan->'source_evidence'->'source_flowproperty') is distinct from 'object'
+    or exists (
+      select 1 from jsonb_object_keys(p_plan->'source_evidence'->'source_flowproperty') as key(name)
+      where key.name <> all (array['id', 'version', 'sha256'])
+    )
+    or (select count(*) from jsonb_object_keys(p_plan->'source_evidence'->'source_flowproperty')) <> 3
+    or coalesce(p_plan #>> '{source_evidence,source_flowproperty,id}', '') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    or coalesce(p_plan #>> '{source_evidence,source_flowproperty,version}', '') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+    or coalesce(p_plan #>> '{source_evidence,source_flowproperty,sha256}', '') !~ '^[a-f0-9]{64}$'
+    or (p_plan #>> '{source_evidence,source_flowproperty,id}') is distinct from (p_plan #>> '{source_alias,id}')
+    or (p_plan #>> '{source_evidence,source_flowproperty,version}') is distinct from (p_plan #>> '{source_alias,version}') then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 400,
+      'message', 'The plan must carry its source alias identity, equal declared cohort digests and the declared/original source unit semantics');
+  end if;
+
+  -- Exactly one `time` dimension; the factor is the approved constant and both unit-group pointers must be
+  -- the ones the evidence blocks bind. Zero flow-property actions are admissible here by construction.
+  if jsonb_array_length(p_plan->'dimensions') <> 1 then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_DIMENSION_UNSUPPORTED', 'status', 400,
+      'message', 'The v2 plan carries exactly one dimension');
+  end if;
+  v_dimension := p_plan->'dimensions'->0;
+  if v_dimension->>'dimension' is distinct from 'time'
+    or v_dimension->>'factor' is distinct from private.dataset_alias_v2_factor()::text
+    or (v_dimension #>> '{declared_source_unitgroup,id}') is distinct from (p_plan #>> '{source_evidence,declared_source_unitgroup,id}')
+    or (v_dimension #>> '{declared_source_unitgroup,version}') is distinct from (p_plan #>> '{source_evidence,declared_source_unitgroup,version}')
+    or (v_dimension #>> '{target_unitgroup,id}') is distinct from (p_plan #>> '{target_snapshots,unitgroup,id}')
+    or (v_dimension #>> '{target_unitgroup,version}') is distinct from (p_plan #>> '{target_snapshots,unitgroup,version}') then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_DIMENSION_UNSUPPORTED', 'status', 400,
+      'message', 'The single dimension must be time with the approved factor and the evidence unit groups');
+  end if;
+
+  -- The external plan carries no derivative-target list: the protected request/freeze owns it, and the
+  -- protected adapter separately checks that list against these identities. Here the plan must declare the
+  -- exact unique changed Flow/Process identity count, and its action identities must be unique.
+  if (select count(distinct (a->>'table') || '|' || (a->>'id') || '|' || (a->>'version'))
+        from jsonb_array_elements(p_plan->'actions') as a)
+      is distinct from jsonb_array_length(p_plan->'actions')
+    or (v_expected->>'derivative_target_count')::integer
+      is distinct from jsonb_array_length(p_plan->'actions') then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_COUNT_MISMATCH', 'status', 409,
+      'message', 'The declared derivative-target count must be exactly the unique changed action identities');
+  end if;
+
+  -- The audit topology the run must actually write: one row audit per action, one batch summary per batch
+  -- and one plan summary. The declaration is only accepted when it equals that topology.
+  if (v_expected->>'audit_count')::integer
+      is distinct from (v_expected->>'action_count')::integer
+        + (v_expected->>'batch_count')::integer + 1 then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_COUNT_MISMATCH', 'status', 409,
+      'message', 'The declared audit count is not one row audit per action plus one summary per batch plus the plan summary');
+  end if;
+
+  v_plan_sha256 := p_plan->>'plan_sha256';
+  v_plan_request_sha256 := encode(extensions.digest(convert_to(p_plan::text, 'UTF8'), 'sha256'), 'hex');
+  v_batch_id := 'time:' || v_plan_sha256;
+
+  -- The claimed plan digest must be the canonical hash of the submitted plan document minus its own
+  -- `plan_sha256` binding, exactly as the producer computes it. This is checked before the replay lookup
+  -- below, so a changed request body that reuses an applied plan label refuses instead of returning a
+  -- stored proof for a plan it is not.
+  if util.dataset_alias_execution_v2_artifact_sha256(p_plan - 'plan_sha256')
+      is distinct from v_plan_sha256 then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_DIGEST_MISMATCH', 'status', 409,
+      'message', 'The declared plan digest is not the canonical hash of this plan document');
+  end if;
+
+  -- The batch the plan executes is assembled here from the plan's own blocks; it is never accepted from a
+  -- caller, so a plan and its batch cannot disagree about identity, evidence or counts.
+  v_batch := jsonb_build_object(
+    'schema_version', v_batch_schema_version,
+    'batch_id', v_batch_id,
+    'plan_sha256', v_plan_sha256,
+    'dimension', 'time',
+    'factor', v_dimension->>'factor',
+    'target_visibility', 'owner_draft',
+    'target_snapshots', p_plan->'target_snapshots',
+    'source_evidence', jsonb_build_object(
+      'sha256', p_plan #>> '{source_evidence,sha256}',
+      'exchange_count', p_plan #> '{source_evidence,exchange_count}',
+      'source_unitgroup', p_plan#>'{source_evidence,declared_source_unitgroup}',
+      'source_flowproperty', p_plan#>'{source_evidence,source_flowproperty}'),
+    'source_alias', p_plan->'source_alias',
+    'counts', jsonb_build_object(
+      'action_count', v_expected->>'action_count',
+      'flow_count', v_expected->>'flow_count',
+      'process_count', v_expected->>'process_count',
+      'exchange_count', v_expected->>'exchange_count',
+      'amount_field_count', v_expected->>'amount_field_count',
+      'unrelated_exchange_count', v_expected->>'unrelated_exchange_count',
+      'flowproperty_count', v_expected->>'flowproperty_count'),
+    'text_actions', p_plan->'text_actions',
+    'actions', p_plan->'actions');
+
+  v_batch_result := private.cmd_dataset_alias_batch_v2_guarded(v_batch);
+  if coalesce((v_batch_result->>'ok')::boolean, false) is not true then
+    -- The batch refusal is the plan refusal: its stable code, status and details pass through unchanged.
+    return v_batch_result;
+  end if;
+
+  v_replay := coalesce((v_batch_result->>'idempotent_replay')::boolean, false);
+  if v_batch_result->>'plan_sha256' is distinct from v_plan_sha256
+    or v_batch_result->>'batch_id' is distinct from v_batch_id
+    or (v_batch_result #>> '{counts,action_count}')::integer is distinct from (v_expected->>'action_count')::integer
+    or (v_batch_result #>> '{counts,flow_count}')::integer is distinct from (v_expected->>'flow_count')::integer
+    or (v_batch_result #>> '{counts,process_count}')::integer is distinct from (v_expected->>'process_count')::integer
+    or (v_batch_result #>> '{counts,exchange_count}')::integer is distinct from (v_expected->>'exchange_count')::integer
+    or (v_batch_result #>> '{counts,amount_field_count}')::integer is distinct from (v_expected->>'amount_field_count')::integer
+    or (v_batch_result #>> '{counts,unrelated_exchange_count}')::integer is distinct from (v_expected->>'unrelated_exchange_count')::integer
+    or (v_batch_result #>> '{counts,text_action_count}')::integer is distinct from (v_expected->>'text_action_count')::integer then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_PROOF_MISMATCH', 'status', 409,
+      'message', 'The batch result does not prove the exact plan identity and counts',
+      'details', jsonb_build_object('batch_result', v_batch_result));
+  end if;
+
+  -- The declared audit count must be the topology the rows actually have: the batch's per-action row
+  -- audits and batch summary are counted from the ledger, not trusted from the response.
+  select count(*) into v_audit_rows
+  from private.command_audit_log as audit_log
+  where audit_log.command = 'cmd_dataset_alias_batch_v2_guarded'
+    and audit_log.actor_user_id = v_actor
+    and audit_log.payload->>'plan_sha256' = v_plan_sha256
+    and audit_log.payload->>'record_type' = 'row';
+  select count(*) into v_batch_summary_rows
+  from private.command_audit_log as audit_log
+  where audit_log.command = 'cmd_dataset_alias_batch_v2_guarded'
+    and audit_log.actor_user_id = v_actor
+    and audit_log.payload->>'plan_sha256' = v_plan_sha256
+    and audit_log.payload->>'record_type' = 'plan';
+  if v_audit_rows is distinct from (v_expected->>'action_count')::bigint
+    or v_batch_summary_rows is distinct from (v_expected->>'batch_count')::bigint then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_PROOF_MISMATCH', 'status', 409,
+      'message', 'The alias audit topology in the ledger is not one row audit per action plus one batch summary',
+      'details', jsonb_build_object('row_audits', v_audit_rows, 'batch_summaries', v_batch_summary_rows));
+  end if;
+
+  select audit_log.payload into v_existing_summary
+  from private.command_audit_log as audit_log
+  where audit_log.command = v_command
+    and audit_log.actor_user_id = v_actor
+    and audit_log.payload->>'record_type' = 'plan_summary'
+    and audit_log.payload->>'plan_request_sha256' = v_plan_request_sha256
+  order by audit_log.id desc limit 1;
+
+  if v_existing_summary is not null then
+    if not v_replay then
+      -- The batch was fresh but the whole-plan proof already exists: the two ledgers disagree.
+      return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_REPLAY_CONFLICT', 'status', 409,
+        'message', 'A fresh batch result cannot follow an existing plan summary');
+    end if;
+    if v_existing_summary->'expected' is distinct from v_expected then
+      return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_REPLAY_CONFLICT', 'status', 409,
+        'message', 'The resubmission diverges from the stored plan summary');
+    end if;
+    return jsonb_build_object('ok', true, 'code', 'ALIAS_V2_PLAN_REPLAYED', 'status', 200,
+      'idempotent_replay', true, 'plan_sha256', v_plan_sha256, 'operation_id', v_plan_sha256,
+      'plan_request_sha256', v_plan_request_sha256,
+      'batch_id', v_batch_id, 'counts', v_existing_summary->'counts', 'audit_count', v_audit_rows + v_batch_summary_rows + 1,
+      'audit', jsonb_build_object('batch_result', v_batch_result));
+  end if;
+
+  if v_replay then
+    -- The rows are already applied but the whole-plan proof is missing: refuse rather than mint it.
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_PROOF_MISMATCH', 'status', 409,
+      'message', 'An applied batch without its plan summary cannot be re-attested by a resubmission');
+  end if;
+
+  insert into private.command_audit_log (command, actor_user_id, target_table, payload)
+  values (v_command, v_actor, 'flows', jsonb_build_object(
+    'record_type', 'plan_summary', 'schema_version', v_schema_version, 'plan_sha256', v_plan_sha256,
+    'plan_request_sha256', v_plan_request_sha256, 'batch_id', v_batch_id, 'dimension', 'time',
+    'factor', v_dimension->>'factor', 'target_visibility', 'owner_draft',
+    'expected', v_expected, 'text_action_count', (v_expected->>'text_action_count')::integer,
+    'audit_count', (v_expected->>'audit_count')::integer,
+    'derivative_target_count', (v_expected->>'derivative_target_count')::integer,
+    'source_evidence', jsonb_build_object(
+      'sha256', p_plan #>> '{source_evidence,sha256}',
+      'exchange_count', p_plan #> '{source_evidence,exchange_count}',
+      'source_unitgroup', p_plan#>'{source_evidence,declared_source_unitgroup}',
+      'source_flowproperty', p_plan#>'{source_evidence,source_flowproperty}'),
+    'source_alias', p_plan->'source_alias', 'target_snapshots', p_plan->'target_snapshots',
+    'counts', jsonb_build_object(
+      'action_count', v_expected->>'action_count', 'flow_count', v_expected->>'flow_count',
+      'process_count', v_expected->>'process_count', 'exchange_count', v_expected->>'exchange_count',
+      'amount_field_count', v_expected->>'amount_field_count',
+      'unrelated_exchange_count', v_expected->>'unrelated_exchange_count',
+      'text_action_count', (v_expected->>'text_action_count')::integer)))
+  returning id into v_summary_id;
+
+  return jsonb_build_object('ok', true, 'code', 'ALIAS_V2_PLAN_APPLIED', 'status', 200,
+    'idempotent_replay', false, 'plan_sha256', v_plan_sha256, 'operation_id', v_plan_sha256,
+    'plan_request_sha256', v_plan_request_sha256,
+    'batch_id', v_batch_id,
+    'counts', jsonb_build_object(
+      'action_count', v_expected->>'action_count', 'flow_count', v_expected->>'flow_count',
+      'process_count', v_expected->>'process_count', 'exchange_count', v_expected->>'exchange_count',
+      'amount_field_count', v_expected->>'amount_field_count',
+      'unrelated_exchange_count', v_expected->>'unrelated_exchange_count',
+      'text_action_count', (v_expected->>'text_action_count')::integer),
+    'audit_count', v_audit_rows + v_batch_summary_rows + 1,
+    'audit', jsonb_build_object('plan_summary_id', v_summary_id, 'batch_result', v_batch_result));
+end
+$_$;
+
+
+ALTER FUNCTION "private"."cmd_dataset_alias_plan_v2_guarded"("p_plan" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "private"."cmd_dataset_alias_plan_v2_guarded"("p_plan" "jsonb") IS 'Internal owner-draft alias transaction used by the protected one-shot executor and rollback-only preflight. Direct authenticated/service-role API execution is revoked because this legacy function supports idempotent replay.';
 
 
 
@@ -38563,6 +42557,352 @@ ALTER FUNCTION "private"."dataset_alias_jsonb_array_v1"("p_value" "jsonb") OWNER
 
 COMMENT ON FUNCTION "private"."dataset_alias_jsonb_array_v1"("p_value" "jsonb") IS 'Normalizes singleton-object or array dataset reference collections into an immutable JSONB array for guarded alias candidate indexes and exact rechecks. EXECUTE is limited to postgres-owned definer code and the trusted service_role table writer.';
 
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_alias_v2_amount_grammar_ok"("p_amount" "text") RETURNS boolean
+    LANGUAGE "sql" IMMUTABLE
+    AS $_$
+  select
+    p_amount is not null
+    and octet_length(p_amount) between 1 and 64
+    and p_amount ~ '^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]{1,2})?$'
+    and (
+      p_amount !~ '[eE]'
+      or abs(replace(substring(p_amount from '[eE]([+-]?[0-9]{1,2})$'), '+', '')::integer) <= 30
+    )
+$_$;
+
+
+ALTER FUNCTION "private"."dataset_alias_v2_amount_grammar_ok"("p_amount" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "private"."dataset_alias_v2_amount_grammar_ok"("p_amount" "text") IS 'Bounded exact-literal guard: ordinary decimals plus one exponent of magnitude at most 30.';
+
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_alias_v2_deny"("p_code" "text", "p_status" integer, "p_message" "text", "p_details" "jsonb" DEFAULT '{}'::"jsonb") RETURNS "void"
+    LANGUAGE "plpgsql"
+    AS $$
+begin
+  raise exception using
+    errcode = 'P0001',
+    message = p_code,
+    detail = p_message,
+    hint = jsonb_build_object('status', p_status, 'details', coalesce(p_details, '{}'::jsonb))::text;
+end
+$$;
+
+
+ALTER FUNCTION "private"."dataset_alias_v2_deny"("p_code" "text", "p_status" integer, "p_message" "text", "p_details" "jsonb") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_alias_v2_derivative_target_ok"("p_target" "jsonb") RETURNS boolean
+    LANGUAGE "sql" IMMUTABLE
+    AS $_$
+  select jsonb_typeof(p_target) = 'object'
+    and not exists (
+      select 1
+      from jsonb_object_keys(p_target) as key(name)
+      where key.name <> all (array['table', 'id', 'version', 'user_id', 'state_code', 'baseline_snapshot_sha256'])
+    )
+    and (p_target->>'table') in ('flows', 'processes')
+    and coalesce(p_target->>'id', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    and coalesce(p_target->>'version', '') ~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+    and coalesce(p_target->>'user_id', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    and coalesce(p_target->>'state_code', '') = '0'
+    and coalesce(p_target->>'baseline_snapshot_sha256', '') ~ '^[a-f0-9]{64}$'
+$_$;
+
+
+ALTER FUNCTION "private"."dataset_alias_v2_derivative_target_ok"("p_target" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "private"."dataset_alias_v2_derivative_target_ok"("p_target" "jsonb") IS 'Six-key derivative target row (table,id,version,user_id,state_code,baseline_snapshot_sha256) as the existing derivative snapshot owner emits it.';
+
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_alias_v2_error"("p_code" "text", "p_status" integer, "p_message" "text", "p_details" "jsonb" DEFAULT '{}'::"jsonb") RETURNS "text"
+    LANGUAGE "sql" IMMUTABLE
+    AS $$
+  select jsonb_build_object('code', p_code, 'status', p_status, 'message', p_message,
+    'details', coalesce(p_details, '{}'::jsonb))::text
+$$;
+
+
+ALTER FUNCTION "private"."dataset_alias_v2_error"("p_code" "text", "p_status" integer, "p_message" "text", "p_details" "jsonb") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_alias_v2_exchange_keys_ok"("p_exchange" "jsonb") RETURNS boolean
+    LANGUAGE "sql" IMMUTABLE
+    AS $$
+  select jsonb_typeof(p_exchange) = 'object'
+    and not exists (
+      select 1
+      from jsonb_object_keys(p_exchange) as key(name)
+      where key.name <> all (array[
+        '@dataSetInternalID', 'meanAmount', 'resultingAmount', 'referenceToFlowDataSet',
+        'exchangeDirection', 'dataDerivationTypeStatus', 'uncertaintyDistributionType',
+        'relativeStandardDeviation95In', 'generalComment', 'common:other', 'name', 'unit'
+      ])
+    )
+$$;
+
+
+ALTER FUNCTION "private"."dataset_alias_v2_exchange_keys_ok"("p_exchange" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "private"."dataset_alias_v2_exchange_keys_ok"("p_exchange" "jsonb") IS 'Closed key whitelist for one v2 exchange: any unknown or absolute-uncertainty key fails closed.';
+
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_alias_v2_factor"() RETURNS numeric
+    LANGUAGE "sql" IMMUTABLE
+    AS $$
+  select 0.00011415525114155251::numeric
+$$;
+
+
+ALTER FUNCTION "private"."dataset_alias_v2_factor"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "private"."dataset_alias_v2_factor"() IS 'The single approved v2 Time factor; no plan-provided factor is ever admitted.';
+
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_alias_v2_flow_reference"("p_payload" "jsonb") RETURNS "jsonb"
+    LANGUAGE "sql" IMMUTABLE
+    AS $$
+  select case
+    when jsonb_typeof(p_payload #> '{flowDataSet,flowProperties,flowProperty}') = 'array'
+      and jsonb_array_length(p_payload #> '{flowDataSet,flowProperties,flowProperty}') = 1
+      and coalesce(p_payload #>> '{flowDataSet,flowProperties,flowProperty,0,@dataSetInternalID}', '') = '1'
+      then p_payload #> '{flowDataSet,flowProperties,flowProperty,0,referenceToFlowPropertyDataSet}'
+    when jsonb_typeof(p_payload #> '{flowDataSet,flowProperties,flowProperty}') = 'object'
+      and coalesce(p_payload #>> '{flowDataSet,flowProperties,flowProperty,@dataSetInternalID}', '') = '1'
+      then p_payload #> '{flowDataSet,flowProperties,flowProperty,referenceToFlowPropertyDataSet}'
+    else null
+  end
+$$;
+
+
+ALTER FUNCTION "private"."dataset_alias_v2_flow_reference"("p_payload" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "private"."dataset_alias_v2_flow_reference"("p_payload" "jsonb") IS 'Internal-ID-1 flow property reference of a Flow payload in either deployed collection shape; null when the payload carries anything else.';
+
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_alias_v2_fu_apply_rule"("p_before_text" "text") RETURNS "text"
+    LANGUAGE "sql" IMMUTABLE
+    AS $_$
+  select case
+    when p_before_text is null then null
+    -- The shared reviewed rule, literally: quantity `1` or `1.0`, one ASCII space, the single unit token
+    -- `a`, then a suffix that starts with an ASCII space and carries at least one character that is
+    -- neither space nor tab, with no CR or LF anywhere — and the whole string must match, so a trailing
+    -- newline is a different text rather than a tolerated suffix. Every other byte survives unchanged.
+    -- Equivalent to the producer's `^(1|1\.0) a( [^\r\n]*[^ \t\r\n][^\r\n]*)$`.
+    when p_before_text ~ '^(1|1\.0) a( [^\r\n]*[^ \t\r\n][^\r\n]*)$'
+      then regexp_replace(p_before_text, '^(1|1\.0) a', '\1 hr', '')
+    else null
+  end
+$_$;
+
+
+ALTER FUNCTION "private"."dataset_alias_v2_fu_apply_rule"("p_before_text" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_alias_v2_fu_path_ok"("p_path" "text") RETURNS boolean
+    LANGUAGE "sql" IMMUTABLE
+    AS $$
+  select p_path = 'processDataSet.processInformation.quantitativeReference.functionalUnitOrOther.#text'
+$$;
+
+
+ALTER FUNCTION "private"."dataset_alias_v2_fu_path_ok"("p_path" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "private"."dataset_alias_v2_fu_path_ok"("p_path" "text") IS 'Only the reviewed functional-unit text leaf may carry a v2 text mutation; every other path is refused.';
+
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_alias_v2_multiply_amount"("p_amount" "text", "p_factor" "text") RETURNS "text"
+    LANGUAGE "plpgsql" IMMUTABLE
+    AS $$
+declare
+  v_output text;
+begin
+  if p_factor is distinct from private.dataset_alias_v2_factor()::text then
+    return null;
+  end if;
+  if not private.dataset_alias_v2_amount_grammar_ok(p_amount) then
+    return null;
+  end if;
+  v_output := private.dataset_alias_v2_render_amount(p_amount::numeric * private.dataset_alias_v2_factor());
+  if v_output is null or octet_length(v_output) > 128 then
+    return null;
+  end if;
+  return v_output;
+exception
+  when numeric_value_out_of_range then
+    return null;
+end
+$$;
+
+
+ALTER FUNCTION "private"."dataset_alias_v2_multiply_amount"("p_amount" "text", "p_factor" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "private"."dataset_alias_v2_multiply_amount"("p_amount" "text", "p_factor" "text") IS 'Exact decimal multiplication by the approved v2 factor; bounded input, canonical output, null otherwise.';
+
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_alias_v2_payload_sha256"("p_payload" "jsonb") RETURNS "text"
+    LANGUAGE "sql" IMMUTABLE
+    AS $$
+  select encode(extensions.digest(convert_to(private.dataset_alias_canonical_jsonb_v1(p_payload)::text, 'UTF8'), 'sha256'), 'hex')
+$$;
+
+
+ALTER FUNCTION "private"."dataset_alias_v2_payload_sha256"("p_payload" "jsonb") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_alias_v2_plan_keys_ok"("p_plan" "jsonb") RETURNS boolean
+    LANGUAGE "sql" IMMUTABLE
+    AS $$
+  select jsonb_typeof(p_plan) = 'object'
+    and not exists (
+      select 1
+      from jsonb_object_keys(p_plan) as key(name)
+      where key.name <> all (array[
+        'schema_version', 'actor_id', 'target_visibility', 'source_alias', 'source_evidence',
+        'target_snapshots', 'expected', 'dimensions', 'text_actions', 'actions', 'plan_sha256'
+      ])
+    )
+$$;
+
+
+ALTER FUNCTION "private"."dataset_alias_v2_plan_keys_ok"("p_plan" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "private"."dataset_alias_v2_plan_keys_ok"("p_plan" "jsonb") IS 'Closed key set of the v2 plan envelope: the real v1 expected counts plus the versioned text_action_count and the six-key derivative targets.';
+
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_alias_v2_render_amount"("p_value" numeric) RETURNS "text"
+    LANGUAGE "sql" IMMUTABLE
+    AS $$
+  select case
+    when p_value is null then null
+    when trim_scale(p_value) = 0 then '0'
+    else trim_scale(p_value)::text
+  end
+$$;
+
+
+ALTER FUNCTION "private"."dataset_alias_v2_render_amount"("p_value" numeric) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "private"."dataset_alias_v2_render_amount"("p_value" numeric) IS 'Canonical plain-decimal rendering for v2 desired amounts: trimmed, never exponent, zero as 0.';
+
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_alias_v2_replace_exchange_amounts"("p_before" "jsonb", "p_exchange" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql" IMMUTABLE
+    AS $$
+declare
+  v_index integer := coalesce((p_exchange->>'index')::integer, -1);
+  v_exchanges jsonb := p_before #> '{processDataSet,exchanges,exchange}';
+  v_entry jsonb;
+  v_after_mean text;
+  v_after_resulting text;
+begin
+  if v_index < 0 or jsonb_typeof(v_exchanges) <> 'array' or v_index >= jsonb_array_length(v_exchanges) then
+    return null;
+  end if;
+  v_entry := v_exchanges->v_index;
+  if not private.dataset_alias_v2_exchange_keys_ok(v_entry) then
+    return null;
+  end if;
+  if coalesce(v_entry->>'@dataSetInternalID', '') <> coalesce(p_exchange->>'internal_id', '')
+    or coalesce(v_entry->'referenceToFlowDataSet'->>'@refObjectId', '') <> coalesce(p_exchange->>'flow_id', '')
+    or coalesce(v_entry->'referenceToFlowDataSet'->>'@version', '') <> coalesce(p_exchange->>'flow_version', '')
+    or coalesce(v_entry->>'exchangeDirection', '') <> coalesce(p_exchange->>'direction', '')
+    or v_entry->>'meanAmount' is distinct from p_exchange->>'before_amount'
+    or v_entry->>'resultingAmount' is distinct from coalesce(p_exchange->>'before_resulting_amount', p_exchange->>'before_amount') then
+    return null;
+  end if;
+  v_after_mean := private.dataset_alias_v2_multiply_amount(p_exchange->>'before_amount', private.dataset_alias_v2_factor()::text);
+  v_after_resulting := private.dataset_alias_v2_multiply_amount(
+    coalesce(p_exchange->>'before_resulting_amount', p_exchange->>'before_amount'),
+    private.dataset_alias_v2_factor()::text);
+  if v_after_mean is null or v_after_mean is distinct from p_exchange->>'after_amount'
+    or v_after_resulting is null
+    or v_after_resulting is distinct from coalesce(p_exchange->>'after_resulting_amount', p_exchange->>'after_amount') then
+    return null;
+  end if;
+  return jsonb_set(
+    jsonb_set(p_before, array['processDataSet', 'exchanges', 'exchange', v_index::text, 'meanAmount'], to_jsonb(v_after_mean), false),
+    array['processDataSet', 'exchanges', 'exchange', v_index::text, 'resultingAmount'], to_jsonb(v_after_resulting), false);
+end
+$$;
+
+
+ALTER FUNCTION "private"."dataset_alias_v2_replace_exchange_amounts"("p_before" "jsonb", "p_exchange" "jsonb") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_alias_v2_replace_flow_reference"("p_before" "jsonb", "p_reference" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql" IMMUTABLE
+    AS $$
+declare
+  v_entry jsonb := p_before #> '{flowDataSet,flowProperties,flowProperty}';
+begin
+  if v_entry is null or p_reference is null then
+    return null;
+  end if;
+  if jsonb_typeof(v_entry) = 'array' then
+    if jsonb_array_length(v_entry) <> 1 or coalesce(v_entry->0->>'@dataSetInternalID', '') <> '1' then
+      return null;
+    end if;
+    return jsonb_set(p_before, '{flowDataSet,flowProperties,flowProperty,0,referenceToFlowPropertyDataSet}', p_reference, false);
+  end if;
+  if jsonb_typeof(v_entry) <> 'object' or coalesce(v_entry->>'@dataSetInternalID', '') <> '1' then
+    return null;
+  end if;
+  return jsonb_set(p_before, '{flowDataSet,flowProperties,flowProperty,referenceToFlowPropertyDataSet}', p_reference, false);
+end
+$$;
+
+
+ALTER FUNCTION "private"."dataset_alias_v2_replace_flow_reference"("p_before" "jsonb", "p_reference" "jsonb") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_alias_v2_replace_fu_text"("p_before" "jsonb", "p_functional_unit" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql" IMMUTABLE
+    AS $$
+declare
+  v_path text := coalesce(p_functional_unit->>'path', '');
+  v_before_text text := p_functional_unit->>'before_text';
+  v_after_text text := p_functional_unit->>'after_text';
+  v_stored text := p_before #>> string_to_array(v_path, '.');
+  v_derived text;
+begin
+  if not private.dataset_alias_v2_fu_path_ok(v_path) or v_before_text is null or v_after_text is null then
+    return null;
+  end if;
+  if v_stored is distinct from v_before_text then
+    return null;
+  end if;
+  v_derived := private.dataset_alias_v2_fu_apply_rule(v_before_text);
+  if v_derived is null or v_derived is distinct from v_after_text then
+    return null;
+  end if;
+  return jsonb_set(p_before, string_to_array(v_path, '.'), to_jsonb(v_derived), false);
+end
+$$;
+
+
+ALTER FUNCTION "private"."dataset_alias_v2_replace_fu_text"("p_before" "jsonb", "p_functional_unit" "jsonb") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "private"."dataset_flow_identity_active_fence"() RETURNS "trigger"
@@ -67507,6 +71847,92 @@ $$;
 ALTER FUNCTION "util"."dataset_alias_execution_sha256"("p_value" "text") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "util"."dataset_alias_execution_v2_artifact_sha256"("p_value" "jsonb") RETURNS "text"
+    LANGUAGE "sql" STABLE STRICT
+    SET "search_path" TO ''
+    AS $$
+  select util.dataset_alias_execution_v2_sha256(
+    private.dataset_alias_canonical_jsonb_v1(p_value)
+  )
+$$;
+
+
+ALTER FUNCTION "util"."dataset_alias_execution_v2_artifact_sha256"("p_value" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "util"."dataset_alias_execution_v2_artifact_sha256"("p_value" "jsonb") IS 'Hashes parsed JSON with the same recursive key ordering and compact serialization as CLI stableJsonText. Private protected-execution artifact verifier only.';
+
+
+
+CREATE OR REPLACE FUNCTION "util"."dataset_alias_execution_v2_server_context"() RETURNS "jsonb"
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $_$
+declare
+  v_project_url text;
+  v_host text;
+  v_project_ref text;
+  v_environment text;
+begin
+  v_project_url := btrim(util.project_url());
+  v_host := lower(
+    pg_catalog.regexp_replace(
+      v_project_url,
+      '^https?://([^/:]+).*$'::text,
+      '\1'::text
+    )
+  );
+
+  if nullif(v_host, '') is null or v_host = lower(v_project_url) then
+    raise exception using
+      errcode = '22023',
+      message = 'Branch-local project_url is not a valid HTTP(S) project URL';
+  end if;
+
+  if v_host in ('127.0.0.1', 'localhost', 'kong', 'host.docker.internal') then
+    v_project_ref := 'local';
+    v_environment := 'local';
+  elsif v_host ~ '^[a-z0-9-]+\.supabase\.co$' then
+    v_project_ref := pg_catalog.split_part(v_host, '.', 1);
+    v_environment := case
+      when v_project_ref = 'qgzvkongdjqiiamzbbts' then 'production'
+      else 'preview'
+    end;
+  else
+    v_project_ref := v_host;
+    v_environment := 'preview';
+  end if;
+
+  return jsonb_build_object(
+    'environment', v_environment,
+    'project_ref', v_project_ref,
+    'project_url_sha256', util.dataset_alias_execution_v2_sha256(v_project_url)
+  );
+end;
+$_$;
+
+
+ALTER FUNCTION "util"."dataset_alias_execution_v2_server_context"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "util"."dataset_alias_execution_v2_server_context"() IS 'Derives protected-execution environment and project identity from the branch-local Vault project_url. Only the production project ref qgzvkongdjqiiamzbbts is classified as production.';
+
+
+
+CREATE OR REPLACE FUNCTION "util"."dataset_alias_execution_v2_sha256"("p_value" "text") RETURNS "text"
+    LANGUAGE "sql" IMMUTABLE STRICT
+    SET "search_path" TO ''
+    AS $$
+  select pg_catalog.encode(
+    extensions.digest(pg_catalog.convert_to(p_value, 'UTF8'), 'sha256'),
+    'hex'
+  )
+$$;
+
+
+ALTER FUNCTION "util"."dataset_alias_execution_v2_sha256"("p_value" "text") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "util"."dataset_derivative_rebuild_http_body_matches"("p_body" "bytea", "p_id" "uuid", "p_version" "text") RETURNS boolean
     LANGUAGE "sql" STABLE
     SET "search_path" TO ''
@@ -72458,6 +76884,68 @@ COMMENT ON FUNCTION "util"."read_dataset_alias_execution_primary_closure"("p_act
 
 
 
+CREATE OR REPLACE FUNCTION "util"."read_dataset_alias_execution_v2_primary_closure"("p_actor" "uuid", "p_plan" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_action jsonb;
+  v_found boolean;
+  v_rows bigint := 0;
+  v_claimed_rows bigint;
+  v_exchange_count bigint;
+begin
+  if p_actor is null or jsonb_typeof(p_plan) is distinct from 'object' then
+    return null;
+  end if;
+  v_claimed_rows := coalesce((p_plan #>> '{expected,action_count}')::bigint, -1);
+  v_exchange_count := coalesce((p_plan #>> '{expected,exchange_count}')::bigint, -1);
+  -- Fresh current readback: every claimed row must hold exactly the claimed desired payload now, for this
+  -- actor, in the owner-draft state. The exact exchange set was proven under the lock by the batch
+  -- executor; this readback re-verifies the committed rows rather than re-attesting a stored summary.
+  for v_action in select * from jsonb_array_elements(coalesce(p_plan->'actions', '[]'::jsonb)) loop
+    v_found := null;
+    if v_action->>'table' = 'flows' then
+      select true into v_found
+      from public.flows as flow
+      where flow.id = (v_action->>'id')::uuid
+        and flow.version = v_action->>'version'
+        and flow.user_id = p_actor
+        and flow.state_code = 0
+        and flow.json_ordered::jsonb is not distinct from v_action->'desired_json_ordered';
+    elsif v_action->>'table' = 'processes' then
+      select true into v_found
+      from public.processes as process
+      where process.id = (v_action->>'id')::uuid
+        and process.version = v_action->>'version'
+        and process.user_id = p_actor
+        and process.state_code = 0
+        and process.json_ordered::jsonb is not distinct from v_action->'desired_json_ordered';
+    else
+      v_found := false;
+    end if;
+    if coalesce(v_found, false) then
+      v_rows := v_rows + 1;
+    end if;
+  end loop;
+  return jsonb_build_object(
+    'ok', v_rows = v_claimed_rows and v_claimed_rows >= 0,
+    'live_closure_proof', v_rows = v_claimed_rows and v_claimed_rows >= 0,
+    'row_count', v_rows,
+    'claimed_row_count', v_claimed_rows,
+    'exchange_count', v_exchange_count,
+    'invalid_action_count', case when v_rows = v_claimed_rows then 0 else v_claimed_rows - v_rows end,
+    'proof_sha256', util.dataset_alias_execution_v2_artifact_sha256(
+      jsonb_build_object('actor', p_actor, 'rows', v_rows, 'claimed_rows', v_claimed_rows,
+        'exchange_count', v_exchange_count, 'plan_sha256', p_plan->>'plan_sha256'))
+  );
+end
+$$;
+
+
+ALTER FUNCTION "util"."read_dataset_alias_execution_v2_primary_closure"("p_actor" "uuid", "p_plan" "jsonb") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "util"."read_dataset_derivative_rebuild_batch"("p_actor_user_id" "uuid", "p_batch_id" "uuid") RETURNS "jsonb"
     LANGUAGE "plpgsql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
@@ -76207,6 +80695,118 @@ COMMENT ON TABLE "util"."dataset_alias_execution_requests" IS 'Private one-attem
 
 
 
+CREATE TABLE IF NOT EXISTS "util"."dataset_alias_execution_v2_gate_receipts" (
+    "preflight_id" "uuid" NOT NULL,
+    "actor_user_id" "uuid" NOT NULL,
+    "gate_name" "text" NOT NULL,
+    "expected_sha256" "text" NOT NULL,
+    "observed_sha256" "text" NOT NULL,
+    "material" "jsonb" NOT NULL,
+    "status" "text" NOT NULL,
+    "captured_at" timestamp with time zone NOT NULL,
+    "receipt_sha256" "text" NOT NULL,
+    CONSTRAINT "dataset_alias_execution_v2_gate_hashes_check" CHECK ((("expected_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("observed_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("receipt_sha256" ~ '^[a-f0-9]{64}$'::"text"))),
+    CONSTRAINT "dataset_alias_execution_v2_gate_name_check" CHECK (("gate_name" = ANY (ARRAY['primary_support_plan'::"text", 'execution_unused'::"text", 'derivative_quiescence'::"text"]))),
+    CONSTRAINT "dataset_alias_execution_v2_gate_status_check" CHECK (("status" = 'passed'::"text"))
+);
+
+
+ALTER TABLE "util"."dataset_alias_execution_v2_gate_receipts" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "util"."dataset_alias_execution_v2_gate_receipts" IS 'Private, one-per-name server receipts for the three post-preflight live gates. Admission accepts only exact receipts persisted inside the same 180-second window.';
+
+
+
+CREATE TABLE IF NOT EXISTS "util"."dataset_alias_execution_v2_preflights" (
+    "id" "uuid" NOT NULL,
+    "actor_user_id" "uuid" NOT NULL,
+    "actor_email" "text" NOT NULL,
+    "environment" "text" NOT NULL,
+    "project_ref" "text" NOT NULL,
+    "target_visibility" "text" DEFAULT 'owner_draft'::"text" NOT NULL,
+    "plan" "jsonb" NOT NULL,
+    "freeze_envelope" "jsonb" NOT NULL,
+    "approval_envelope" "jsonb" NOT NULL,
+    "plan_sha256" "text" NOT NULL,
+    "operation_id" "text" NOT NULL,
+    "plan_request_sha256" "text" NOT NULL,
+    "bindings" "jsonb" NOT NULL,
+    "bindings_sha256" "text" NOT NULL,
+    "expected" "jsonb" NOT NULL,
+    "expected_sha256" "text" NOT NULL,
+    "derivative_targets" "jsonb" NOT NULL,
+    "derivative_targets_sha256" "text" NOT NULL,
+    "gate_expectations" "jsonb" NOT NULL,
+    "gate_expectations_sha256" "text" NOT NULL,
+    "failure_baseline_sha256" "text" NOT NULL,
+    "preflight_request_sha256" "text" NOT NULL,
+    "preflight_proof_sha256" "text" NOT NULL,
+    "freeze_sha256" "text" NOT NULL,
+    "approval_identity_sha256" "text" NOT NULL,
+    "token_sha256" "text" NOT NULL,
+    "completed_at" timestamp with time zone NOT NULL,
+    "expires_at" timestamp with time zone NOT NULL,
+    "consumed_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "clock_timestamp"() NOT NULL,
+    CONSTRAINT "dataset_alias_execution_v2_preflight_environment_check" CHECK (("environment" = ANY (ARRAY['production'::"text", 'preview'::"text", 'local'::"text"]))),
+    CONSTRAINT "dataset_alias_execution_v2_preflight_hashes_check" CHECK ((("plan_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("plan_request_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("bindings_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("expected_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("derivative_targets_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("gate_expectations_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("failure_baseline_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("preflight_request_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("preflight_proof_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("freeze_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("approval_identity_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("token_sha256" ~ '^[a-f0-9]{64}$'::"text"))),
+    CONSTRAINT "dataset_alias_execution_v2_preflight_visibility_check" CHECK (("target_visibility" = 'owner_draft'::"text")),
+    CONSTRAINT "dataset_alias_execution_v2_preflight_window_check" CHECK ((("expires_at" = ("completed_at" + '00:03:00'::interval)) AND (("consumed_at" IS NULL) OR (("consumed_at" >= "completed_at") AND ("consumed_at" <= "expires_at")))))
+);
+
+
+ALTER TABLE "util"."dataset_alias_execution_v2_preflights" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "util"."dataset_alias_execution_v2_preflights" IS 'Private server-clock proofs for rollback-only validation of one immutable owner-draft alias plan and its exact derivative target set.';
+
+
+
+CREATE TABLE IF NOT EXISTS "util"."dataset_alias_execution_v2_requests" (
+    "id" "uuid" NOT NULL,
+    "actor_user_id" "uuid" NOT NULL,
+    "plan_sha256" "text" NOT NULL,
+    "operation_id" "text" NOT NULL,
+    "plan_request_sha256" "text" NOT NULL,
+    "freeze_sha256" "text" NOT NULL,
+    "approval_identity_sha256" "text" NOT NULL,
+    "approval_text_sha256" "text" NOT NULL,
+    "derivative_target_set_sha256" "text" NOT NULL,
+    "preflight_proof_sha256" "text" NOT NULL,
+    "admission_request_sha256" "text" NOT NULL,
+    "gate_results" "jsonb" NOT NULL,
+    "gate_results_sha256" "text" NOT NULL,
+    "nonce_sha256" "text" NOT NULL,
+    "attempt_count" smallint DEFAULT 1 NOT NULL,
+    "dispatch_count" smallint DEFAULT 0 NOT NULL,
+    "net_request_id" bigint,
+    "status" "text" DEFAULT 'dispatching'::"text" NOT NULL,
+    "admitted_at" timestamp with time zone NOT NULL,
+    "dispatched_at" timestamp with time zone,
+    "started_at" timestamp with time zone,
+    "primary_committed_at" timestamp with time zone,
+    "terminal_at" timestamp with time zone,
+    "alias_result" "jsonb",
+    "derivative_admission" "jsonb",
+    "terminal_proof" "jsonb",
+    "last_error" "jsonb",
+    "created_at" timestamp with time zone DEFAULT "clock_timestamp"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "clock_timestamp"() NOT NULL,
+    CONSTRAINT "dataset_alias_execution_v2_request_attempt_check" CHECK ((("attempt_count" = 1) AND ("dispatch_count" = ANY (ARRAY[0, 1])) AND ((("dispatch_count" = 0) AND ("net_request_id" IS NULL) AND ("dispatched_at" IS NULL)) OR (("dispatch_count" = 1) AND ("net_request_id" IS NOT NULL) AND ("dispatched_at" IS NOT NULL))))),
+    CONSTRAINT "dataset_alias_execution_v2_request_hashes_check" CHECK ((("plan_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("plan_request_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("freeze_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("approval_identity_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("approval_text_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("derivative_target_set_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("preflight_proof_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("admission_request_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("gate_results_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("nonce_sha256" ~ '^[a-f0-9]{64}$'::"text"))),
+    CONSTRAINT "dataset_alias_execution_v2_request_status_check" CHECK (("status" = ANY (ARRAY['dispatching'::"text", 'dispatched'::"text", 'running'::"text", 'derivatives_pending'::"text", 'completed'::"text", 'failed'::"text", 'indeterminate'::"text"]))),
+    CONSTRAINT "dataset_alias_execution_v2_request_terminal_check" CHECK (((("status" = ANY (ARRAY['completed'::"text", 'failed'::"text", 'indeterminate'::"text"])) AND ("terminal_at" IS NOT NULL)) OR (("status" <> ALL (ARRAY['completed'::"text", 'failed'::"text", 'indeterminate'::"text"])) AND ("terminal_at" IS NULL))))
+);
+
+
+ALTER TABLE "util"."dataset_alias_execution_v2_requests" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "util"."dataset_alias_execution_v2_requests" IS 'Private one-attempt ledger. A sealed approval identity can create at most one row and at most one pg_net dispatch; status/readback never redispatches.';
+
+
+
 CREATE TABLE IF NOT EXISTS "util"."dataset_derivative_rebuild_permits" (
     "request_id" "uuid" NOT NULL,
     "proposal_id" bigint NOT NULL,
@@ -77673,6 +82273,21 @@ ALTER TABLE ONLY "util"."dataset_alias_execution_requests"
 
 
 
+ALTER TABLE ONLY "util"."dataset_alias_execution_v2_gate_receipts"
+    ADD CONSTRAINT "dataset_alias_execution_v2_gate_receipts_pkey" PRIMARY KEY ("preflight_id", "gate_name");
+
+
+
+ALTER TABLE ONLY "util"."dataset_alias_execution_v2_preflights"
+    ADD CONSTRAINT "dataset_alias_execution_v2_preflights_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "util"."dataset_alias_execution_v2_requests"
+    ADD CONSTRAINT "dataset_alias_execution_v2_requests_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "util"."dataset_derivative_rebuild_permits"
     ADD CONSTRAINT "dataset_derivative_rebuild_permits_pkey" PRIMARY KEY ("request_id", "proposal_id", "permit_kind");
 
@@ -79105,6 +83720,38 @@ CREATE UNIQUE INDEX "dataset_alias_execution_sealed_attempt_uidx" ON "util"."dat
 
 
 
+CREATE INDEX "dataset_alias_execution_v2_actor_read_idx" ON "util"."dataset_alias_execution_v2_requests" USING "btree" ("actor_user_id", "admitted_at" DESC);
+
+
+
+CREATE INDEX "dataset_alias_execution_v2_gate_actor_read_idx" ON "util"."dataset_alias_execution_v2_gate_receipts" USING "btree" ("actor_user_id", "preflight_id", "captured_at");
+
+
+
+CREATE UNIQUE INDEX "dataset_alias_execution_v2_net_request_uidx" ON "util"."dataset_alias_execution_v2_requests" USING "btree" ("net_request_id") WHERE ("net_request_id" IS NOT NULL);
+
+
+
+CREATE INDEX "dataset_alias_execution_v2_preflight_actor_read_idx" ON "util"."dataset_alias_execution_v2_preflights" USING "btree" ("actor_user_id", "completed_at" DESC);
+
+
+
+CREATE UNIQUE INDEX "dataset_alias_execution_v2_preflight_actor_request_uidx" ON "util"."dataset_alias_execution_v2_preflights" USING "btree" ("actor_user_id", "preflight_request_sha256");
+
+
+
+CREATE UNIQUE INDEX "dataset_alias_execution_v2_preflight_approval_uidx" ON "util"."dataset_alias_execution_v2_preflights" USING "btree" ("actor_user_id", "approval_identity_sha256");
+
+
+
+CREATE UNIQUE INDEX "dataset_alias_execution_v2_preflight_token_uidx" ON "util"."dataset_alias_execution_v2_preflights" USING "btree" ("token_sha256");
+
+
+
+CREATE UNIQUE INDEX "dataset_alias_execution_v2_sealed_attempt_uidx" ON "util"."dataset_alias_execution_v2_requests" USING "btree" ("actor_user_id", "approval_identity_sha256");
+
+
+
 CREATE UNIQUE INDEX "dataset_derivative_rebuild_active_target_uidx" ON "util"."dataset_derivative_rebuild_requests" USING "btree" ("target_table", "target_id", "target_version") WHERE ("status" <> ALL (ARRAY['completed'::"text", 'stale'::"text", 'failed'::"text"]));
 
 
@@ -80195,6 +84842,16 @@ ALTER TABLE ONLY "util"."dataset_alias_execution_requests"
 
 
 
+ALTER TABLE ONLY "util"."dataset_alias_execution_v2_gate_receipts"
+    ADD CONSTRAINT "dataset_alias_execution_v2_gate_receipts_preflight_id_fkey" FOREIGN KEY ("preflight_id") REFERENCES "util"."dataset_alias_execution_v2_preflights"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "util"."dataset_alias_execution_v2_requests"
+    ADD CONSTRAINT "dataset_alias_execution_v2_requests_id_fkey" FOREIGN KEY ("id") REFERENCES "util"."dataset_alias_execution_v2_preflights"("id");
+
+
+
 ALTER TABLE ONLY "util"."dataset_derivative_rebuild_permits"
     ADD CONSTRAINT "dataset_derivative_rebuild_permits_proposal_id_fkey" FOREIGN KEY ("proposal_id") REFERENCES "util"."dataset_derivative_rebuild_proposals"("id") ON DELETE CASCADE;
 
@@ -81131,9 +85788,24 @@ GRANT ALL ON FUNCTION "api"."cmd_dataset_alias_execution_admit_guarded"("p_reque
 
 
 
+REVOKE ALL ON FUNCTION "api"."cmd_dataset_alias_execution_admit_v2_guarded"("p_request" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."cmd_dataset_alias_execution_admit_v2_guarded"("p_request" "jsonb") TO "authenticated";
+
+
+
+REVOKE ALL ON FUNCTION "api"."cmd_dataset_alias_execution_execute_v2"("p_request_id" "uuid", "p_nonce" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."cmd_dataset_alias_execution_execute_v2"("p_request_id" "uuid", "p_nonce" "text") TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "api"."cmd_dataset_alias_execution_gate_guarded"("p_request_id" "uuid", "p_preflight_token" "text", "p_gate_name" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "api"."cmd_dataset_alias_execution_gate_guarded"("p_request_id" "uuid", "p_preflight_token" "text", "p_gate_name" "text") TO "api_internal_executor";
 GRANT ALL ON FUNCTION "api"."cmd_dataset_alias_execution_gate_guarded"("p_request_id" "uuid", "p_preflight_token" "text", "p_gate_name" "text") TO "authenticated";
+
+
+
+REVOKE ALL ON FUNCTION "api"."cmd_dataset_alias_execution_gate_v2_guarded"("p_request_id" "uuid", "p_preflight_token" "text", "p_gate_name" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."cmd_dataset_alias_execution_gate_v2_guarded"("p_request_id" "uuid", "p_preflight_token" "text", "p_gate_name" "text") TO "authenticated";
 
 
 
@@ -81143,9 +85815,19 @@ GRANT ALL ON FUNCTION "api"."cmd_dataset_alias_execution_preflight_guarded"("p_r
 
 
 
+REVOKE ALL ON FUNCTION "api"."cmd_dataset_alias_execution_preflight_v2_guarded"("p_request" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."cmd_dataset_alias_execution_preflight_v2_guarded"("p_request" "jsonb") TO "authenticated";
+
+
+
 REVOKE ALL ON FUNCTION "api"."cmd_dataset_alias_execution_read"("p_request_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "api"."cmd_dataset_alias_execution_read"("p_request_id" "uuid") TO "api_internal_executor";
 GRANT ALL ON FUNCTION "api"."cmd_dataset_alias_execution_read"("p_request_id" "uuid") TO "authenticated";
+
+
+
+REVOKE ALL ON FUNCTION "api"."cmd_dataset_alias_execution_read_v2"("p_request_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."cmd_dataset_alias_execution_read_v2"("p_request_id" "uuid") TO "authenticated";
 
 
 
@@ -83133,6 +87815,10 @@ GRANT ALL ON FUNCTION "private"."cmd_dataset_alias_batch_guarded"("p_batch" "jso
 
 
 
+REVOKE ALL ON FUNCTION "private"."cmd_dataset_alias_batch_v2_guarded"("p_batch" "jsonb") FROM PUBLIC;
+
+
+
 REVOKE ALL ON FUNCTION "private"."cmd_dataset_alias_execution_execute"("p_request_id" "uuid", "p_nonce" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "private"."cmd_dataset_alias_execution_execute"("p_request_id" "uuid", "p_nonce" "text") TO "service_role";
 GRANT ALL ON FUNCTION "private"."cmd_dataset_alias_execution_execute"("p_request_id" "uuid", "p_nonce" "text") TO "api_internal_executor";
@@ -83141,6 +87827,10 @@ GRANT ALL ON FUNCTION "private"."cmd_dataset_alias_execution_execute"("p_request
 
 REVOKE ALL ON FUNCTION "private"."cmd_dataset_alias_plan_guarded"("p_plan" "jsonb") FROM PUBLIC;
 GRANT ALL ON FUNCTION "private"."cmd_dataset_alias_plan_guarded"("p_plan" "jsonb") TO "api_internal_executor";
+
+
+
+REVOKE ALL ON FUNCTION "private"."cmd_dataset_alias_plan_v2_guarded"("p_plan" "jsonb") FROM PUBLIC;
 
 
 
@@ -83248,6 +87938,70 @@ REVOKE ALL ON FUNCTION "private"."dataset_alias_jsonb_array_v1"("p_value" "jsonb
 GRANT ALL ON FUNCTION "private"."dataset_alias_jsonb_array_v1"("p_value" "jsonb") TO "service_role";
 GRANT ALL ON FUNCTION "private"."dataset_alias_jsonb_array_v1"("p_value" "jsonb") TO "api_internal_executor";
 GRANT ALL ON FUNCTION "private"."dataset_alias_jsonb_array_v1"("p_value" "jsonb") TO "next_public_search_executor";
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_alias_v2_amount_grammar_ok"("p_amount" "text") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_alias_v2_deny"("p_code" "text", "p_status" integer, "p_message" "text", "p_details" "jsonb") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_alias_v2_derivative_target_ok"("p_target" "jsonb") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_alias_v2_error"("p_code" "text", "p_status" integer, "p_message" "text", "p_details" "jsonb") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_alias_v2_exchange_keys_ok"("p_exchange" "jsonb") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_alias_v2_factor"() FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_alias_v2_flow_reference"("p_payload" "jsonb") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_alias_v2_fu_apply_rule"("p_before_text" "text") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_alias_v2_fu_path_ok"("p_path" "text") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_alias_v2_multiply_amount"("p_amount" "text", "p_factor" "text") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_alias_v2_payload_sha256"("p_payload" "jsonb") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_alias_v2_plan_keys_ok"("p_plan" "jsonb") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_alias_v2_render_amount"("p_value" numeric) FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_alias_v2_replace_exchange_amounts"("p_before" "jsonb", "p_exchange" "jsonb") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_alias_v2_replace_flow_reference"("p_before" "jsonb", "p_reference" "jsonb") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_alias_v2_replace_fu_text"("p_before" "jsonb", "p_functional_unit" "jsonb") FROM PUBLIC;
 
 
 
@@ -84860,6 +89614,18 @@ REVOKE ALL ON FUNCTION "util"."dataset_alias_execution_sha256"("p_value" "text")
 
 
 
+REVOKE ALL ON FUNCTION "util"."dataset_alias_execution_v2_artifact_sha256"("p_value" "jsonb") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "util"."dataset_alias_execution_v2_server_context"() FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "util"."dataset_alias_execution_v2_sha256"("p_value" "text") FROM PUBLIC;
+
+
+
 REVOKE ALL ON FUNCTION "util"."dataset_derivative_rebuild_http_body_matches"("p_body" "bytea", "p_id" "uuid", "p_version" "text") FROM PUBLIC;
 
 
@@ -85053,6 +89819,10 @@ REVOKE ALL ON FUNCTION "util"."queue_embeddings"() FROM PUBLIC;
 
 
 REVOKE ALL ON FUNCTION "util"."read_dataset_alias_execution_primary_closure"("p_actor" "uuid", "p_plan" "jsonb") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "util"."read_dataset_alias_execution_v2_primary_closure"("p_actor" "uuid", "p_plan" "jsonb") FROM PUBLIC;
 
 
 

@@ -24,7 +24,7 @@ checkPaths:
   - .env.supabase.main.local.example
 lastReviewedAt: 2026-09-21
 lastReviewedCommit: 47168c0
-lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the local contract step gains one guarded owner-draft save suite; branch bindings, Preview classifier inputs, persistent-Dev deploy steps and hosted verification are unchanged."
+lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the local contract step gains one guarded owner-draft save suite; branch bindings, Preview classifier inputs, persistent-Dev deploy steps and hosted verification are unchanged. Reviewed for Database #673 (Foundry #60) with workspace #1432: the five versioned Time-alias v2 suites (math, decimal parity vectors, frozen contract, batch/plan behaviour, protected lifecycle conformance) are now part of the required local-contract selection in .github/workflows/supabase-dev.yml and of the workflow contract test's pinned tokens, and the generated schema workspace and Data API types were regenerated with the CI-pinned Supabase CLI 2.117.0 and re-generated deterministically. Deployment boundaries, routing, ownership and the branch policy are unchanged; no historical suite was swept into the selection."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

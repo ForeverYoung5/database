@@ -54,7 +54,23 @@ export type Database = {
         Args: { p_request: Json }
         Returns: Json
       }
+      cmd_dataset_alias_execution_admit_v2_guarded: {
+        Args: { p_request: Json }
+        Returns: Json
+      }
+      cmd_dataset_alias_execution_execute_v2: {
+        Args: { p_nonce: string; p_request_id: string }
+        Returns: Json
+      }
       cmd_dataset_alias_execution_gate_guarded: {
+        Args: {
+          p_gate_name: string
+          p_preflight_token: string
+          p_request_id: string
+        }
+        Returns: Json
+      }
+      cmd_dataset_alias_execution_gate_v2_guarded: {
         Args: {
           p_gate_name: string
           p_preflight_token: string
@@ -66,7 +82,15 @@ export type Database = {
         Args: { p_request: Json }
         Returns: Json
       }
+      cmd_dataset_alias_execution_preflight_v2_guarded: {
+        Args: { p_request: Json }
+        Returns: Json
+      }
       cmd_dataset_alias_execution_read: {
+        Args: { p_request_id: string }
+        Returns: Json
+      }
+      cmd_dataset_alias_execution_read_v2: {
         Args: { p_request_id: string }
         Returns: Json
       }
