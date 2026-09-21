@@ -1,9 +1,22 @@
-CREATE OR REPLACE FUNCTION "api"."cmd_dataset_alias_execution_admit_v2_guarded"("p_request" "jsonb") RETURNS "jsonb"
-    LANGUAGE "plpgsql" SECURITY DEFINER
-    SET "search_path" TO ''
-    SET "lock_timeout" TO '5s'
-    SET "statement_timeout" TO '10s'
-    AS $_$
+begin;
+
+-- Issue #677 (Foundry #60) transport repair for the protected Time-alias v2 one-shot
+-- admission. The queued executor callback is a PostgREST RPC request, so the schema it
+-- addresses comes from the request content profile; with that header omitted PostgREST
+-- resolves the first schema of the deployed `db_schema` list, which is `public`, and the
+-- callback dies as 404 / PGRST202 after the single attempt has already been consumed.
+-- This replacement adds only `Content-Profile: api` to the queued headers. The URL, the
+-- nonce-bound body, the service-key authentication, the timeout, and the one-attempt
+-- topology are unchanged, and preflight/gate/read/execute semantics are untouched.
+create or replace function api.cmd_dataset_alias_execution_admit_v2_guarded(
+  p_request jsonb
+) returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+set lock_timeout = '5s'
+set statement_timeout = '10s'
+as $$
 declare
   v_actor uuid := auth.uid();
   -- The admission REQUEST keeps its input schema name; the RESPONSE has its own proof name, because
@@ -404,10 +417,16 @@ exception
       'message', 'The request or sealed approval identity already consumed its only attempt'
     );
 end;
-$_$;
+$$;
 
-ALTER FUNCTION "api"."cmd_dataset_alias_execution_admit_v2_guarded"("p_request" "jsonb") OWNER TO "postgres";
+alter function api.cmd_dataset_alias_execution_admit_v2_guarded(jsonb)
+  owner to postgres;
+revoke all on function api.cmd_dataset_alias_execution_admit_v2_guarded(jsonb)
+  from public, anon, authenticated, service_role;
+grant execute on function api.cmd_dataset_alias_execution_admit_v2_guarded(jsonb)
+  to authenticated;
 
-REVOKE ALL ON FUNCTION "api"."cmd_dataset_alias_execution_admit_v2_guarded"("p_request" "jsonb") FROM PUBLIC;
+comment on function api.cmd_dataset_alias_execution_admit_v2_guarded(jsonb) is
+  'Consumes one actor-owned unexpired preflight token, binds three passed gate digests, persists attempt_count=1, and enqueues at most one service executor request whose queued callback explicitly selects the exposed api content profile. Repeated admission is rejected and status/readback never redispatches.';
 
-GRANT ALL ON FUNCTION "api"."cmd_dataset_alias_execution_admit_v2_guarded"("p_request" "jsonb") TO "authenticated";
+commit;
