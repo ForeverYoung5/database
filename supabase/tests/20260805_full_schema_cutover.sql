@@ -80,8 +80,8 @@ select is(
     where namespace.nspname = 'private'
       and routine.prokind = 'f'
   ),
-  392::bigint,
-  'Twenty-five navigation helpers plus: private contains the active helpers, including the twenty-five exact-version, thirteen composite-name and one review-search internals, two partial-import helpers, two whole-package helpers, the example write guard, the two state-120 candidate-cache helpers, the state-120 lifecycle guard, the seven manager-attested Result publication helpers, and the fourteen versioned v2 Time-alias helpers (four exact-numeric, nine leaf/derivation helpers and the guarded v2 batch executor)'
+  394::bigint,
+  'Twenty-five navigation helpers plus: private contains the active helpers, including the twenty-five exact-version, thirteen composite-name and one review-search internals, two partial-import helpers, two whole-package helpers, the example write guard, the two state-120 candidate-cache helpers, the state-120 lifecycle guard, the seven manager-attested Result publication helpers, and the sixteen versioned v2 Time-alias helpers (four exact-numeric, nine leaf/derivation helpers, the guarded v2 batch executor, the plan key set and the guarded v2 plan executor)'
 );
 
 select ok(

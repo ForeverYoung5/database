@@ -1,0 +1,222 @@
+-- Foundry #60 / Database #673 — v2 guarded plan executor for the current source-hour Time repair.
+--
+-- The plan is the producer's whole frozen intent (shared CLI cohort contract): its identity, the actor and
+-- owner-draft visibility it claims, the source and target evidence snapshots, the seven derived counts, the
+-- single `time` dimension with the approved factor and both unit-group pointers, the text-action block and
+-- the ordered action list. The executor validates that envelope and then executes exactly one batch built
+-- from it through the guarded v2 batch executor, so every leaf validation (closure, digests, derivation,
+-- scope, text binding, counts, evidence) stays in one place.
+--
+-- `plan_request_sha256` is the server's own digest of the submitted plan text; the plan summary audit row
+-- binds it together with the producer's `plan_sha256`. A resubmission of the identical plan returns the
+-- stored proof; a plan that reaches a state the batch does not prove is refused (ALIAS_V2_PLAN_PROOF_MISMATCH).
+
+-- The reviewed plan envelope key set of the shared cohort contract.
+create or replace function private.dataset_alias_v2_plan_keys_ok(p_plan jsonb)
+returns boolean
+language sql
+immutable
+as $$
+  select jsonb_typeof(p_plan) = 'object'
+    and not exists (
+      select 1
+      from jsonb_object_keys(p_plan) as key(name)
+      where key.name <> all (array[
+        'schema_version', 'actor_id', 'target_visibility', 'source_evidence', 'target_snapshots',
+        'counts', 'dimensions', 'text_actions', 'actions', 'plan_sha256'
+      ])
+    )
+$$;
+
+alter function private.dataset_alias_v2_plan_keys_ok(jsonb) owner to postgres;
+revoke all on function private.dataset_alias_v2_plan_keys_ok(jsonb) from public;
+comment on function private.dataset_alias_v2_plan_keys_ok(jsonb) is
+  'Closed key set of the v2 plan envelope as the shared CLI cohort fixture emits it.';
+
+-- The guarded plan executor.
+create or replace function private.cmd_dataset_alias_plan_v2_guarded(p_plan jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+set lock_timeout = '5s'
+as $$
+declare
+  v_actor uuid := auth.uid();
+  v_schema_version constant text := 'dataset-alias-plan.v2';
+  v_batch_schema_version constant text := 'dataset-alias-batch.v2';
+  v_command constant text := 'cmd_dataset_alias_plan_v2_guarded';
+  v_plan_sha256 text;
+  v_plan_request_sha256 text;
+  v_batch_id text;
+  v_counts jsonb;
+  v_batch jsonb;
+  v_batch_result jsonb;
+  v_dimension jsonb;
+  v_existing_summary jsonb;
+  v_summary_id bigint;
+  v_replay boolean;
+begin
+  if v_actor is null then
+    return jsonb_build_object('ok', false, 'code', 'AUTH_REQUIRED', 'status', 401, 'message', 'Authentication required');
+  end if;
+
+  if p_plan is not null and pg_column_size(p_plan) > 67108864 then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 413,
+      'message', 'The v2 plan exceeds the 64 MiB database limit');
+  end if;
+
+  if not private.dataset_alias_v2_plan_keys_ok(p_plan) then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 400,
+      'message', 'Plan request must match dataset-alias-plan.v2 exactly');
+  end if;
+
+  if p_plan->>'schema_version' is distinct from v_schema_version
+    or (p_plan->>'plan_sha256') !~ '^[a-f0-9]{64}$'
+    or (p_plan->>'actor_id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    or p_plan->>'target_visibility' is distinct from 'owner_draft'
+    or jsonb_typeof(p_plan->'source_evidence') is distinct from 'object'
+    or jsonb_typeof(p_plan->'target_snapshots') is distinct from 'object'
+    or jsonb_typeof(p_plan->'counts') is distinct from 'object'
+    or jsonb_typeof(p_plan->'dimensions') is distinct from 'array'
+    or jsonb_typeof(p_plan->'text_actions') is distinct from 'array'
+    or jsonb_typeof(p_plan->'actions') is distinct from 'array'
+    or jsonb_array_length(p_plan->'actions') < 1 then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 400,
+      'message', 'Plan identity, actor, owner_draft visibility, evidence, counts, dimension, text actions and action list are required');
+  end if;
+
+  if (p_plan->>'actor_id')::uuid is distinct from v_actor then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 403,
+      'message', 'The plan is bound to another actor');
+  end if;
+
+  -- Exactly one `time` dimension; the factor is the approved constant and both unit-group pointers must be
+  -- the ones the evidence blocks bind. Zero flow-property actions are admissible here by construction: a
+  -- single time dimension is never refused for being alone, and the refusal for any malformed cohort shape
+  -- comes from the evidence and closure checks of the batch executor.
+  if jsonb_array_length(p_plan->'dimensions') <> 1 then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_DIMENSION_UNSUPPORTED', 'status', 400,
+      'message', 'The v2 plan carries exactly one dimension');
+  end if;
+  v_dimension := p_plan->'dimensions'->0;
+  if v_dimension->>'dimension' is distinct from 'time'
+    or v_dimension->>'factor' is distinct from private.dataset_alias_v2_factor()::text
+    or (v_dimension #>> '{source_unitgroup,id}') is distinct from (p_plan #>> '{source_evidence,source_unitgroup,id}')
+    or (v_dimension #>> '{source_unitgroup,version}') is distinct from (p_plan #>> '{source_evidence,source_unitgroup,version}')
+    or (v_dimension #>> '{target_unitgroup,id}') is distinct from (p_plan #>> '{target_snapshots,unitgroup,id}')
+    or (v_dimension #>> '{target_unitgroup,version}') is distinct from (p_plan #>> '{target_snapshots,unitgroup,version}') then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_DIMENSION_UNSUPPORTED', 'status', 400,
+      'message', 'The single dimension must be time with the approved factor and the evidence unit groups');
+  end if;
+  if (p_plan #>> '{counts,flowproperty_count}') !~ '^[0-9]+$'
+    or (p_plan #>> '{counts,flowproperty_count}')::integer <> 0 then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_COUNT_MISMATCH', 'status', 409,
+      'message', 'The time cohort carries no flow-property actions');
+  end if;
+
+  v_plan_sha256 := p_plan->>'plan_sha256';
+  v_plan_request_sha256 := encode(extensions.digest(convert_to(p_plan::text, 'UTF8'), 'sha256'), 'hex');
+  v_batch_id := 'time:' || v_plan_sha256;
+  v_counts := p_plan->'counts';
+
+  -- The batch the plan executes is assembled here from the plan's own blocks; it is never accepted from a
+  -- caller, so a plan and its batch cannot disagree about identity, evidence or counts.
+  v_batch := jsonb_build_object(
+    'schema_version', v_batch_schema_version,
+    'batch_id', v_batch_id,
+    'plan_sha256', v_plan_sha256,
+    'dimension', 'time',
+    'factor', v_dimension->>'factor',
+    'target_visibility', 'owner_draft',
+    'target_snapshots', p_plan->'target_snapshots',
+    'source_evidence', p_plan->'source_evidence',
+    'counts', jsonb_build_object(
+      'action_count', v_counts->>'action_count',
+      'flow_count', v_counts->>'flow_count',
+      'process_count', v_counts->>'process_count',
+      'exchange_count', v_counts->>'exchange_count',
+      'amount_field_count', v_counts->>'amount_field_count',
+      'unrelated_exchange_count', v_counts->>'unrelated_exchange_count',
+      'flowproperty_count', v_counts->>'flowproperty_count'),
+    'text_actions', p_plan->'text_actions',
+    'actions', p_plan->'actions');
+
+  v_batch_result := private.cmd_dataset_alias_batch_v2_guarded(v_batch);
+  if coalesce((v_batch_result->>'ok')::boolean, false) is not true then
+    -- The batch refusal is the plan refusal: its stable code, status and details pass through unchanged.
+    return v_batch_result;
+  end if;
+
+  v_replay := coalesce((v_batch_result->>'idempotent_replay')::boolean, false);
+  if v_batch_result->>'plan_sha256' is distinct from v_plan_sha256
+    or v_batch_result->>'batch_id' is distinct from v_batch_id
+    or (v_batch_result #>> '{counts,action_count}')::integer is distinct from (v_counts->>'action_count')::integer
+    or (v_batch_result #>> '{counts,flow_count}')::integer is distinct from (v_counts->>'flow_count')::integer
+    or (v_batch_result #>> '{counts,process_count}')::integer is distinct from (v_counts->>'process_count')::integer
+    or (v_batch_result #>> '{counts,exchange_count}')::integer is distinct from (v_counts->>'exchange_count')::integer
+    or (v_batch_result #>> '{counts,amount_field_count}')::integer is distinct from (v_counts->>'amount_field_count')::integer
+    or (v_batch_result #>> '{counts,unrelated_exchange_count}')::integer is distinct from (v_counts->>'unrelated_exchange_count')::integer
+    or (v_batch_result #>> '{counts,text_action_count}')::integer is distinct from jsonb_array_length(p_plan->'text_actions') then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_PROOF_MISMATCH', 'status', 409,
+      'message', 'The batch result does not prove the exact plan identity and counts',
+      'details', jsonb_build_object('batch_result', v_batch_result));
+  end if;
+
+  select audit_log.payload into v_existing_summary
+  from private.command_audit_log as audit_log
+  where audit_log.command = v_command
+    and audit_log.actor_user_id = v_actor
+    and audit_log.payload->>'record_type' = 'plan_summary'
+    and audit_log.payload->>'plan_request_sha256' = v_plan_request_sha256
+  order by audit_log.id desc limit 1;
+
+  if v_existing_summary is not null then
+    if not v_replay then
+      -- The batch was fresh but the whole-plan proof already exists: the two ledgers disagree.
+      return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_REPLAY_CONFLICT', 'status', 409,
+        'message', 'A fresh batch result cannot follow an existing plan summary');
+    end if;
+    return jsonb_build_object('ok', true, 'code', 'ALIAS_V2_PLAN_REPLAYED', 'status', 200,
+      'idempotent_replay', true, 'plan_sha256', v_plan_sha256, 'plan_request_sha256', v_plan_request_sha256,
+      'batch_id', v_batch_id, 'counts', v_existing_summary->'counts', 'audit',
+      jsonb_build_object('batch_result', v_batch_result));
+  end if;
+
+  if v_replay then
+    -- The rows are already applied but the whole-plan proof is missing: refuse rather than mint it.
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_PROOF_MISMATCH', 'status', 409,
+      'message', 'An applied batch without its plan summary cannot be re-attested by a resubmission');
+  end if;
+
+  insert into private.command_audit_log (command, actor_user_id, target_table, payload)
+  values (v_command, v_actor, 'flows', jsonb_build_object(
+    'record_type', 'plan_summary', 'schema_version', v_schema_version, 'plan_sha256', v_plan_sha256,
+    'plan_request_sha256', v_plan_request_sha256, 'batch_id', v_batch_id, 'dimension', 'time',
+    'factor', v_dimension->>'factor', 'target_visibility', 'owner_draft',
+    'text_action_count', jsonb_array_length(p_plan->'text_actions'),
+    'source_evidence', p_plan->'source_evidence', 'target_snapshots', p_plan->'target_snapshots',
+    'counts', jsonb_build_object(
+      'action_count', v_counts->>'action_count', 'flow_count', v_counts->>'flow_count',
+      'process_count', v_counts->>'process_count', 'exchange_count', v_counts->>'exchange_count',
+      'amount_field_count', v_counts->>'amount_field_count',
+      'unrelated_exchange_count', v_counts->>'unrelated_exchange_count', 'flowproperty_count', 0)))
+  returning id into v_summary_id;
+
+  return jsonb_build_object('ok', true, 'code', 'ALIAS_V2_PLAN_APPLIED', 'status', 200,
+    'idempotent_replay', false, 'plan_sha256', v_plan_sha256, 'plan_request_sha256', v_plan_request_sha256,
+    'batch_id', v_batch_id,
+    'counts', jsonb_build_object(
+      'action_count', v_counts->>'action_count', 'flow_count', v_counts->>'flow_count',
+      'process_count', v_counts->>'process_count', 'exchange_count', v_counts->>'exchange_count',
+      'amount_field_count', v_counts->>'amount_field_count',
+      'unrelated_exchange_count', v_counts->>'unrelated_exchange_count',
+      'text_action_count', jsonb_array_length(p_plan->'text_actions')),
+    'audit', jsonb_build_object('plan_summary_id', v_summary_id, 'batch_result', v_batch_result));
+end
+$$;
+
+alter function private.cmd_dataset_alias_plan_v2_guarded(jsonb) owner to postgres;
+revoke all on function private.cmd_dataset_alias_plan_v2_guarded(jsonb) from public;
+comment on function private.cmd_dataset_alias_plan_v2_guarded(jsonb) is
+  'Versioned guarded v2 plan executor: validates the shared plan envelope, assembles the one batch it executes, delegates to the v2 batch executor, and keeps a replay-safe whole-plan summary bound to the submitted plan text. v1 untouched.';

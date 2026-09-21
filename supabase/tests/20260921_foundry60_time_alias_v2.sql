@@ -78,6 +78,15 @@ select ok(
 );
 
 -- C. v1 must refuse a v2 envelope: the current cohort can never travel the historical path.
+-- The executors return their frozen envelopes (they never raise for a refused request). They are private
+-- by design, so the suite reaches them through a definer-owned probe exactly as the behaviour suite does.
+create or replace function pg_temp.v2_plan_probe(p_plan jsonb)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+begin
+  return private.cmd_dataset_alias_plan_v2_guarded(p_plan);
+end
+$$;
+grant execute on function pg_temp.v2_plan_probe(jsonb) to authenticated;
 select set_config('request.jwt.claim.role', 'authenticated', true);
 select set_config('request.jwt.claim.sub', '00000000-0000-4000-8000-000000000001', true);
 select set_config('request.jwt.claim.email', 'fixture@example.invalid', true);
@@ -111,22 +120,20 @@ select has_function(
   array['jsonb'],
   'v2 protected preflight is exposed'
 );
--- The two behaviour assertions stay `throws_ok` only for the RED phase: once the executor exists it
--- returns a v1-style envelope, and each assertion becomes an `is(... ->>'code', <code>)` check on the
--- envelope. In RED they fail because the function is missing, which is the contract gap under test.
-select throws_ok(
-  $$select private.cmd_dataset_alias_plan_v2_guarded('{}'::jsonb)$$,
+select is(
+  (pg_temp.v2_plan_probe('{}'::jsonb) ->> 'code'),
   'ALIAS_V2_PLAN_INVALID',
   'v2 refuses an empty plan with its stable code'
 );
--- Zero flow-property actions and a single `time` dimension are admissible: the refusal for that
--- shape must come from evidence/closure, never from a dimension or count rule.
-select throws_ok(
-  $$select private.cmd_dataset_alias_plan_v2_guarded(
+-- The single `time` dimension and zero flow-property actions of this cohort shape are never the reason for
+-- a refusal: the envelope check fails on the missing identity/evidence/action list, and the plan behaviour
+-- suite proves the well-formed version of this shape applies on real rows.
+select is(
+  (pg_temp.v2_plan_probe(
       '{"schema_version":"dataset-alias-plan.v2","counts":{"flowproperty_count":0},"dimensions":[{"dimension":"time"}]}'::jsonb
-    )$$,
-  'ALIAS_V2_DIMENSION_UNSUPPORTED',
-  'v2 admits the single-dimension, zero-flow-property cohort shape'
+    ) ->> 'code'),
+  'ALIAS_V2_PLAN_INVALID',
+  'a plan without identity, evidence and actions is refused as an invalid envelope'
 );
 
 select * from finish();

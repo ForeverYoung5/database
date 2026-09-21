@@ -121,8 +121,9 @@ alter function private.dataset_alias_v2_replace_flow_reference(jsonb, jsonb) own
 revoke all on function private.dataset_alias_v2_replace_flow_reference(jsonb, jsonb) from public;
 
 -- Exchange amount replacement: both reviewed absolute leaves move by the fixed factor, from the stored
--- literal, and every other byte survives. The original literal is part of the proof: no numeric-equivalent
--- fallback is accepted.
+-- literals, and every other byte survives. The original literals are part of the proof: no
+-- numeric-equivalent fallback is accepted, and the four claimed amounts (mean and resulting, before and
+-- after) must each be the stored literal or its exact product.
 create or replace function private.dataset_alias_v2_replace_exchange_amounts(p_before jsonb, p_exchange jsonb)
 returns jsonb
 language plpgsql
@@ -132,7 +133,8 @@ declare
   v_index integer := coalesce((p_exchange->>'index')::integer, -1);
   v_exchanges jsonb := p_before #> '{processDataSet,exchanges,exchange}';
   v_entry jsonb;
-  v_after text;
+  v_after_mean text;
+  v_after_resulting text;
 begin
   if v_index < 0 or jsonb_typeof(v_exchanges) <> 'array' or v_index >= jsonb_array_length(v_exchanges) then
     return null;
@@ -146,16 +148,21 @@ begin
     or coalesce(v_entry->'referenceToFlowDataSet'->>'@version', '') <> coalesce(p_exchange->>'flow_version', '')
     or coalesce(v_entry->>'exchangeDirection', '') <> coalesce(p_exchange->>'direction', '')
     or v_entry->>'meanAmount' is distinct from p_exchange->>'before_amount'
-    or v_entry->>'resultingAmount' is distinct from p_exchange->>'before_amount' then
+    or v_entry->>'resultingAmount' is distinct from coalesce(p_exchange->>'before_resulting_amount', p_exchange->>'before_amount') then
     return null;
   end if;
-  v_after := private.dataset_alias_v2_multiply_amount(p_exchange->>'before_amount', private.dataset_alias_v2_factor()::text);
-  if v_after is null or v_after is distinct from p_exchange->>'after_amount' then
+  v_after_mean := private.dataset_alias_v2_multiply_amount(p_exchange->>'before_amount', private.dataset_alias_v2_factor()::text);
+  v_after_resulting := private.dataset_alias_v2_multiply_amount(
+    coalesce(p_exchange->>'before_resulting_amount', p_exchange->>'before_amount'),
+    private.dataset_alias_v2_factor()::text);
+  if v_after_mean is null or v_after_mean is distinct from p_exchange->>'after_amount'
+    or v_after_resulting is null
+    or v_after_resulting is distinct from coalesce(p_exchange->>'after_resulting_amount', p_exchange->>'after_amount') then
     return null;
   end if;
   return jsonb_set(
-    jsonb_set(p_before, array['processDataSet', 'exchanges', 'exchange', v_index::text, 'meanAmount'], to_jsonb(v_after), false),
-    array['processDataSet', 'exchanges', 'exchange', v_index::text, 'resultingAmount'], to_jsonb(v_after), false);
+    jsonb_set(p_before, array['processDataSet', 'exchanges', 'exchange', v_index::text, 'meanAmount'], to_jsonb(v_after_mean), false),
+    array['processDataSet', 'exchanges', 'exchange', v_index::text, 'resultingAmount'], to_jsonb(v_after_resulting), false);
 end
 $$;
 
@@ -244,18 +251,22 @@ declare
   v_actor uuid := auth.uid();
   v_schema_version constant text := 'dataset-alias-batch.v2';
   v_command constant text := 'cmd_dataset_alias_batch_v2_guarded';
+  v_text_path constant text := 'processDataSet.processInformation.quantitativeReference.functionalUnitOrOther.#text';
   v_batch_id text;
-  v_operation_id text;
   v_plan_sha256 text;
   v_factor text;
   v_actions jsonb;
+  v_text_actions jsonb;
   v_action_count integer;
   v_action jsonb;
   v_reference jsonb;
   v_alias_fp_id text;
   v_alias_fp_version text;
+  v_alias_fp_source_ug_id text;
+  v_alias_fp_source_ug_version text;
   v_target_fp jsonb;
   v_target_ug jsonb;
+  v_source_ug jsonb;
   v_prepared jsonb := '[]'::jsonb;
   v_derived jsonb;
   v_entry jsonb;
@@ -263,10 +274,13 @@ declare
   v_batch_flows jsonb;
   v_live_occurrences jsonb;
   v_batch_occurrences jsonb;
+  v_claim_text_actions jsonb;
+  v_moved_text_actions jsonb;
   v_occurrence_count integer;
+  v_amount_field_count integer;
   v_selected_exchanges integer := 0;
   v_unrelated integer;
-  v_fu_count integer := 0;
+  v_text_count integer := 0;
   v_fresh_count integer := 0;
   v_replayed_count integer := 0;
   v_prior_summary jsonb;
@@ -284,8 +298,8 @@ begin
     if exists (
       select 1 from jsonb_object_keys(p_batch) as key(name)
       where key.name <> all (array[
-        'schema_version', 'batch_id', 'operation_id', 'plan_sha256', 'dimension', 'factor',
-        'target_visibility', 'target_snapshots', 'source_evidence', 'counts', 'actions'
+        'schema_version', 'batch_id', 'plan_sha256', 'dimension', 'factor', 'target_visibility',
+        'target_snapshots', 'source_evidence', 'counts', 'text_actions', 'actions'
       ])
     ) then
       perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400, 'Unknown batch keys are refused');
@@ -296,61 +310,72 @@ begin
       or p_batch->>'factor' is distinct from private.dataset_alias_v2_factor()::text
       or (p_batch->>'plan_sha256') !~ '^[a-f0-9]{64}$'
       or nullif(btrim(p_batch->>'batch_id'), '') is null
-      or nullif(btrim(p_batch->>'operation_id'), '') is null
       or jsonb_typeof(p_batch->'actions') is distinct from 'array'
+      or jsonb_typeof(p_batch->'text_actions') is distinct from 'array'
       or jsonb_typeof(p_batch->'counts') is distinct from 'object'
       or jsonb_typeof(p_batch->'target_snapshots') is distinct from 'object'
       or jsonb_typeof(p_batch->'source_evidence') is distinct from 'object' then
       perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
-        'Batch envelope, dimension, factor, plan identity, counts, snapshots or action list is invalid');
+        'Batch envelope, dimension, factor, plan identity, counts, text actions, snapshots or action list is invalid');
     end if;
     v_batch_id := btrim(p_batch->>'batch_id');
-    v_operation_id := btrim(p_batch->>'operation_id');
     v_plan_sha256 := p_batch->>'plan_sha256';
     v_factor := p_batch->>'factor';
     v_actions := p_batch->'actions';
+    v_text_actions := p_batch->'text_actions';
     v_action_count := jsonb_array_length(v_actions);
-    if v_action_count < 1 or v_action_count > 4096 then
-      perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400, 'A v2 batch carries between one and 4096 actions');
+    if v_action_count < 1 or v_action_count > 4096 or jsonb_array_length(v_text_actions) > 4096 then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400, 'A v2 batch carries between one and 4096 actions and at most 4096 text actions');
     end if;
 
     -- Counts, snapshot and evidence blocks carry exactly the reviewed keys with checked shapes; nothing is
-    -- echoed unread and nothing defaults when a value is missing or malformed.
+    -- echoed unread and nothing defaults when a value is missing or malformed. `amount_field_count` is the
+    -- reviewed two-amount-fields-per-bound-exchange derivation.
     if exists (
       select 1 from jsonb_object_keys(p_batch->'counts') as key(name)
       where key.name <> all (array['action_count', 'flow_count', 'process_count', 'exchange_count',
-        'unrelated_exchange_count', 'flowproperty_count'])
-    ) or (select count(*) from jsonb_object_keys(p_batch->'counts')) <> 6
+        'amount_field_count', 'unrelated_exchange_count', 'flowproperty_count'])
+    ) or (select count(*) from jsonb_object_keys(p_batch->'counts')) <> 7
       or (p_batch #>> '{counts,action_count}') !~ '^[0-9]+$'
       or (p_batch #>> '{counts,flow_count}') !~ '^[0-9]+$'
       or (p_batch #>> '{counts,process_count}') !~ '^[0-9]+$'
       or (p_batch #>> '{counts,exchange_count}') !~ '^[0-9]+$'
+      or (p_batch #>> '{counts,amount_field_count}') !~ '^[0-9]+$'
       or (p_batch #>> '{counts,unrelated_exchange_count}') !~ '^[0-9]+$'
       or (p_batch #>> '{counts,flowproperty_count}') !~ '^[0-9]+$' then
       perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
-        'The counts block must carry exactly the six reviewed numeric keys');
+        'The counts block must carry exactly the seven reviewed numeric keys');
     end if;
     if exists (
       select 1 from jsonb_object_keys(p_batch->'target_snapshots') as key(name)
-      where key.name <> all (array['flowproperty', 'unitgroup', 'reference'])
+      where key.name <> all (array['flowproperty', 'unitgroup'])
     )
       or jsonb_typeof(p_batch->'target_snapshots'->'flowproperty') is distinct from 'object'
       or jsonb_typeof(p_batch->'target_snapshots'->'unitgroup') is distinct from 'object'
-      or jsonb_typeof(p_batch->'target_snapshots'->'reference') is distinct from 'object'
       or (p_batch #>> '{target_snapshots,flowproperty,id}') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
       or (p_batch #>> '{target_snapshots,unitgroup,id}') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
       or (p_batch #>> '{target_snapshots,flowproperty,version}') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
-      or (p_batch #>> '{target_snapshots,unitgroup,version}') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$' then
+      or (p_batch #>> '{target_snapshots,unitgroup,version}') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+      or (p_batch #>> '{target_snapshots,flowproperty,sha256}') !~ '^[a-f0-9]{64}$'
+      or (p_batch #>> '{target_snapshots,unitgroup,sha256}') !~ '^[a-f0-9]{64}$' then
       perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
-        'The target snapshot block must carry exactly the target flow property, unit group and canonical reference');
+        'The target snapshot block must carry exactly the target flow property and unit group with their digests');
     end if;
     if exists (
       select 1 from jsonb_object_keys(p_batch->'source_evidence') as key(name)
-      where key.name <> all (array['sha256', 'exchange_count'])
+      where key.name <> all (array['sha256', 'exchange_count', 'source_unitgroup'])
     ) or (p_batch #>> '{source_evidence,sha256}') !~ '^[a-f0-9]{64}$'
-      or (p_batch #>> '{source_evidence,exchange_count}') !~ '^[0-9]+$' then
+      or (p_batch #>> '{source_evidence,exchange_count}') !~ '^[0-9]+$'
+      or jsonb_typeof(p_batch->'source_evidence'->'source_unitgroup') is distinct from 'object'
+      or exists (
+        select 1 from jsonb_object_keys(p_batch->'source_evidence'->'source_unitgroup') as key(name)
+        where key.name <> all (array['id', 'version', 'sha256'])
+      )
+      or (p_batch #>> '{source_evidence,source_unitgroup,id}') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      or (p_batch #>> '{source_evidence,source_unitgroup,version}') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+      or (p_batch #>> '{source_evidence,source_unitgroup,sha256}') !~ '^[a-f0-9]{64}$' then
       perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
-        'The source evidence block must carry exactly the reviewed 64-hex digest and the bound exchange count');
+        'The source evidence block must carry exactly the reviewed digest, exchange count and source unit group snapshot');
     end if;
 
     -- Locks: unit groups inside the boundary so no concurrent factor or snapshot change can race.
@@ -366,14 +391,19 @@ begin
     from public.unitgroups
     where id = (p_batch #>> '{target_snapshots,unitgroup,id}')::uuid
       and version = p_batch #>> '{target_snapshots,unitgroup,version}';
-    if v_target_fp is null or v_target_ug is null then
-      perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409, 'The declared target flow property or unit group does not exist');
+    select json_ordered::jsonb into v_source_ug
+    from public.unitgroups
+    where id = (p_batch #>> '{source_evidence,source_unitgroup,id}')::uuid
+      and version = p_batch #>> '{source_evidence,source_unitgroup,version}';
+    if v_target_fp is null or v_target_ug is null or v_source_ug is null then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409, 'The declared target flow property, target unit group or source unit group does not exist');
     end if;
     if private.dataset_alias_v2_payload_sha256(v_target_fp) is distinct from p_batch #>> '{target_snapshots,flowproperty,sha256}'
-      or private.dataset_alias_v2_payload_sha256(v_target_ug) is distinct from p_batch #>> '{target_snapshots,unitgroup,sha256}' then
-      perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409, 'Target snapshot content does not match the declared binding');
+      or private.dataset_alias_v2_payload_sha256(v_target_ug) is distinct from p_batch #>> '{target_snapshots,unitgroup,sha256}'
+      or private.dataset_alias_v2_payload_sha256(v_source_ug) is distinct from p_batch #>> '{source_evidence,source_unitgroup,sha256}' then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409, 'Snapshot content does not match the declared binding');
     end if;
-    -- The target flow property must reference exactly this unit group, and the unit group must carry the
+    -- The target flow property must reference exactly this target unit group, and that unit group must carry the
     -- reviewed factor for its hour unit plus an unmodified year base.
     if v_target_fp #>> '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@refObjectId}'
         is distinct from p_batch #>> '{target_snapshots,unitgroup,id}'
@@ -392,8 +422,8 @@ begin
     end if;
 
     -- The claimed flow and occurrence sets are aggregated before the structural scan, so every exchange
-    -- instance and functional-unit source can be bound to a claimed alias flow inside the same pass. The
-    -- shapes are pre-guarded so a malformed action cannot raise here; the scan below refuses it properly.
+    -- instance and text action can be bound to a claimed flow or process inside the same pass. The shapes
+    -- are pre-guarded so a malformed action cannot raise here; the scan below refuses it properly.
     select coalesce(jsonb_agg(jsonb_build_object('id', (a->>'id')::uuid, 'version', a->>'version') order by (a->>'id')::uuid, a->>'version'), '[]'::jsonb)
       into v_batch_flows
     from jsonb_array_elements(v_actions) as a
@@ -407,31 +437,48 @@ begin
       and (a->>'id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
       and (e->>'index') ~ '^[0-9]+$';
 
-    -- Structural scan: identity, closed keys and the alias property identified from the frozen before
-    -- payloads; every action must agree. The functional-unit mutation is bound here to this process's own
-    -- reference-flow exchange and to the claimed alias exchanges — a free-floating text edit is refused.
+    -- Structural scan: identity, closed keys, claimed canonical digests, the alias property identified from
+    -- the frozen before payloads, the per-table mutation contracts, and the set of processes whose
+    -- functional-unit leaf the batch claims to move.
     for v_action in select * from jsonb_array_elements(v_actions) loop
       if jsonb_typeof(v_action) <> 'object' then
         perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400, 'Every action must be one JSON object');
       end if;
+      if v_action->>'table' not in ('flows', 'processes') then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400, 'Every action must name the flows or processes table');
+      end if;
       if exists (
         select 1 from jsonb_object_keys(v_action) as key(name)
-        where key.name <> all (array[
-          'action_id', 'table', 'id', 'version', 'expected_state_code', 'expected_modified_at',
-          'expected_json_ordered', 'desired_json_ordered', 'mutation'
-        ])
+        where key.name <> all (
+          case when v_action->>'table' = 'flows'
+            then array['action_id', 'table', 'id', 'version', 'expected_state_code', 'expected_modified_at',
+              'expected_json_ordered', 'desired_json_ordered', 'before_sha256', 'desired_sha256',
+              'source_flowproperty', 'mutation']
+            else array['action_id', 'table', 'id', 'version', 'expected_state_code', 'expected_modified_at',
+              'expected_json_ordered', 'desired_json_ordered', 'before_sha256', 'desired_sha256',
+              'quantitative_reference', 'mutation']
+          end)
       ) or v_action->'desired_json_ordered' is null then
         perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400, 'Unknown action keys, or a missing desired claim');
       end if;
-      if v_action->>'table' not in ('flows', 'processes')
-        or (v_action->>'id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      if (v_action->>'id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
         or (v_action->>'version') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
         or (v_action->>'expected_state_code')::integer is distinct from 0
         or jsonb_typeof(v_action->'expected_json_ordered') is distinct from 'object'
         or jsonb_typeof(v_action->'mutation') is distinct from 'object'
-        or (v_action->>'expected_modified_at') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T' then
+        or coalesce(v_action->>'expected_modified_at', '1970-01-01T00:00:00Z') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'
+        or (v_action->>'before_sha256') !~ '^[a-f0-9]{64}$'
+        or (v_action->>'desired_sha256') !~ '^[a-f0-9]{64}$' then
         perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
-          'Action identity, table, state, before payload, mutation or timestamp is invalid',
+          'Action identity, table, state, before payload, claimed digests, mutation or timestamp is invalid',
+          jsonb_build_object('action_id', v_action->>'action_id'));
+      end if;
+      -- The claimed digests must be the server's own canonical digests of the claimed payloads: hash parity
+      -- with the producer is checked, never assumed.
+      if private.dataset_alias_v2_payload_sha256(v_action->'expected_json_ordered') is distinct from v_action->>'before_sha256'
+        or private.dataset_alias_v2_payload_sha256(v_action->'desired_json_ordered') is distinct from v_action->>'desired_sha256' then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_DERIVE_MISMATCH', 409,
+          'A claimed before or desired digest is not the canonical digest of the claimed payload',
           jsonb_build_object('action_id', v_action->>'action_id'));
       end if;
       if v_action->>'table' = 'flows' then
@@ -445,11 +492,31 @@ begin
         end if;
         if exists (
           select 1 from jsonb_object_keys(v_action->'mutation') as key(name)
-          where key.name <> all (array['reference_id', 'reference_version'])
-        ) or coalesce(v_action->'mutation'->>'reference_id', '') = ''
-          or coalesce(v_action->'mutation'->>'reference_version', '') = '' then
+          where key.name <> all (array['reference'])
+        ) or jsonb_typeof(v_action->'mutation'->'reference') is distinct from 'object'
+          or exists (
+            select 1 from jsonb_object_keys(v_action->'mutation'->'reference') as key(name)
+            where key.name <> all (array['@refObjectId', '@type', '@uri', '@version', 'common:shortDescription'])
+          )
+          or (v_action #>> '{mutation,reference,@refObjectId}') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          or coalesce(v_action #>> '{mutation,reference,@type}', '') = ''
+          or coalesce(v_action #>> '{mutation,reference,@uri}', '') = ''
+          or (v_action #>> '{mutation,reference,@version}') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+          or jsonb_typeof(v_action->'mutation'->'reference'->'common:shortDescription') is distinct from 'object'
+          or coalesce(v_action #>> '{mutation,reference,common:shortDescription,#text}', '') = '' then
           perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
-            'A flow action names exactly the derived target reference id and version',
+            'A flow action carries exactly the deployed five-key target reference as its mutation',
+            jsonb_build_object('action_id', v_action->>'action_id'));
+        end if;
+        -- The claimed source flow property must be the one the frozen before payload references.
+        if coalesce(v_action->'source_flowproperty'->>'id', '') = ''
+          or coalesce(v_action->'source_flowproperty'->>'version', '') = ''
+          or (v_action #>> '{source_flowproperty,id}') is distinct from
+             (v_action->'expected_json_ordered' #>> '{flowDataSet,flowProperties,flowProperty,referenceToFlowPropertyDataSet,@refObjectId}')
+          or (v_action #>> '{source_flowproperty,version}') is distinct from
+             (v_action->'expected_json_ordered' #>> '{flowDataSet,flowProperties,flowProperty,referenceToFlowPropertyDataSet,@version}') then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_DERIVE_MISMATCH', 409,
+            'A flow action does not name the flow property its frozen before payload references',
             jsonb_build_object('action_id', v_action->>'action_id'));
         end if;
         v_alias_fp_id := coalesce(v_alias_fp_id, v_action->'expected_json_ordered' #>> '{flowDataSet,flowProperties,flowProperty,referenceToFlowPropertyDataSet,@refObjectId}');
@@ -461,100 +528,151 @@ begin
       else
         if exists (
           select 1 from jsonb_object_keys(v_action->'mutation') as key(name)
-          where key.name <> all (array['exchanges', 'functional_unit'])
+          where key.name <> all (array['exchanges'])
         ) or jsonb_typeof(v_action->'mutation'->'exchanges') is distinct from 'array'
-          or jsonb_array_length(v_action->'mutation'->'exchanges') < 1 then
+          or jsonb_array_length(v_action->'mutation'->'exchanges') < 1
+          or (v_action #>> '{quantitative_reference}') is distinct from
+             (v_action->'expected_json_ordered' #>> '{processDataSet,processInformation,quantitativeReference,referenceToReferenceFlow}')
+          or coalesce(v_action->>'quantitative_reference', '') = '' then
           perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
-            'A process action carries its bound exchange instances and nothing else',
+            'A process action carries its bound exchange instances, its quantitative reference and nothing else',
             jsonb_build_object('action_id', v_action->>'action_id'));
         end if;
         for v_entry in select * from jsonb_array_elements(v_action->'mutation'->'exchanges') loop
           if jsonb_typeof(v_entry) <> 'object'
             or exists (
               select 1 from jsonb_object_keys(v_entry) as key(name)
-              where key.name <> all (array['index', 'internal_id', 'source_exchange_number', 'flow_id',
-                'flow_version', 'direction', 'before_amount', 'after_amount'])
+              where key.name <> all (array['index', 'internal_id', 'flow_id', 'flow_version', 'direction',
+                'before_amount', 'after_amount', 'before_resulting_amount', 'after_resulting_amount'])
             )
             or coalesce(v_entry->>'index', '') !~ '^[0-9]+$'
             or coalesce(v_entry->>'internal_id', '') = ''
-            or coalesce(v_entry->>'source_exchange_number', '') !~ '^[0-9]{1,18}$'
             or coalesce(v_entry->>'flow_id', '') = ''
             or coalesce(v_entry->>'flow_version', '') = ''
             or coalesce(v_entry->>'direction', '') = ''
             or v_entry->>'before_amount' is null
             or v_entry->>'after_amount' is null
+            or v_entry->>'before_resulting_amount' is null
+            or v_entry->>'after_resulting_amount' is null
             or not exists (
               select 1 from jsonb_array_elements(v_batch_flows) as claimed
               where claimed->>'id' = v_entry->>'flow_id' and claimed->>'version' = v_entry->>'flow_version'
             ) then
             perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
-              'Every exchange instance must carry exactly the reviewed keys — including the original EcoSpold source exchange number, which is a different namespace from the TIDAS internal id — and name a claimed alias flow',
+              'Every exchange instance must carry exactly the reviewed keys and name a claimed alias flow',
               jsonb_build_object('action_id', v_action->>'action_id'));
           end if;
         end loop;
-        if v_action->'mutation' ? 'functional_unit' then
-          declare
-            v_fu jsonb := v_action->'mutation'->'functional_unit';
-            v_fu_source text := v_fu->>'source_exchange_number';
-            v_fu_quantity text;
-            v_reference_internal text := v_action->'expected_json_ordered' #>> '{processDataSet,processInformation,quantitativeReference,referenceToReferenceFlow}';
-            v_reference_entry jsonb;
-            v_stored_comment text;
-          begin
-            if jsonb_typeof(v_fu) <> 'object'
-              or exists (
-                select 1 from jsonb_object_keys(v_fu) as key(name)
-                where key.name <> all (array['path', 'before_text', 'after_text', 'source_exchange_number'])
-              )
-              or coalesce(v_fu_source, '') !~ '^[0-9]{1,18}$'
-              or coalesce(v_reference_internal, '') = '' then
-              perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_RULE_VIOLATION', 400,
-                'The functional-unit block carries exactly the reviewed keys: path, before and after text and the original source exchange number',
-                jsonb_build_object('action_id', v_action->>'action_id'));
-            end if;
-            -- Step 1: the process reference exchange is bound by its TIDAS internal id — the frozen internal
-            -- pointer — never by the original EcoSpold number, which is a different namespace.
-            select entry into v_reference_entry
-            from jsonb_array_elements(v_action->'mutation'->'exchanges') as entry
-            where entry->>'internal_id' = v_reference_internal;
-            if v_reference_entry is null then
-              perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_RULE_VIOLATION', 400,
-                'The functional-unit process reference exchange (TIDAS internal id) is not among the bound alias exchanges',
-                jsonb_build_object('action_id', v_action->>'action_id'));
-            end if;
-            -- Step 2: the original source number binds the functional unit to that exchange's reviewed
-            -- source tuple.
-            if (v_reference_entry->>'source_exchange_number') is distinct from v_fu_source then
-              perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_RULE_VIOLATION', 400,
-                'The functional-unit source exchange number is not the reference exchange''s reviewed source number',
-                jsonb_build_object('action_id', v_action->>'action_id'));
-            end if;
-            -- Step 3: the reviewed leading quantity must be that exchange's own source quantity, so a
-            -- functional unit can never be moved over a physically different amount.
-            v_fu_quantity := substring(v_fu->>'before_text' from '^[0-9.]+');
-            if v_fu_quantity is null
-              or not private.dataset_alias_v2_amount_grammar_ok(v_fu_quantity)
-              or not private.dataset_alias_v2_amount_grammar_ok(v_reference_entry->>'before_amount')
-              or (v_fu_quantity)::numeric is distinct from (v_reference_entry->>'before_amount')::numeric then
-              perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_RULE_VIOLATION', 400,
-                'The functional-unit quantity is not the reference exchange''s reviewed source quantity',
-                jsonb_build_object('action_id', v_action->>'action_id'));
-            end if;
-            -- Step 4: when the stored reference exchange carries the reviewed source comment, it must name
-            -- the same source tuple; a claim contradicting the stored source row fails closed.
-            select stored_exchange.value->>'generalComment' into v_stored_comment
-            from jsonb_array_elements(coalesce(v_action->'expected_json_ordered' #> '{processDataSet,exchanges,exchange}', '[]'::jsonb)) as stored_exchange
-            where stored_exchange.value->>'@dataSetInternalID' = v_reference_internal;
-            if v_stored_comment is not null
-              and v_stored_comment !~ ('(^|[^0-9])' || v_fu_source || '([^0-9]|$)') then
-              perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
-                'The reviewed source comment of the reference exchange does not carry the declared source exchange number',
-                jsonb_build_object('action_id', v_action->>'action_id'));
-            end if;
-          end;
+        if (select count(distinct entry->>'internal_id')
+              from jsonb_array_elements(v_action->'mutation'->'exchanges') as entry)
+           <> jsonb_array_length(v_action->'mutation'->'exchanges') then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
+            'Exchange instances within one action carry distinct internal ids',
+            jsonb_build_object('action_id', v_action->>'action_id'));
         end if;
       end if;
     end loop;
+
+    -- The text-action block is the authority for functional-unit moves and must agree, entry by entry, with
+    -- the claimed payloads: the frozen before leaf, the anchored-rule after leaf, the process's own
+    -- reference-flow exchange bound by its TIDAS internal id, that exchange's reviewed source quantity, and
+    -- the reviewed source number carried by the stored source comment when the row records one. The block's
+    -- process set must be exactly the set of claimed processes whose functional-unit leaf moves.
+    select coalesce(jsonb_agg(jsonb_build_object('id', (t->>'id')::uuid, 'version', t->>'version') order by (t->>'id')::uuid, t->>'version'), '[]'::jsonb)
+      into v_claim_text_actions
+    from jsonb_array_elements(v_text_actions) as t
+    where (t->>'table') = 'processes'
+      and (t->>'id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
+    select coalesce(jsonb_agg(jsonb_build_object('id', (a->>'id')::uuid, 'version', a->>'version') order by (a->>'id')::uuid, a->>'version'), '[]'::jsonb)
+      into v_moved_text_actions
+    from jsonb_array_elements(v_actions) as a
+    where a->>'table' = 'processes'
+      and (a->>'id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      and (a->'expected_json_ordered' #>> '{processDataSet,processInformation,quantitativeReference,functionalUnitOrOther,#text}')
+          is distinct from
+          (a->'desired_json_ordered' #>> '{processDataSet,processInformation,quantitativeReference,functionalUnitOrOther,#text}');
+    for v_entry in select * from jsonb_array_elements(v_text_actions) loop
+      declare
+        v_text_before text := v_entry->>'before_text';
+        v_text_after text := v_entry->>'after_text';
+        v_text_source text := v_entry->>'source_exchange_number';
+        v_action_match jsonb;
+        v_reference_internal text;
+        v_reference_entry jsonb;
+        v_stored_comment text;
+        v_quantity text;
+      begin
+        if jsonb_typeof(v_entry) <> 'object'
+          or exists (
+            select 1 from jsonb_object_keys(v_entry) as key(name)
+            where key.name <> all (array['table', 'id', 'version', 'before_text', 'after_text', 'source_exchange_number'])
+          )
+          or (v_entry->>'table') is distinct from 'processes'
+          or coalesce(v_entry->>'id', '') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          or coalesce(v_entry->>'version', '') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+          or v_text_before is null
+          or v_text_after is null
+          or coalesce(v_text_source, '') !~ '^[0-9]{1,18}$' then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_RULE_VIOLATION', 400,
+            'Every text action carries exactly the reviewed keys, a process identity and the original source exchange number');
+        end if;
+        select a into v_action_match
+        from jsonb_array_elements(v_actions) as a
+        where a->>'table' = 'processes' and a->>'id' = v_entry->>'id' and a->>'version' = v_entry->>'version';
+        if v_action_match is null then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_RULE_VIOLATION', 400,
+            'A text action names a process the batch does not claim',
+            jsonb_build_object('action_id', v_entry->>'id'));
+        end if;
+        if (v_action_match->'expected_json_ordered' #>> '{processDataSet,processInformation,quantitativeReference,functionalUnitOrOther,#text}') is distinct from v_text_before
+          or (v_action_match->'desired_json_ordered' #>> '{processDataSet,processInformation,quantitativeReference,functionalUnitOrOther,#text}') is distinct from v_text_after
+          or private.dataset_alias_v2_fu_apply_rule(v_text_before) is distinct from v_text_after then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_BLOCK_MISMATCH', 409,
+            'A text action does not agree byte-for-byte with the claimed before and desired functional-unit leaves under the anchored rule',
+            jsonb_build_object('action_id', v_entry->>'id'));
+        end if;
+        -- Step 1: the process reference exchange is bound by its TIDAS internal id — the frozen internal
+        -- pointer — never by the original EcoSpold number, which is a different namespace.
+        v_reference_internal := v_action_match->'expected_json_ordered' #>> '{processDataSet,processInformation,quantitativeReference,referenceToReferenceFlow}';
+        select entry into v_reference_entry
+        from jsonb_array_elements(v_action_match->'mutation'->'exchanges') as entry
+        where entry->>'internal_id' = v_reference_internal;
+        if v_reference_entry is null or coalesce(v_reference_internal, '') = '' then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_RULE_VIOLATION', 400,
+            'The functional-unit process reference exchange (TIDAS internal id) is not among the bound alias exchanges',
+            jsonb_build_object('action_id', v_entry->>'id'));
+        end if;
+        -- Step 2: the reviewed leading quantity must be that exchange's own source quantity, so a functional
+        -- unit can never be moved over a physically different amount.
+        v_quantity := substring(v_text_before from '^[0-9.]+');
+        if v_quantity is null
+          or not private.dataset_alias_v2_amount_grammar_ok(v_quantity)
+          or not private.dataset_alias_v2_amount_grammar_ok(v_reference_entry->>'before_amount')
+          or (v_quantity)::numeric is distinct from (v_reference_entry->>'before_amount')::numeric then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_RULE_VIOLATION', 400,
+            'The functional-unit quantity is not the reference exchange''s reviewed source quantity',
+            jsonb_build_object('action_id', v_entry->>'id'));
+        end if;
+        -- Step 3: when the stored reference exchange carries the reviewed source comment, it must name the
+        -- declared source tuple; a text action contradicting the stored source row fails closed.
+        select stored_exchange.value->>'generalComment' into v_stored_comment
+        from jsonb_array_elements(coalesce(v_action_match->'expected_json_ordered' #> '{processDataSet,exchanges,exchange}', '[]'::jsonb)) as stored_exchange
+        where stored_exchange.value->>'@dataSetInternalID' = v_reference_internal;
+        if v_stored_comment is not null
+          and v_stored_comment !~ ('(^|[^0-9])' || v_text_source || '([^0-9]|$)') then
+          perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
+            'The reviewed source comment of the reference exchange does not carry the declared source exchange number',
+            jsonb_build_object('action_id', v_entry->>'id'));
+        end if;
+      end;
+    end loop;
+    if v_claim_text_actions is distinct from v_moved_text_actions then
+      perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_BLOCK_MISMATCH', 409,
+        'The text-action block must name exactly the claimed processes whose functional-unit leaf moves',
+        jsonb_build_object('text_actions', v_claim_text_actions, 'moved', v_moved_text_actions));
+    end if;
+    v_text_count := jsonb_array_length(v_claim_text_actions);
+
     if (select count(*) from jsonb_array_elements(v_actions) as a where a->>'table' = 'flows')
         <> (select count(distinct (a->>'id') || '|' || (a->>'version')) from jsonb_array_elements(v_actions) as a where a->>'table' = 'flows')
       or (select count(*) from jsonb_array_elements(v_actions) as a where a->>'table' = 'processes')
@@ -565,12 +683,36 @@ begin
       perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400, 'A v2 batch needs at least one flow action to identify the alias property');
     end if;
 
+    -- The alias flow property must reference the declared source unit group; together with the target
+    -- pointer and the two flow-property names this is the whole support evidence the plan binds.
+    declare
+      v_alias_fp_row jsonb;
+      v_alias_fp_name jsonb;
+    begin
+      select json_ordered::jsonb into v_alias_fp_row
+      from public.flowproperties
+      where id = v_alias_fp_id::uuid and version = v_alias_fp_version;
+      if v_alias_fp_row is null then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409, 'The alias flow property named by the frozen before payloads does not exist');
+      end if;
+      if v_alias_fp_row #>> '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@refObjectId}'
+          is distinct from p_batch #>> '{source_evidence,source_unitgroup,id}'
+        or v_alias_fp_row #>> '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@version}'
+          is distinct from p_batch #>> '{source_evidence,source_unitgroup,version}' then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
+          'The alias flow property does not reference the declared source unit group');
+      end if;
+      v_alias_fp_source_ug_id := p_batch #>> '{source_evidence,source_unitgroup,id}';
+      v_alias_fp_source_ug_version := p_batch #>> '{source_evidence,source_unitgroup,version}';
+    end;
+
     -- The derived reference is the deployed five-key shape (root-verified against the live BAFU Time flow
     -- property snapshot): @refObjectId/@type/@uri/@version plus one language-tagged common:shortDescription
     -- object projected from the locked target row's own
     -- flowPropertyDataSet.flowPropertiesInformation.dataSetInformation["common:name"] — never from a
     -- Process-shaped name path and never invented. @type and the @uri convention come from the frozen
-    -- before reference with the target id/version substituted; the claimed reference must equal them.
+    -- before reference with the target id/version substituted; every flow action's claimed reference must
+    -- equal it exactly.
     declare
       v_before_reference jsonb := (
         select a->'expected_json_ordered' #> '{flowDataSet,flowProperties,flowProperty,referenceToFlowPropertyDataSet}'
@@ -608,9 +750,12 @@ begin
         perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
           'The derived reference needs the reviewed type and the .json uri convention from the frozen before reference');
       end if;
-      if p_batch->'target_snapshots'->'reference' is distinct from v_reference then
+      if exists (
+        select 1 from jsonb_array_elements(v_actions) as a
+        where a->>'table' = 'flows' and a->'mutation'->'reference' is distinct from v_reference
+      ) then
         perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
-          'The declared target reference is not the canonical reference derived from the locked target row',
+          'A flow action''s declared target reference is not the canonical reference derived from the locked target row',
           jsonb_build_object('derived_reference', v_reference));
       end if;
     end;
@@ -627,18 +772,14 @@ begin
         v_row_state integer;
         v_row_modified timestamptz;
         v_row_payload jsonb;
+        v_text_claim jsonb;
       begin
         execute format('select state_code, modified_at, json_ordered::jsonb from public.%I where id = $1 and version = $2', v_table)
           into v_row_state, v_row_modified, v_row_payload using (v_action->>'id')::uuid, v_action->>'version';
-        if v_row_state is not distinct from 0 and v_row_modified is not distinct from (v_action->>'expected_modified_at')::timestamptz
-          and v_row_payload is not distinct from v_before then
+        if v_row_state is not distinct from 0 and v_row_payload is not distinct from v_before
+          and (not (v_action ? 'expected_modified_at')
+               or v_row_modified is not distinct from (v_action->>'expected_modified_at')::timestamptz) then
           if v_table = 'flows' then
-            if (v_action #>> '{mutation,reference_id}') is distinct from v_reference->>'@refObjectId'
-              or (v_action #>> '{mutation,reference_version}') is distinct from v_reference->>'@version' then
-              perform private.dataset_alias_v2_deny('ALIAS_V2_DERIVE_MISMATCH', 409,
-                'A flow mutation does not name the derived target reference',
-                jsonb_build_object('action_id', v_action->>'action_id'));
-            end if;
             v_derived := private.dataset_alias_v2_replace_flow_reference(v_before, v_reference);
           else
             v_derived := v_before;
@@ -649,14 +790,19 @@ begin
                   'An exchange instance does not bind the stored row', jsonb_build_object('action_id', v_action->>'action_id'));
               end if;
             end loop;
-            if v_action->'mutation' ? 'functional_unit' then
-              v_derived := private.dataset_alias_v2_replace_fu_text(v_derived, v_action->'mutation'->'functional_unit');
+            select t into v_text_claim
+            from jsonb_array_elements(v_text_actions) as t
+            where t->>'id' = v_action->>'id' and t->>'version' = v_action->>'version';
+            if v_text_claim is not null then
+              v_derived := private.dataset_alias_v2_replace_fu_text(v_derived, jsonb_build_object(
+                'path', v_text_path,
+                'before_text', v_text_claim->>'before_text',
+                'after_text', v_text_claim->>'after_text'));
               if v_derived is null then
                 perform private.dataset_alias_v2_deny('ALIAS_V2_TEXT_RULE_VIOLATION', 400,
                   'The functional-unit text is not the reviewed leaf under the anchored rule',
                   jsonb_build_object('action_id', v_action->>'action_id'));
               end if;
-              v_fu_count := v_fu_count + 1;
             end if;
           end if;
           if v_derived is null or v_derived is not distinct from v_before then
@@ -668,7 +814,7 @@ begin
           v_fresh_count := v_fresh_count + 1;
           v_prepared := v_prepared || jsonb_build_array(jsonb_build_object(
             'action_id', v_action->>'action_id', 'table', v_table, 'id', v_action->>'id', 'version', v_action->>'version',
-            'expected_modified_at', v_action->>'expected_modified_at',
+            'expected_modified_at', v_action->'expected_modified_at', 'observed_modified_at', to_jsonb(v_row_modified),
             'before', v_before, 'desired', v_derived));
         elsif v_row_state is not distinct from 0 and v_row_payload = v_claim then
           v_replayed_count := v_replayed_count + 1;
@@ -691,16 +837,18 @@ begin
       select v_selected_exchanges + coalesce(jsonb_array_length(v_action->'expected_json_ordered' #> '{processDataSet,exchanges,exchange}'), 0) into v_selected_exchanges;
     end loop;
     v_occurrence_count := jsonb_array_length(v_batch_occurrences);
+    v_amount_field_count := v_occurrence_count * 2;
     v_unrelated := v_selected_exchanges - v_occurrence_count;
     if (p_batch #>> '{counts,action_count}')::integer is distinct from v_action_count
       or (p_batch #>> '{counts,flow_count}')::integer is distinct from jsonb_array_length(v_batch_flows)
       or (p_batch #>> '{counts,process_count}')::integer is distinct from v_action_count - jsonb_array_length(v_batch_flows)
       or (p_batch #>> '{counts,exchange_count}')::integer is distinct from v_occurrence_count
+      or (p_batch #>> '{counts,amount_field_count}')::integer is distinct from v_amount_field_count
       or (p_batch #>> '{counts,unrelated_exchange_count}')::integer is distinct from v_unrelated
       or (p_batch #>> '{counts,flowproperty_count}')::integer is distinct from 0 then
       perform private.dataset_alias_v2_deny('ALIAS_V2_COUNT_MISMATCH', 409, 'Derived live counts differ from the submitted plan counts',
         jsonb_build_object('actions', v_action_count, 'flows', jsonb_array_length(v_batch_flows),
-          'occurrences', v_occurrence_count, 'unrelated', v_unrelated));
+          'occurrences', v_occurrence_count, 'amount_fields', v_amount_field_count, 'unrelated', v_unrelated));
     end if;
     if (p_batch #>> '{source_evidence,exchange_count}')::integer is distinct from v_occurrence_count then
       perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
@@ -774,11 +922,11 @@ begin
           execute format(
             'update public.%I as t set json_ordered = $1::json, modified_at = now()
               where t.id = $2 and t.version = $3 and t.user_id = $4 and t.state_code = $5
-                and t.modified_at is not distinct from $6 and t.json_ordered::jsonb is not distinct from $7
+                and t.json_ordered::jsonb is not distinct from $6
             returning t.modified_at, t.json_ordered::jsonb', v_action->>'table')
             into v_committed_modified_at, v_committed_payload
             using v_action->'desired', (v_action->>'id')::uuid, v_action->>'version', v_actor, 0,
-              (v_action->>'expected_modified_at')::timestamptz, v_action->'before';
+              v_action->'before';
           if v_committed_modified_at is null or v_committed_payload is distinct from v_action->'desired' then
             perform private.dataset_alias_v2_deny('ALIAS_V2_ACTION_DRIFT', 409, 'The guarded update lost its precondition', jsonb_build_object('action_id', v_action->>'action_id'));
           end if;
@@ -786,9 +934,10 @@ begin
           values (v_command, v_actor, v_action->>'table', (v_action->>'id')::uuid, v_action->>'version',
             jsonb_build_object(
               'record_type', 'row', 'schema_version', v_schema_version, 'plan_sha256', v_plan_sha256,
-              'operation_id', v_operation_id, 'batch_id', v_batch_id, 'dimension', 'time', 'factor', v_factor,
+              'batch_id', v_batch_id, 'dimension', 'time', 'factor', v_factor,
               'target_visibility', 'owner_draft', 'action_id', v_action->>'action_id',
-              'expected_state_code', 0, 'expected_modified_at', v_action->>'expected_modified_at',
+              'expected_state_code', 0, 'expected_modified_at', v_action->'expected_modified_at',
+              'observed_modified_at', v_action->'observed_modified_at',
               'committed_modified_at', to_jsonb(v_committed_modified_at),
               'before_sha256', private.dataset_alias_v2_payload_sha256(v_action->'before'),
               'after_sha256', private.dataset_alias_v2_payload_sha256(v_action->'desired'),
@@ -800,21 +949,23 @@ begin
         insert into private.command_audit_log (command, actor_user_id, target_table, payload)
         values (v_command, v_actor, 'flows', jsonb_build_object(
           'record_type', 'plan', 'schema_version', v_schema_version, 'plan_sha256', v_plan_sha256,
-          'operation_id', v_operation_id, 'batch_id', v_batch_id, 'dimension', 'time', 'factor', v_factor,
+          'batch_id', v_batch_id, 'dimension', 'time', 'factor', v_factor,
           'action_count', v_action_count, 'fresh_actions', v_action_count, 'replayed_actions', 0,
-          'fu_text_actions', v_fu_count,
+          'text_action_count', v_text_count,
           'source_evidence', p_batch->'source_evidence',
           'target_snapshots', p_batch->'target_snapshots',
           'counts', jsonb_build_object('action_count', v_action_count, 'flow_count', jsonb_array_length(v_batch_flows),
             'process_count', v_action_count - jsonb_array_length(v_batch_flows),
-            'exchange_count', v_occurrence_count, 'unrelated_exchange_count', v_unrelated)))
+            'exchange_count', v_occurrence_count, 'amount_field_count', v_amount_field_count,
+            'unrelated_exchange_count', v_unrelated)))
         returning id into v_summary_id;
 
         return jsonb_build_object('ok', true, 'code', 'ALIAS_V2_BATCH_APPLIED', 'status', 200,
           'idempotent_replay', false, 'plan_sha256', v_plan_sha256, 'batch_id', v_batch_id,
           'counts', jsonb_build_object('action_count', v_action_count, 'flow_count', jsonb_array_length(v_batch_flows),
             'process_count', v_action_count - jsonb_array_length(v_batch_flows),
-            'exchange_count', v_occurrence_count, 'unrelated_exchange_count', v_unrelated, 'fu_text_actions', v_fu_count),
+            'exchange_count', v_occurrence_count, 'amount_field_count', v_amount_field_count,
+            'unrelated_exchange_count', v_unrelated, 'text_action_count', v_text_count),
           'audit', jsonb_build_object('plan_summary_id', v_summary_id, 'rows', v_audit_rows));
       end;
     else
@@ -858,7 +1009,8 @@ begin
         end if;
         return jsonb_build_object('ok', true, 'code', 'ALIAS_V2_BATCH_REPLAYED', 'status', 200,
           'idempotent_replay', true, 'plan_sha256', v_plan_sha256, 'batch_id', v_batch_id,
-          'counts', v_summary_payload->'counts',
+          'counts', v_summary_payload->'counts'
+            || jsonb_build_object('text_action_count', v_summary_payload->>'text_action_count'),
           'audit', jsonb_build_object('plan_summary_id', v_proof_id, 'replayed_actions', v_action_count));
       end;
     end if;
@@ -884,4 +1036,4 @@ $$;
 alter function private.cmd_dataset_alias_batch_v2_guarded(jsonb) owner to postgres;
 revoke all on function private.cmd_dataset_alias_batch_v2_guarded(jsonb) from public;
 comment on function private.cmd_dataset_alias_batch_v2_guarded(jsonb) is
-  'Versioned guarded v2 batch executor: all-or-none validation-then-write, exact reference closure, recomputed target evidence, server-derived desired payloads, ordinary audit and exact replay. v1 untouched.';
+  'Versioned guarded v2 batch executor: all-or-none validation-then-write, exact reference closure, recomputed target and source evidence, canonical digest parity, server-derived desired payloads, ordinary audit and exact replay. v1 untouched.';
