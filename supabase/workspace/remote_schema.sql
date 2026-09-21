@@ -677,7 +677,10 @@ CREATE OR REPLACE FUNCTION "api"."cmd_dataset_alias_execution_admit_v2_guarded"(
     AS $_$
 declare
   v_actor uuid := auth.uid();
+  -- The admission REQUEST keeps its input schema name; the RESPONSE has its own proof name, because
+  -- this v2 has never shipped and carries exactly one response identity (no dual-name alias).
   v_schema_version constant text := 'dataset-alias-execution-admit.v2';
+  v_response_schema_version constant text := 'dataset-alias-execution-admit-proof.v2';
   v_request_id uuid;
   v_preflight util.dataset_alias_execution_v2_preflights%rowtype;
   v_token text;
@@ -1040,7 +1043,7 @@ begin
   return jsonb_build_object(
     'ok', true,
     'command', 'cmd_dataset_alias_execution_admit_v2_guarded',
-    'schema_version', v_schema_version,
+    'schema_version', v_response_schema_version,
     'request_id', v_request_id,
     'plan_sha256', v_preflight.plan_sha256,
     'operation_id', v_preflight.operation_id,

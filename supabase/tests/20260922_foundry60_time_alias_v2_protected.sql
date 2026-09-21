@@ -22,7 +22,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth, private;
 
-select plan(68);
+select plan(70);
 
 -- ------------------------------------------------------------------------------------------------
 -- Fixture: the CLI's own before images, seeded exactly as emitted (the generated block also clears
@@ -290,6 +290,21 @@ create temp table v2_admit as
       'execution_unused', pg_temp.gate_projection((select result from v2_gate2)),
       'derivative_quiescence', pg_temp.gate_projection((select result from v2_gate3))))) as result;
 
+select is(
+  (select result->>'schema_version' from v2_admit),
+  'dataset-alias-execution-admit-proof.v2',
+  'the admission response carries its single proof schema name'
+);
+select is(
+  (api.cmd_dataset_alias_execution_admit_v2_guarded(jsonb_build_object(
+     'schema_version', 'dataset-alias-execution-admit-proof.v2',
+     'request_id', 'fcfbc113-8d7e-575c-a7f3-ba5abfbf2265',
+     'preflight_token', repeat('a', 64),
+     'preflight_proof_sha256', repeat('a', 64),
+     'gate_results', '{}'::jsonb))->>'code'),
+  'ALIAS_EXECUTION_ADMISSION_INVALID_REQUEST',
+  'the admission request keeps its own input schema name: the response name is not accepted as input'
+);
 select is((select result->>'ok' from v2_admit), 'true', 'the sealed admission is accepted');
 select is((select result->>'status' from v2_admit), 'dispatched', 'admission queues exactly one dispatch');
 select is((select result->>'attempt_count' from v2_admit) || '/' || (select result->>'dispatch_count' from v2_admit), '1/1', 'one attempt and one dispatch are consumed');
