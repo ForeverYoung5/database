@@ -16,7 +16,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth, private;
 
-select plan(75);
+select plan(81);
 
 -- ------------------------------------------------------------------------------------------------
 -- Fixture: one target unit group (year base plus the exact hour factor), one distinct source unit group
@@ -269,7 +269,7 @@ begin
   return jsonb_build_object(
     'schema_version', 'dataset-alias-batch.v2',
     'batch_id', 'fixture-batch-1',
-    'plan_sha256', repeat('a', 64),
+    'plan_sha256', coalesce(p_extras->>'plan_sha256', repeat('a', 64)),
     'dimension', 'time',
     'factor', '0.00011415525114155251',
     'target_visibility', 'owner_draft',
@@ -790,22 +790,44 @@ returns jsonb language plpgsql stable as $$
 declare
   f record;
   b jsonb;
+  v_targets jsonb;
 begin
   select * into f from v2_fixture;
   b := pg_temp.v2_batch(coalesce(p_extras->'batch', '{}'::jsonb));
+  -- One six-key derivative target per changed action identity, with the frozen before content digest as the
+  -- derived baseline snapshot and the exact actor/owner-draft state.
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'table', a->>'table', 'id', a->>'id', 'version', a->>'version',
+      'user_id', f.actor, 'state_code', 0,
+      'baseline_snapshot_sha256', a->>'before_sha256')
+    order by a->>'id', a->>'version'), '[]'::jsonb)
+    into v_targets
+  from jsonb_array_elements(b->'actions') as a;
   return jsonb_build_object(
     'schema_version', 'dataset-alias-plan.v2',
     'actor_id', f.actor,
     'target_visibility', 'owner_draft',
     'source_evidence', b->'source_evidence',
     'target_snapshots', b->'target_snapshots',
-    'counts', b->'counts',
+    'expected', jsonb_build_object(
+      'action_count', b#>>'{counts,action_count}',
+      'batch_count', 1,
+      'exchange_count', b#>>'{counts,exchange_count}',
+      'amount_field_count', b#>>'{counts,amount_field_count}',
+      'unrelated_exchange_count', b#>>'{counts,unrelated_exchange_count}',
+      'audit_count', (b#>>'{counts,action_count}')::integer + 2,
+      'flowproperty_count', b#>>'{counts,flowproperty_count}',
+      'flow_count', b#>>'{counts,flow_count}',
+      'process_count', b#>>'{counts,process_count}',
+      'derivative_target_count', jsonb_array_length(v_targets)),
+    'text_action_count', jsonb_array_length(b->'text_actions'),
     'dimensions', jsonb_build_array(jsonb_build_object(
       'dimension', 'time',
       'factor', b->>'factor',
       'source_unitgroup', jsonb_build_object('id', f.source_ug, 'version', '01.00.000'),
       'target_unitgroup', jsonb_build_object('id', f.target_ug, 'version', '01.00.000'))),
     'text_actions', b->'text_actions',
+    'derivative_targets', v_targets,
     'actions', b->'actions',
     'plan_sha256', b->>'plan_sha256');
 end
@@ -833,9 +855,50 @@ select is(
   'a plan with an unknown key is refused'
 );
 select is(
-  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{counts,flowproperty_count}', '1'::jsonb)) ->> 'code'),
+  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{expected,flowproperty_count}', '1'::jsonb)) ->> 'code'),
   'ALIAS_V2_COUNT_MISMATCH',
   'a plan claiming flow-property actions is refused'
+);
+
+select is(
+  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{expected,audit_count}',
+    to_jsonb(((pg_temp.v2_plan() #>> '{expected,audit_count}')::integer + 1)::text))) ->> 'code'),
+  'ALIAS_V2_COUNT_MISMATCH',
+  'an audit count that is not the written row+batch+plan topology is refused'
+);
+select is(
+  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{derivative_targets}',
+    (pg_temp.v2_plan()->'derivative_targets') #- '{0}')) ->> 'code'),
+  'ALIAS_V2_COUNT_MISMATCH',
+  'a derivative target list shorter than its declared count is refused'
+);
+select is(
+  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{derivative_targets,0,user_id}',
+    to_jsonb((select foreign_actor::text from v2_fixture)))) ->> 'code'),
+  'ALIAS_V2_PLAN_INVALID',
+  'a derivative target bound to another actor is refused'
+);
+select is(
+  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{derivative_targets,0}',
+    (pg_temp.v2_plan()->'derivative_targets'->0) #- '{baseline_snapshot_sha256}')) ->> 'code'),
+  'ALIAS_V2_PLAN_INVALID',
+  'a derivative target without its six reviewed keys is refused'
+);
+select is(
+  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{text_action_count}', '3'::jsonb)) ->> 'code'),
+  'ALIAS_V2_PLAN_INVALID',
+  'a text-action count that is not the block length is refused'
+);
+select is(
+  (pg_temp.v2_plan_call(jsonb_set(
+    jsonb_set(pg_temp.v2_plan(), '{derivative_targets}',
+      (pg_temp.v2_plan()->'derivative_targets') || jsonb_build_array(jsonb_build_object(
+        'table', 'flows', 'id', 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', 'version', '01.00.000',
+        'user_id', (select actor::text from v2_fixture), 'state_code', 0,
+        'baseline_snapshot_sha256', repeat('f', 64)))),
+    '{expected,derivative_target_count}', '3'::jsonb)) ->> 'code'),
+  'ALIAS_V2_COUNT_MISMATCH',
+  'a derivative target naming an identity no action claims is refused'
 );
 
 -- The plan section gets its own pristine consumer pair so the fresh and replay paths both run on real rows.
@@ -888,6 +951,7 @@ create temp table v2_plan_process_action as select pg_temp.v2_resign(jsonb_build
       'after_resulting_amount', private.dataset_alias_v2_multiply_amount('1.03E-4', private.dataset_alias_v2_factor()::text)))))) as action;
 create temp table v2_plan_fixture as select pg_temp.v2_plan(jsonb_build_object('batch', jsonb_build_object(
   'include_base', false,
+  'plan_sha256', repeat('e', 64),
   'flows', jsonb_build_array((select action from v2_plan_flow_action)),
   'processes', jsonb_build_array((select action from v2_plan_process_action)),
   'text_actions', jsonb_build_array(jsonb_build_object(
