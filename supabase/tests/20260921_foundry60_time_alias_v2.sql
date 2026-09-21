@@ -14,7 +14,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth;
 
-select plan(13);
+select plan(14);
 
 -- A. v1 public surface stays exactly as deployed (green today, regression guard).
 select has_function(
@@ -63,6 +63,18 @@ select ok(
     in pg_get_functiondef('private.cmd_dataset_alias_batch_guarded(jsonb)'::regprocedure)
   ) > 0,
   'v1 batch executor still pins the reviewed hour-to-year factor'
+);
+
+select ok(
+  position(
+    'share row exclusive'
+    in lower(pg_get_functiondef('private.cmd_dataset_alias_batch_guarded(jsonb)'::regprocedure))
+  ) > 0
+  and position(
+    'public.flowproperties, public.flows, public.processes'
+    in pg_get_functiondef('private.cmd_dataset_alias_batch_guarded(jsonb)'::regprocedure)
+  ) > 0,
+  'v1 batch executor still pins its exact three-table lock statement'
 );
 
 -- C. v1 must refuse a v2 envelope: the current cohort can never travel the historical path.
