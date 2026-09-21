@@ -16,7 +16,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth, private;
 
-select plan(102);
+select plan(104);
 
 -- ------------------------------------------------------------------------------------------------
 -- Fixture: one target unit group (year base plus the exact hour factor), one distinct source unit group
@@ -1153,6 +1153,49 @@ select is(
 );
 delete from public.processes where id = (select uncertain_process_id from v2_fixture);
 delete from public.flows where id = (select uncertain_flow_id from v2_fixture);
+
+-- ================================================================================================
+-- 5. The target flow property's unit-group reference identity: the pointer must name the declared unit
+-- group by id, exact version and kind. The batch document is rebuilt from the live rows after each
+-- mutation, so every declared digest is self-hashed and only the pointer comparison can refuse a
+-- relation that names another version or another kind. The fixture row is restored afterwards.
+-- ================================================================================================
+create temp table v2_target_pointer on commit drop as
+  select json_ordered::jsonb as payload
+  from public.flowproperties
+  where id = (select target_fp from v2_fixture);
+
+update public.flowproperties
+set json_ordered = jsonb_set(
+      json_ordered::jsonb,
+      '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@version}',
+      to_jsonb('99.99.999'::text))::json
+where id = (select target_fp from v2_fixture);
+create temp table v2_pointer_version_plan on commit drop as select pg_temp.v2_batch() as b;
+select is(
+  (pg_temp.v2_call((select b from v2_pointer_version_plan)) ->> 'code'),
+  'ALIAS_V2_FACTOR_UNSUPPORTED',
+  'a target property pointing at another unit-group version refuses before any write'
+);
+update public.flowproperties
+set json_ordered = (select payload from v2_target_pointer)::json
+where id = (select target_fp from v2_fixture);
+
+update public.flowproperties
+set json_ordered = jsonb_set(
+      json_ordered::jsonb,
+      '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@type}',
+      to_jsonb('flow property data set'::text))::json
+where id = (select target_fp from v2_fixture);
+create temp table v2_pointer_kind_plan on commit drop as select pg_temp.v2_batch() as b;
+select is(
+  (pg_temp.v2_call((select b from v2_pointer_kind_plan)) ->> 'code'),
+  'ALIAS_V2_FACTOR_UNSUPPORTED',
+  'a target property whose reference kind is not a unit group data set refuses before any write'
+);
+update public.flowproperties
+set json_ordered = (select payload from v2_target_pointer)::json
+where id = (select target_fp from v2_fixture);
 
 select * from finish();
 rollback;
