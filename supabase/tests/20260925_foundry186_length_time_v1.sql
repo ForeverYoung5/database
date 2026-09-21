@@ -9,7 +9,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth, private, util;
 
-select plan(85);
+select plan(89);
 
 -- ------------------------------------------------------------------------------------------------
 -- Fixture: canonical unit group, property, 13 claimed flows, 1 unrelated flow, 13 processes.
@@ -490,6 +490,41 @@ select pg_temp.set_comment('b20c0de0-0000-4000-8000-000000000001',
 select pg_temp.refresh_plan();
 select is((select (private.cmd_dataset_length_time_v1_guarded((select p from plan_doc)))->>'code'), 'LENGTH_TIME_PLAN_APPLIED', 'parse: the anchored declaration wins even when metadata repeats the same number');
 
+select pg_temp.reset_fixture();
+select pg_temp.refresh_plan();
+
+-- ------------------------------------------------------------------------------------------------
+-- 7. Unit-group factor spellings: the comparison is an exact decimal through the reviewed bounded
+-- grammar, so a value-equal spelling is the same decimal and a malformed one refuses cleanly.
+-- ------------------------------------------------------------------------------------------------
+select pg_temp.reset_fixture();
+select pg_temp.refresh_plan();
+create or replace function pg_temp.set_ug_kmy(p_value jsonb) returns void language plpgsql as $$
+begin
+  update public.unitgroups
+  set json_ordered = jsonb_set(json_ordered::jsonb, '{unitGroupDataSet,units,unit,1,meanValue}', p_value, false)::json
+  where id = '8a1e27de-c1e7-5049-94bd-6c7ba80f52d1';
+end $$;
+
+select pg_temp.set_ug_kmy(to_jsonb('1000.0'::text));
+select pg_temp.refresh_plan();
+select is((select (private.cmd_dataset_length_time_v1_guarded((select p from plan_doc)))->>'code'), 'LENGTH_TIME_PLAN_APPLIED', 'factor spelling: a decimal spelling of the reviewed factor applies');
+select pg_temp.reset_fixture();
+
+select pg_temp.set_ug_kmy(to_jsonb('1e3'::text));
+select pg_temp.refresh_plan();
+select is((select (private.cmd_dataset_length_time_v1_guarded((select p from plan_doc)))->>'code'), 'LENGTH_TIME_PLAN_APPLIED', 'factor spelling: a value-equal exponent spelling is the same decimal and applies');
+select pg_temp.reset_fixture();
+
+select pg_temp.set_ug_kmy(to_jsonb('1000.0001'::text));
+select pg_temp.refresh_plan();
+select is((select (private.cmd_dataset_length_time_v1_guarded((select p from plan_doc)))->>'code'), 'LENGTH_TIME_UNITGROUP_MISMATCH', 'factor spelling: a rescaled factor refuses');
+select pg_temp.reset_fixture();
+
+select pg_temp.set_ug_kmy(to_jsonb('not-a-number'::text));
+select pg_temp.refresh_plan();
+select is((select (private.cmd_dataset_length_time_v1_guarded((select p from plan_doc)))->>'code'), 'LENGTH_TIME_UNITGROUP_MISMATCH', 'factor spelling: a malformed factor refuses cleanly instead of raising');
+select pg_temp.set_ug_kmy(to_jsonb('1.0'::text));
 select pg_temp.reset_fixture();
 select pg_temp.refresh_plan();
 

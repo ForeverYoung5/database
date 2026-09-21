@@ -177,17 +177,23 @@ begin
           select 1 from jsonb_array_elements(v_units) as unit
           where unit->>'@dataSetInternalID' = v_reference_unit_id
             and unit->>'name' = 'm*a'
-            and (unit->>'meanValue')::numeric = 1
+            -- The factor is compared as an exact decimal through the reviewed bounded grammar: a
+            -- malformed spelling refuses here instead of raising, a value-equal spelling (1.0, 1e3)
+            -- is the same decimal, and nothing outside the grammar is interpreted.
+            and case when private.dataset_alias_v2_amount_grammar_ok(unit->>'meanValue')
+              then (unit->>'meanValue')::numeric = 1 else false end
         )
         or not exists (
           select 1 from jsonb_array_elements(v_units) as unit
           where unit->>'name' = 'kmy'
-            and (unit->>'meanValue')::numeric = private.dataset_length_time_v1_factor()
+            and case when private.dataset_alias_v2_amount_grammar_ok(unit->>'meanValue')
+              then (unit->>'meanValue')::numeric = private.dataset_length_time_v1_factor() else false end
         ) then
         perform private.dataset_alias_v2_deny('LENGTH_TIME_UNITGROUP_MISMATCH', 409,
           'The canonical unit group does not declare the reviewed m*a reference at factor 1 and the kmy ratio at the canonical quantitative-reference path');
       end if;
-      select (unit->>'meanValue')::numeric into v_ratio
+      select case when private.dataset_alias_v2_amount_grammar_ok(unit->>'meanValue')
+        then (unit->>'meanValue')::numeric else null end into v_ratio
       from jsonb_array_elements(v_units) as unit
       where unit->>'name' = 'kmy';
       -- The evidence block is a closed five-key object with typed scalars: a JSON null, an absent key
