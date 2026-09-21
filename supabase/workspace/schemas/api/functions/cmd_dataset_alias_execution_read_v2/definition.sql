@@ -162,7 +162,11 @@ begin
     v_derivative_process_count
   from util.dataset_derivative_rebuild_requests as child
   where child.actor_user_id = v_actor
-    and child.batch_id = p_request_id;
+    and child.batch_id in (
+      select (chunk->>'batch_id')::uuid
+      from jsonb_array_elements(private.dataset_alias_v2_derivative_chunks(
+        p_request_id, v_request.plan_sha256, v_preflight.derivative_targets)) as chunk
+    );
 
   v_primary_closure :=
     util.read_dataset_alias_execution_v2_primary_closure(
@@ -266,12 +270,13 @@ begin
   if v_derivative_child_count > 0
     or v_request.status in ('derivatives_pending', 'completed') then
     v_batch_proof_read := true;
-    -- The versioned alias cohort's derivative batch is its own size; the shape-specific v1 alias
-    -- reader pins the fifty-target cohort and cannot read it, so the generalized reader that accepts
-    -- any declared batch shape is the one this versioned read uses.
-    v_batch_proof := util.read_dataset_derivative_rebuild_batch_any(
+    -- The versioned orchestration's own aggregate readback: every chunk through the existing bounded
+    -- reader, with exact membership and a terminal proof only when every chunk proves its closure.
+    v_batch_proof := util.read_dataset_alias_v2_derivative_chunks(
       v_actor,
-      p_request_id
+      p_request_id,
+      v_request.plan_sha256,
+      v_preflight.derivative_targets
     );
 
     select request.*

@@ -146,21 +146,29 @@ begin
     lock table public.flowproperties, public.unitgroups, public.flows, public.processes
       in share row exclusive mode;
 
-    -- Target and source evidence are read from the locked rows, never trusted from the envelope.
+    -- Target and source evidence are read from the locked rows, never trusted from the envelope, and
+    -- only through the reference boundary the actor actually has: a support row is admissible when it
+    -- is a published state-100 row or a state-0 row owned by the authenticated plan actor. A foreign
+    -- unpublished row is refused here, before any digest diagnostics, even when the caller knows its
+    -- complete payload and hash.
     select json_ordered::jsonb into v_target_fp
     from public.flowproperties
     where id = (p_batch #>> '{target_snapshots,flowproperty,id}')::uuid
-      and version = p_batch #>> '{target_snapshots,flowproperty,version}';
+      and version = p_batch #>> '{target_snapshots,flowproperty,version}'
+      and (state_code = 100 or (state_code = 0 and user_id = v_actor));
     select json_ordered::jsonb into v_target_ug
     from public.unitgroups
     where id = (p_batch #>> '{target_snapshots,unitgroup,id}')::uuid
-      and version = p_batch #>> '{target_snapshots,unitgroup,version}';
+      and version = p_batch #>> '{target_snapshots,unitgroup,version}'
+      and (state_code = 100 or (state_code = 0 and user_id = v_actor));
     select json_ordered::jsonb into v_source_ug
     from public.unitgroups
     where id = (p_batch #>> '{source_evidence,source_unitgroup,id}')::uuid
-      and version = p_batch #>> '{source_evidence,source_unitgroup,version}';
+      and version = p_batch #>> '{source_evidence,source_unitgroup,version}'
+      and (state_code = 100 or (state_code = 0 and user_id = v_actor));
     if v_target_fp is null or v_target_ug is null or v_source_ug is null then
-      perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409, 'The declared target flow property, target unit group or source unit group does not exist');
+      perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
+        'The declared target flow property, target unit group or source unit group is not readable by this actor');
     end if;
     if private.dataset_alias_v2_payload_sha256(v_target_fp) is distinct from p_batch #>> '{target_snapshots,flowproperty,sha256}'
       or private.dataset_alias_v2_payload_sha256(v_target_ug) is distinct from p_batch #>> '{target_snapshots,unitgroup,sha256}'
@@ -173,23 +181,38 @@ begin
           'source_observed', private.dataset_alias_v2_payload_sha256(v_source_ug),
           'source_declared', p_batch #>> '{source_evidence,source_unitgroup,sha256}'));
     end if;
-    -- The target flow property must reference exactly this target unit group, and that unit group must carry the
-    -- reviewed factor for its hour unit plus an unmodified year base.
-    if v_target_fp #>> '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@refObjectId}'
-        is distinct from p_batch #>> '{target_snapshots,unitgroup,id}'
-      or not exists (
-        select 1
-        from jsonb_array_elements(coalesce(v_target_ug #> '{unitGroupDataSet,unitGroupInformation,quantitativeReference,referenceToReferenceUnit}', '[]'::jsonb)) as unit
-        where unit->>'@unitName' = 'hr' and (unit->>'meanValue')::numeric = private.dataset_alias_v2_factor()
-      )
-      or not exists (
-        select 1
-        from jsonb_array_elements(coalesce(v_target_ug #> '{unitGroupDataSet,unitGroupInformation,quantitativeReference,referenceToReferenceUnit}', '[]'::jsonb)) as unit
-        where unit->>'@unitName' = 'a' and (unit->>'meanValue')::numeric = 1
-      ) then
-      perform private.dataset_alias_v2_deny('ALIAS_V2_FACTOR_UNSUPPORTED', 409,
-        'The target unit group does not carry the reviewed year base and exact hour factor');
-    end if;
+    -- The target flow property must reference exactly this target unit group, and that unit group must carry
+    -- the reviewed factors. The deployed unit group is read at its canonical paths: the quantitative
+    -- reference names the reference unit by internal id (an id string, exactly as the live rows carry it)
+    -- and the table itself is `unitGroupDataSet.units.unit[]` with name/meanValue/@dataSetInternalID. The
+    -- reference row must be the year base at factor 1 and the table must carry the exact hour factor; the
+    -- factors are compared as numbers, so the reviewed value is what binds, not its spelling.
+    declare
+      v_target_units jsonb := case jsonb_typeof(v_target_ug #> '{unitGroupDataSet,units,unit}')
+        when 'array' then v_target_ug #> '{unitGroupDataSet,units,unit}'
+        when 'object' then jsonb_build_array(v_target_ug #> '{unitGroupDataSet,units,unit}')
+        else '[]'::jsonb
+      end;
+      v_reference_unit_id text := v_target_ug #>> '{unitGroupDataSet,unitGroupInformation,quantitativeReference,referenceToReferenceUnit}';
+    begin
+      if v_target_fp #>> '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@refObjectId}'
+          is distinct from p_batch #>> '{target_snapshots,unitgroup,id}'
+        or coalesce(v_reference_unit_id, '') = ''
+        or not exists (
+          select 1
+          from jsonb_array_elements(v_target_units) as unit
+          where unit->>'@dataSetInternalID' = v_reference_unit_id
+            and (unit->>'meanValue')::numeric = 1
+        )
+        or not exists (
+          select 1
+          from jsonb_array_elements(v_target_units) as unit
+          where unit->>'name' = 'hr' and (unit->>'meanValue')::numeric = private.dataset_alias_v2_factor()
+        ) then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_FACTOR_UNSUPPORTED', 409,
+          'The target unit group does not carry the reviewed year base and exact hour factor');
+      end if;
+    end;
 
     -- The claimed flow and occurrence sets are aggregated before the structural scan, so every exchange
     -- instance and text action can be bound to a claimed flow or process inside the same pass. The shapes
@@ -461,9 +484,11 @@ begin
     begin
       select json_ordered::jsonb into v_alias_fp_row
       from public.flowproperties
-      where id = v_alias_fp_id::uuid and version = v_alias_fp_version;
+      where id = v_alias_fp_id::uuid and version = v_alias_fp_version
+        and (state_code = 100 or (state_code = 0 and user_id = v_actor));
       if v_alias_fp_row is null then
-        perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409, 'The alias flow property named by the frozen before payloads does not exist');
+        perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
+          'The source flow property named by the frozen before payloads is not readable by this actor');
       end if;
       if v_alias_fp_row #>> '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@refObjectId}'
           is distinct from p_batch #>> '{source_evidence,source_unitgroup,id}'

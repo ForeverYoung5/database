@@ -671,7 +671,7 @@ begin
         message = 'Protected alias simulation rejected';
     end if;
 
-    v_batch_result := util.admit_dataset_derivative_rebuild_batch(
+    v_batch_result := util.admit_dataset_alias_v2_derivative_chunks(
       v_actor,
       v_request_id,
       v_plan_sha256,

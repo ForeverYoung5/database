@@ -16,7 +16,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth, private;
 
-select plan(94);
+select plan(102);
 
 -- ------------------------------------------------------------------------------------------------
 -- Fixture: one target unit group (year base plus the exact hour factor), one distinct source unit group
@@ -789,6 +789,103 @@ select is(
   'a resubmission carrying different source evidence is refused as a replay conflict'
 );
 
+
+-- ================================================================================================
+-- 4a. The support reference boundary: a support row is readable only when it is published or owned by
+-- the authenticated plan actor, so a foreign owner-draft row with byte-identical JSON is refused
+-- before any digest comparison.
+-- ================================================================================================
+set local session_replication_role = replica;
+update public.flowproperties set user_id = (select foreign_actor from v2_fixture)
+where id = (select target_fp from v2_fixture);
+set local session_replication_role = origin;
+select is(
+  (pg_temp.v2_call(pg_temp.v2_batch())->>'code'),
+  'ALIAS_V2_EVIDENCE_MISMATCH',
+  'a foreign owner-draft target flow property is refused even though its payload is unchanged'
+);
+set local session_replication_role = replica;
+update public.flowproperties set user_id = (select actor from v2_fixture)
+where id = (select target_fp from v2_fixture);
+update public.unitgroups set user_id = (select foreign_actor from v2_fixture)
+where id = (select target_ug from v2_fixture);
+set local session_replication_role = origin;
+select is(
+  (pg_temp.v2_call(pg_temp.v2_batch())->>'code'),
+  'ALIAS_V2_EVIDENCE_MISMATCH',
+  'a foreign owner-draft target unit group is refused'
+);
+set local session_replication_role = replica;
+update public.unitgroups set user_id = (select actor from v2_fixture)
+where id = (select target_ug from v2_fixture);
+update public.unitgroups set user_id = (select foreign_actor from v2_fixture)
+where id = (select source_ug from v2_fixture);
+set local session_replication_role = origin;
+select is(
+  (pg_temp.v2_call(pg_temp.v2_batch())->>'code'),
+  'ALIAS_V2_EVIDENCE_MISMATCH',
+  'a foreign owner-draft source unit group is refused'
+);
+set local session_replication_role = replica;
+update public.unitgroups set user_id = (select actor from v2_fixture)
+where id = (select source_ug from v2_fixture);
+update public.flowproperties set user_id = (select foreign_actor from v2_fixture)
+where id = (select alias_fp from v2_fixture);
+set local session_replication_role = origin;
+select is(
+  (pg_temp.v2_call(pg_temp.v2_batch())->>'code'),
+  'ALIAS_V2_EVIDENCE_MISMATCH',
+  'a foreign owner-draft source flow property is refused'
+);
+-- A published support row is readable by any actor: the whole support set goes public.
+set local session_replication_role = replica;
+update public.flowproperties set user_id = (select foreign_actor from v2_fixture), state_code = 100
+where id in ((select target_fp from v2_fixture), (select alias_fp from v2_fixture));
+update public.unitgroups set user_id = (select foreign_actor from v2_fixture), state_code = 100
+where id in ((select target_ug from v2_fixture), (select source_ug from v2_fixture));
+set local session_replication_role = origin;
+select is(
+  (pg_temp.v2_call(pg_temp.v2_batch())->>'ok'),
+  'true',
+  'published support rows stay readable: the batch applies over a fully public support set'
+);
+set local session_replication_role = replica;
+update public.flowproperties set user_id = (select actor from v2_fixture), state_code = 0
+where id in ((select target_fp from v2_fixture), (select alias_fp from v2_fixture));
+update public.unitgroups set user_id = (select actor from v2_fixture), state_code = 0
+where id in ((select target_ug from v2_fixture), (select source_ug from v2_fixture));
+set local session_replication_role = origin;
+select is(
+  (pg_temp.v2_call(pg_temp.v2_batch())->>'ok'),
+  'true',
+  'the owner-draft support set is readable again after the public case'
+);
+
+-- ================================================================================================
+-- 4b2. The derivative orchestration is one unit of work: a refused sub-batch leaves no child behind.
+-- ================================================================================================
+select is(
+  (util.admit_dataset_alias_v2_derivative_chunks(
+     (select actor from v2_fixture),
+     'dddddddd-dddd-4ddd-8ddd-dddddddddddd'::uuid,
+     repeat('f', 64),
+     repeat('f', 64),
+     'PROTECTED_ALIAS_DERIVATIVE_CLOSURE',
+     jsonb_build_array(
+       jsonb_build_object('table', 'flows', 'id', (select flow_id from v2_fixture), 'version', '01.00.000',
+         'expected_json_ordered_sha256', repeat('3', 64), 'baseline_snapshot_sha256', repeat('1', 64)),
+       jsonb_build_object('table', 'processes', 'id', (select process_id from v2_fixture), 'version', '01.00.000',
+         'expected_json_ordered_sha256', repeat('4', 64), 'baseline_snapshot_sha256', repeat('2', 64))
+     ))->>'ok'),
+  'false',
+  'a derivative sub-batch whose targets do not match the live rows is refused as a whole'
+);
+select is(
+  (select count(*)::integer from util.dataset_derivative_rebuild_requests
+    where batch_id = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'::uuid),
+  0,
+  'no derivative child survives a refused orchestration'
+);
 
 -- ================================================================================================
 -- 4b. The shared functional-unit grammar, literally: quantity 1 or 1.0, one ASCII space, the unit token

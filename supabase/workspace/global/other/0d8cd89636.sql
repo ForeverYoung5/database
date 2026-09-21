@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "private"."dataset_alias_v2_derivative_chunks"("p_request_id" "uuid", "p_plan_sha256" "text", "p_targets" "jsonb") IS 'Deterministic partition of the approved ordered derivative targets into sub-batches of at most fifty, with chunk identities bound to the parent request and plan digest.';

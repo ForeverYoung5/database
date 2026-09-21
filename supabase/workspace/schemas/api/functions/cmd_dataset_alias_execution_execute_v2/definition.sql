@@ -197,7 +197,7 @@ begin
         message = 'Protected primary/support live closure is incomplete';
     end if;
 
-    v_batch_result := util.admit_dataset_derivative_rebuild_batch(
+    v_batch_result := util.admit_dataset_alias_v2_derivative_chunks(
       v_request.actor_user_id,
       v_request.id,
       v_request.plan_sha256,
@@ -209,9 +209,9 @@ begin
     if coalesce((v_batch_result->>'ok')::boolean, false) is not true
       or (v_batch_result->>'target_count')::integer is distinct from
         (v_preflight.plan #>> '{expected,derivative_target_count}')::integer
-      or coalesce(v_batch_result->>'flow_count', v_batch_result->>'flows')::integer is distinct from
+      or coalesce((v_batch_result->>'flow_count')::integer, 0) is distinct from
         (select count(*) from jsonb_array_elements(v_preflight.derivative_targets) as target where target->>'table' = 'flows')
-      or coalesce(v_batch_result->>'process_count', v_batch_result->>'processes')::integer is distinct from
+      or coalesce((v_batch_result->>'process_count')::integer, 0) is distinct from
         (select count(*) from jsonb_array_elements(v_preflight.derivative_targets) as target where target->>'table' = 'processes') then
       v_failure := jsonb_build_object(
         'phase', 'derivative_batch',
