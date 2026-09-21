@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "private"."dataset_length_time_v1_plan_keys_ok"("p_plan" "jsonb") IS 'The closed dataset-length-time-plan.v1 top-level key set: schema_version, actor_id, target_visibility, flow_snapshots, target_flow_property, target_unit_group, source_evidence, expected, actions, plan_sha256.';

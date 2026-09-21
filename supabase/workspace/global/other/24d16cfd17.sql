@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "private"."dataset_length_time_v1_multiply_amount"("p_amount" "text") IS 'Exact decimal multiplication by the reviewed Length*time factor 1000: bounded input grammar, canonical plain-decimal output, null otherwise; no float path.';
