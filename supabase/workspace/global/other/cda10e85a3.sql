@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "private"."dataset_alias_v2_plan_keys_ok"("p_plan" "jsonb") IS 'Closed key set of the v2 plan envelope: the real v1 expected counts plus the versioned text_action_count and the six-key derivative targets.';

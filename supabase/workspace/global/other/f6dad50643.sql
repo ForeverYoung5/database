@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "util"."read_dataset_alias_v2_derivative_chunks"("p_actor_user_id" "uuid", "p_request_id" "uuid", "p_plan_sha256" "text", "p_targets" "jsonb") IS 'Aggregated readback of one versioned derivative orchestration: every chunk read through the existing bounded reader, with exact membership, counts and a terminal proof only when every chunk proves its own closure.';

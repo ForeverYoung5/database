@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "private"."cmd_dataset_alias_batch_v2_guarded"("p_batch" "jsonb") IS 'Versioned guarded v2 batch executor: all-or-none validation-then-write, exact reference closure, recomputed target and source evidence, canonical digest parity, server-derived desired payloads, ordinary audit and exact replay. v1 untouched.';
