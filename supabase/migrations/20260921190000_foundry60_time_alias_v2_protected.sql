@@ -584,6 +584,8 @@ begin
     );
   end if;
 
+  -- The protected expected block is the versioned plan's own claim block: the ten flat v1 counts plus
+  -- the versioned text-action count, as JSON numbers on the external wire.
   if not (v_expected ?& array[
       'action_count',
       'batch_count',
@@ -594,7 +596,8 @@ begin
       'flowproperty_count',
       'flow_count',
       'process_count',
-      'derivative_target_count'
+      'derivative_target_count',
+      'text_action_count'
     ])
     or exists (
       select 1
@@ -609,15 +612,21 @@ begin
         'flowproperty_count',
         'flow_count',
         'process_count',
-        'derivative_target_count'
+        'derivative_target_count',
+        'text_action_count'
       ])
+    )
+    or exists (
+      select 1
+      from jsonb_each(v_expected) as expected_item(key, value)
+      where jsonb_typeof(expected_item.value) is distinct from 'number'
     )
     or v_expected is distinct from (v_plan->'expected') then
     return jsonb_build_object(
       'ok', false,
       'code', 'ALIAS_EXECUTION_PREFLIGHT_INVALID_COUNTS',
       'status', 400,
-      'message', 'Protected profile requires exact 52/59/118/309/55 and 2/23/27/50 counts'
+      'message', 'Protected profile requires the plan-derived expected counts, and nothing else'
     );
   end if;
 
@@ -752,42 +761,32 @@ begin
     );
   end if;
 
+  -- The reviewed producer defines the plan request hash as the plan document with its own
+  -- `plan_sha256` binding removed (the plan's self-digest is exactly that value), the derivative
+  -- target set as the sorted `table:id@version` identity strings and the baseline set as the
+  -- sorted baseline digests. All three are recomputed here with the same canonical artifact
+  -- algorithm the producer uses, so neither side can drift without the other refusing.
   v_alias_plan_request_sha256 :=
-    util.dataset_alias_execution_v2_artifact_sha256(v_plan);
+    util.dataset_alias_execution_v2_artifact_sha256(v_plan - 'plan_sha256');
 
   select util.dataset_alias_execution_v2_artifact_sha256(
-    jsonb_agg(
-      jsonb_build_object(
-        'table', target_item.value->>'table',
-        'id', target_item.value->>'id',
-        'version', target_item.value->>'version',
-        'user_id', target_item.value->>'user_id',
-        'state_code', 0
-      ) order by
-        target_item.value->>'table',
-        target_item.value->>'id',
-        target_item.value->>'version'
-    )
+    jsonb_agg(target_identity order by target_identity collate "C")
   )
   into v_derivative_target_set_sha256
-  from jsonb_array_elements(v_input_targets) as target_item(value);
+  from (
+    select (target_item.value->>'table') || ':' || (target_item.value->>'id') || '@'
+      || (target_item.value->>'version') as target_identity
+    from jsonb_array_elements(v_input_targets) as target_item(value)
+  ) as target_identities;
 
   select util.dataset_alias_execution_v2_artifact_sha256(
-    jsonb_agg(
-      jsonb_build_object(
-        'table', target_item.value->>'table',
-        'id', target_item.value->>'id',
-        'version', target_item.value->>'version',
-        'baseline_snapshot_sha256',
-          target_item.value->>'baseline_snapshot_sha256'
-      ) order by
-        target_item.value->>'table',
-        target_item.value->>'id',
-        target_item.value->>'version'
-    )
+    jsonb_agg(baseline order by baseline collate "C")
   )
   into v_derivative_baseline_set_sha256
-  from jsonb_array_elements(v_input_targets) as target_item(value);
+  from (
+    select target_item.value->>'baseline_snapshot_sha256' as baseline
+    from jsonb_array_elements(v_input_targets) as target_item(value)
+  ) as target_baselines;
 
   if v_bindings->>'alias_plan_request_sha256'
       is distinct from v_alias_plan_request_sha256
@@ -809,11 +808,15 @@ begin
     'project_ref', v_project_ref,
     'account', v_request_actor,
     'target_visibility', 'owner_draft',
+    -- The freeze binds the plan file, the plan digest and the plan's own versioned content. The
+    -- internal operation identity is the plan digest and stays server-side: the approved envelope
+    -- carries no separate operation id.
     'plan', jsonb_build_object(
       'plan_file_sha256', v_bindings->>'plan_file_sha256',
-      'plan_sha256', v_plan_sha256,
-      'operation_id', v_operation_id
+      'plan_sha256', v_plan_sha256
     ),
+    'target_snapshots', v_plan->'target_snapshots',
+    'source_evidence', v_plan->'source_evidence',
     'sets', jsonb_build_object(
       'alias_plan_request_sha256',
         v_bindings->>'alias_plan_request_sha256',
@@ -849,7 +852,7 @@ begin
 
   if v_freeze is distinct from v_expected_freeze
     or util.dataset_alias_execution_v2_artifact_sha256(
-      jsonb_set(v_freeze, '{freeze_sha256}', '""'::jsonb, false)
+      v_freeze - 'freeze_sha256'
     ) is distinct from v_bindings->>'freeze_sha256' then
     return jsonb_build_object(
       'ok', false,
@@ -879,7 +882,6 @@ begin
     'account', v_request_actor,
     'target_visibility', 'owner_draft',
     'plan_sha256', v_plan_sha256,
-    'operation_id', v_operation_id,
     'plan_file_sha256', v_bindings->>'plan_file_sha256',
     'freeze_file_sha256', v_bindings->>'freeze_file_sha256',
     'freeze_sha256', v_bindings->>'freeze_sha256',
@@ -891,12 +893,7 @@ begin
 
   if v_approval is distinct from v_expected_approval
     or util.dataset_alias_execution_v2_artifact_sha256(
-      jsonb_set(
-        v_approval,
-        '{approval_identity_sha256}',
-        '""'::jsonb,
-        false
-      )
+      v_approval - 'approval_identity_sha256'
     ) is distinct from v_bindings->>'approval_identity_sha256' then
     return jsonb_build_object(
       'ok', false,

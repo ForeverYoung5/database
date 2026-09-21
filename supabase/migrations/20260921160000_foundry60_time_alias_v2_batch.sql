@@ -120,6 +120,32 @@ $$;
 alter function private.dataset_alias_v2_replace_flow_reference(jsonb, jsonb) owner to postgres;
 revoke all on function private.dataset_alias_v2_replace_flow_reference(jsonb, jsonb) from public;
 
+-- The deployed Flow payloads carry the property collection either as a one-entry array or as the
+-- single object the collection normalizes to, exactly as `dataset_alias_jsonb_array_v1` treats it.
+-- The internal-ID-1 entry's reference is the only one this capability may read or move, so both
+-- shapes are decoded here and nothing else is.
+create or replace function private.dataset_alias_v2_flow_reference(p_payload jsonb)
+returns jsonb
+language sql
+immutable
+as $$
+  select case
+    when jsonb_typeof(p_payload #> '{flowDataSet,flowProperties,flowProperty}') = 'array'
+      and jsonb_array_length(p_payload #> '{flowDataSet,flowProperties,flowProperty}') = 1
+      and coalesce(p_payload #>> '{flowDataSet,flowProperties,flowProperty,0,@dataSetInternalID}', '') = '1'
+      then p_payload #> '{flowDataSet,flowProperties,flowProperty,0,referenceToFlowPropertyDataSet}'
+    when jsonb_typeof(p_payload #> '{flowDataSet,flowProperties,flowProperty}') = 'object'
+      and coalesce(p_payload #>> '{flowDataSet,flowProperties,flowProperty,@dataSetInternalID}', '') = '1'
+      then p_payload #> '{flowDataSet,flowProperties,flowProperty,referenceToFlowPropertyDataSet}'
+    else null
+  end
+$$;
+
+alter function private.dataset_alias_v2_flow_reference(jsonb) owner to postgres;
+revoke all on function private.dataset_alias_v2_flow_reference(jsonb) from public;
+comment on function private.dataset_alias_v2_flow_reference(jsonb) is
+  'Internal-ID-1 flow property reference of a Flow payload in either deployed collection shape; null when the payload carries anything else.';
+
 -- Exchange amount replacement: both reviewed absolute leaves move by the fixed factor, from the stored
 -- literals, and every other byte survives. The original literals are part of the proof: no
 -- numeric-equivalent fallback is accepted, and the four claimed amounts (mean and resulting, before and
@@ -404,7 +430,13 @@ begin
     if private.dataset_alias_v2_payload_sha256(v_target_fp) is distinct from p_batch #>> '{target_snapshots,flowproperty,sha256}'
       or private.dataset_alias_v2_payload_sha256(v_target_ug) is distinct from p_batch #>> '{target_snapshots,unitgroup,sha256}'
       or private.dataset_alias_v2_payload_sha256(v_source_ug) is distinct from p_batch #>> '{source_evidence,source_unitgroup,sha256}' then
-      perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409, 'Snapshot content does not match the declared binding');
+      perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409, 'Snapshot content does not match the declared binding',
+        jsonb_build_object('fp_observed', private.dataset_alias_v2_payload_sha256(v_target_fp),
+          'fp_declared', p_batch #>> '{target_snapshots,flowproperty,sha256}',
+          'ug_observed', private.dataset_alias_v2_payload_sha256(v_target_ug),
+          'ug_declared', p_batch #>> '{target_snapshots,unitgroup,sha256}',
+          'source_observed', private.dataset_alias_v2_payload_sha256(v_source_ug),
+          'source_declared', p_batch #>> '{source_evidence,source_unitgroup,sha256}'));
     end if;
     -- The target flow property must reference exactly this target unit group, and that unit group must carry the
     -- reviewed factor for its hour unit plus an unmodified year base.
@@ -515,17 +547,17 @@ begin
         if coalesce(v_action->'source_flowproperty'->>'id', '') = ''
           or coalesce(v_action->'source_flowproperty'->>'version', '') = ''
           or (v_action #>> '{source_flowproperty,id}') is distinct from
-             (v_action->'expected_json_ordered' #>> '{flowDataSet,flowProperties,flowProperty,referenceToFlowPropertyDataSet,@refObjectId}')
+             (private.dataset_alias_v2_flow_reference(v_action->'expected_json_ordered') #>> '{@refObjectId}')
           or (v_action #>> '{source_flowproperty,version}') is distinct from
-             (v_action->'expected_json_ordered' #>> '{flowDataSet,flowProperties,flowProperty,referenceToFlowPropertyDataSet,@version}') then
+             (private.dataset_alias_v2_flow_reference(v_action->'expected_json_ordered') #>> '{@version}') then
           perform private.dataset_alias_v2_deny('ALIAS_V2_DERIVE_MISMATCH', 409,
             'A flow action does not name the flow property its frozen before payload references',
             jsonb_build_object('action_id', v_action->>'action_id'));
         end if;
-        v_alias_fp_id := coalesce(v_alias_fp_id, v_action->'expected_json_ordered' #>> '{flowDataSet,flowProperties,flowProperty,referenceToFlowPropertyDataSet,@refObjectId}');
-        v_alias_fp_version := coalesce(v_alias_fp_version, v_action->'expected_json_ordered' #>> '{flowDataSet,flowProperties,flowProperty,referenceToFlowPropertyDataSet,@version}');
-        if v_action->'expected_json_ordered' #>> '{flowDataSet,flowProperties,flowProperty,referenceToFlowPropertyDataSet,@refObjectId}' is distinct from v_alias_fp_id
-          or v_action->'expected_json_ordered' #>> '{flowDataSet,flowProperties,flowProperty,referenceToFlowPropertyDataSet,@version}' is distinct from v_alias_fp_version then
+        v_alias_fp_id := coalesce(v_alias_fp_id, private.dataset_alias_v2_flow_reference(v_action->'expected_json_ordered') #>> '{@refObjectId}');
+        v_alias_fp_version := coalesce(v_alias_fp_version, private.dataset_alias_v2_flow_reference(v_action->'expected_json_ordered') #>> '{@version}');
+        if private.dataset_alias_v2_flow_reference(v_action->'expected_json_ordered') #>> '{@refObjectId}' is distinct from v_alias_fp_id
+          or private.dataset_alias_v2_flow_reference(v_action->'expected_json_ordered') #>> '{@version}' is distinct from v_alias_fp_version then
           perform private.dataset_alias_v2_deny('ALIAS_V2_CLOSURE_MISMATCH', 409, 'Every flow action must start from the same alias flow property');
         end if;
       else
@@ -707,10 +739,16 @@ begin
       end if;
       v_alias_fp_source_ug_id := p_batch #>> '{source_evidence,source_unitgroup,id}';
       v_alias_fp_source_ug_version := p_batch #>> '{source_evidence,source_unitgroup,version}';
+      -- The reviewed plan binds the source alias identity, not the alias row's whole payload: its
+      -- digest is the canonical hash of the {id, version} tuple. The row itself is bound by the
+      -- identity check below and by the declared source unit group the row must actually reference,
+      -- so the alias content cannot move without the identity or the unit-group pointer moving too.
       if p_batch->'source_alias' is not null
-        and (p_batch #>> '{source_alias,sha256}') is distinct from private.dataset_alias_v2_payload_sha256(v_alias_fp_row) then
+        and (p_batch #>> '{source_alias,sha256}') is distinct from
+          private.dataset_alias_v2_payload_sha256(
+            jsonb_build_object('id', v_alias_fp_id, 'version', v_alias_fp_version)) then
         perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
-          'The declared source alias digest is not the locked alias flow property payload');
+          'The declared source alias digest is not the canonical identity digest of the alias the plan runs against');
       end if;
       if p_batch->'source_alias' is not null
         and ((p_batch #>> '{source_alias,id}') is distinct from v_alias_fp_id
@@ -729,7 +767,7 @@ begin
     -- equal it exactly.
     declare
       v_before_reference jsonb := (
-        select a->'expected_json_ordered' #> '{flowDataSet,flowProperties,flowProperty,referenceToFlowPropertyDataSet}'
+        select private.dataset_alias_v2_flow_reference(a->'expected_json_ordered')
         from jsonb_array_elements(v_actions) as a
         where a->>'table' = 'flows'
         limit 1
@@ -875,8 +913,12 @@ begin
       select coalesce(jsonb_agg(jsonb_build_object('table', 'flows', 'id', f.id, 'version', f.version, 'state_code', f.state_code, 'user_id', f.user_id) order by f.id, f.version), '[]'::jsonb)
         into v_live_flows
       from public.flows f
-      where f.json_ordered::jsonb #>> '{flowDataSet,flowProperties,flowProperty,referenceToFlowPropertyDataSet,@refObjectId}' = v_alias_fp_id
-        and f.json_ordered::jsonb #>> '{flowDataSet,flowProperties,flowProperty,referenceToFlowPropertyDataSet,@version}' = v_alias_fp_version;
+      where private.dataset_alias_jsonb_array_v1(
+          f.json_ordered::jsonb #> '{flowDataSet,flowProperties,flowProperty}'
+        ) @> jsonb_build_array(jsonb_build_object(
+          'referenceToFlowPropertyDataSet',
+          jsonb_build_object('@refObjectId', v_alias_fp_id, '@version', v_alias_fp_version)
+        ));
       -- One common keyed projection on both sides: the live consumer set must be exactly the claimed set,
       -- and no live consumer may be foreign or outside the owner-draft state.
       if (select coalesce(jsonb_agg(jsonb_build_object('id', live->>'id', 'version', live->>'version') order by live->>'id', live->>'version'), '[]'::jsonb)

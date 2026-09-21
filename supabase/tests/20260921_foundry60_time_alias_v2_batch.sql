@@ -16,7 +16,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth, private;
 
-select plan(83);
+select plan(84);
 
 -- ------------------------------------------------------------------------------------------------
 -- Fixture: one target unit group (year base plus the exact hour factor), one distinct source unit group
@@ -807,9 +807,11 @@ begin
     'schema_version', 'dataset-alias-plan.v2',
     'actor_id', f.actor,
     'target_visibility', 'owner_draft',
+    -- The producer binds the alias IDENTITY: its digest is the canonical hash of the {id, version}
+    -- tuple, not of the alias row's payload.
     'source_alias', jsonb_build_object('id', f.alias_fp, 'version', '00.00.001',
       'sha256', private.dataset_alias_v2_payload_sha256(
-        (select json_ordered::jsonb from public.flowproperties where id = f.alias_fp and version = '00.00.001'))),
+        jsonb_build_object('id', f.alias_fp, 'version', '00.00.001'))),
     'source_evidence', jsonb_build_object(
       'sha256', b#>>'{source_evidence,sha256}',
       'cohort_sha256', b#>>'{source_evidence,sha256}',
@@ -905,6 +907,14 @@ select is(
   (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{source_alias,sha256}', '"not-a-digest"'::jsonb)) ->> 'code'),
   'ALIAS_V2_PLAN_INVALID',
   'a malformed source alias identity is refused'
+);
+select is(
+  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{source_alias,sha256}',
+    to_jsonb(private.dataset_alias_v2_payload_sha256(
+      (select json_ordered::jsonb from public.flowproperties
+        where id = (select alias_fp from v2_fixture) and version = '00.00.001'))))) ->> 'code'),
+  'ALIAS_V2_EVIDENCE_MISMATCH',
+  'an alias payload digest is refused: the producer binds the identity tuple, not the row payload'
 );
 select is(
   (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{source_evidence,original_source_unit}', '""'::jsonb)) ->> 'code'),
