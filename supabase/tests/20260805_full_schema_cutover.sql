@@ -68,8 +68,8 @@ select is(
     where namespace.nspname = 'api'
       and routine.prokind = 'f'
   ),
-  298::bigint,
-  'Four Portal navigation/V3 facades plus: api contains the active cutover and consumer facades, including eight additive Portal/Next version-search APIs, two V4 review queues, two partial-import APIs, the three manager-attested Result publication RPCs, and the guarded owner-draft before-content save facade'
+  303::bigint,
+  'Four Portal navigation/V3 facades plus: api contains the active cutover and consumer facades, including eight additive Portal/Next version-search APIs, two V4 review queues, two partial-import APIs, the three manager-attested Result publication RPCs, the guarded owner-draft before-content save facade, and the five versioned v2 Time-alias protected endpoints (preflight/gate/admit/read plus the service-only execute callback)'
 );
 
 select is(
@@ -224,8 +224,8 @@ select is(
       'util'::regnamespace
     )
   ),
-  646::bigint,
-  'Twenty-nine navigation constraints plus: all application, OAuth registry and twenty-two composite-name constraints plus ten partial-import and four whole-package constraints and the Result publication attestation constraints remain present'
+  662::bigint,
+  'Twenty-nine navigation constraints plus: all application, OAuth registry and twenty-two composite-name constraints plus ten partial-import and four whole-package constraints the Result publication attestation constraints remain present, and the versioned v2 Time-alias preflight/gate/request tables carry their own reviewed constraints'
 );
 
 select is(
