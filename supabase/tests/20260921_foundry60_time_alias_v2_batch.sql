@@ -133,14 +133,19 @@ delete from vault.secrets where name in ('project_secret_key', 'project_url');
 select vault.create_secret('fixture-service-secret', 'project_secret_key', 'transaction-local v2 batch test key');
 select vault.create_secret('http://127.0.0.1:55341', 'project_url', 'transaction-local v2 batch test URL');
 
+-- The deployed Time unit group shape, taken from the live state-0 export: the quantitative reference
+-- names the reference unit by internal id (an id string) and the table is units.unit[] with
+-- name/meanValue/@dataSetInternalID. The year base keeps the real "1.0" spelling, so the factor
+-- comparison is exercised as a value rather than as a string.
 insert into public.unitgroups (id, version, user_id, state_code, json_ordered, modified_at)
 select target_ug, '01.00.000', actor, 0,
   to_json(jsonb_build_object('unitGroupDataSet', jsonb_build_object(
     'unitGroupInformation', jsonb_build_object('quantitativeReference', jsonb_build_object(
-      'referenceToReferenceUnit', jsonb_build_array(
-        jsonb_build_object('@dataSetInternalID', '1', '@unitName', 'a', 'meanValue', '1'),
-        jsonb_build_object('@dataSetInternalID', '2', '@unitName', 'hr', 'meanValue', '0.00011415525114155251')
-      )
+      'referenceToReferenceUnit', '1'
+    )),
+    'units', jsonb_build_object('unit', jsonb_build_array(
+      jsonb_build_object('@dataSetInternalID', '1', 'name', 'a', 'meanValue', '1.0'),
+      jsonb_build_object('@dataSetInternalID', '2', 'name', 'hr', 'meanValue', '0.00011415525114155251')
     )),
     'administrativeInformation', jsonb_build_object(
       'publicationAndOwnership', jsonb_build_object('common:dataSetVersion', '01.00.000'))

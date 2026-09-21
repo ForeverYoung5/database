@@ -272,6 +272,223 @@ revoke all on function util.dataset_alias_execution_v2_artifact_sha256(jsonb)
 comment on function util.dataset_alias_execution_v2_artifact_sha256(jsonb) is
   'Hashes parsed JSON with the same recursive key ordering and compact serialization as CLI stableJsonText. Private protected-execution artifact verifier only.';
 
+
+-- ------------------------------------------------------------------------------------------------
+-- The versioned derivative orchestration: the approved target set is partitioned deterministically
+-- into bounded sub-batches so the reviewed full-size cohort can be admitted through the existing
+-- fifty-target derivative owner without changing that owner, its constraints or any of its callers.
+-- Chunk identities are derived from the approved parent request and plan digest, so the partition is
+-- reproducible, bound to one parent, and cannot be chosen by a caller.
+-- ------------------------------------------------------------------------------------------------
+create or replace function private.dataset_alias_v2_derivative_chunks(
+  p_request_id uuid,
+  p_plan_sha256 text,
+  p_targets jsonb
+) returns jsonb
+language sql
+immutable
+as $$
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'ordinal', chunk.ordinal,
+    'batch_id', (
+      substr(chunk.digest, 1, 8) || '-' || substr(chunk.digest, 9, 4) || '-'
+      || substr(chunk.digest, 13, 4) || '-' || substr(chunk.digest, 17, 4) || '-'
+      || substr(chunk.digest, 21, 12)
+    )::uuid,
+    'target_count', jsonb_array_length(chunk.targets),
+    'targets', chunk.targets
+  ) order by chunk.ordinal), '[]'::jsonb)
+  from (
+    select (entry.ordinality - 1) / 50 + 1 as ordinal,
+           md5(p_request_id::text || ':' || p_plan_sha256 || ':' || (((entry.ordinality - 1) / 50 + 1))::text) as digest,
+           jsonb_agg(entry.value order by entry.ordinality) as targets
+    from jsonb_array_elements(coalesce(p_targets, '[]'::jsonb)) with ordinality as entry(value, ordinality)
+    group by 1, 2
+  ) as chunk
+$$;
+
+alter function private.dataset_alias_v2_derivative_chunks(uuid, text, jsonb) owner to postgres;
+revoke all on function private.dataset_alias_v2_derivative_chunks(uuid, text, jsonb) from public;
+comment on function private.dataset_alias_v2_derivative_chunks(uuid, text, jsonb) is
+  'Deterministic partition of the approved ordered derivative targets into sub-batches of at most fifty, with chunk identities bound to the parent request and plan digest.';
+
+-- Admits every chunk through the existing bounded derivative owner and returns the complete child
+-- mapping. Any chunk refusal is reported as a refusal of the whole orchestration: the caller raises
+-- and its enclosing transaction rolls back the primary writes, the audits and every earlier chunk.
+create or replace function util.admit_dataset_alias_v2_derivative_chunks(
+  p_actor_user_id uuid,
+  p_request_id uuid,
+  p_plan_sha256 text,
+  p_operation_id text,
+  p_scope text,
+  p_targets jsonb
+) returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_chunks jsonb;
+  v_chunk jsonb;
+  v_admitted jsonb := '[]'::jsonb;
+  v_result jsonb;
+  v_target_count integer := 0;
+  v_flow_count integer := 0;
+  v_process_count integer := 0;
+begin
+  v_chunks := private.dataset_alias_v2_derivative_chunks(p_request_id, p_plan_sha256, p_targets);
+
+  -- The partition must be exact: every approved target exactly once, no chunk above the bound, no
+  -- chunk without targets, distinct deterministic identities.
+  if (select count(*) from jsonb_array_elements(v_chunks) as chunk
+        where (chunk->>'target_count')::integer not between 1 and 50) <> 0
+    or (select count(distinct chunk->>'batch_id') from jsonb_array_elements(v_chunks) as chunk)
+      <> jsonb_array_length(v_chunks)
+    or (select coalesce(sum((chunk->>'target_count')::integer), 0) from jsonb_array_elements(v_chunks) as chunk)
+      <> jsonb_array_length(coalesce(p_targets, '[]'::jsonb)) then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_EXECUTION_DERIVATIVE_PARTITION_INVALID',
+      'message', 'The derivative target partition is not an exact bounded cover of the approved targets');
+  end if;
+
+  for v_chunk in select * from jsonb_array_elements(v_chunks) as chunk loop
+    v_result := util.admit_dataset_derivative_rebuild_batch(
+      p_actor_user_id,
+      (v_chunk->>'batch_id')::uuid,
+      p_plan_sha256,
+      p_operation_id,
+      p_scope,
+      v_chunk->'targets'
+    );
+    if coalesce((v_result->>'ok')::boolean, false) is not true
+      or (v_result->>'target_count')::integer is distinct from (v_chunk->>'target_count')::integer then
+      return jsonb_build_object('ok', false, 'code', 'ALIAS_EXECUTION_DERIVATIVE_CHUNK_REFUSED',
+        'message', 'A derivative sub-batch of the approved target set was refused',
+        'ordinal', (v_chunk->>'ordinal')::integer,
+        'batch_id', v_chunk->>'batch_id',
+        'result', coalesce(v_result, '{}'::jsonb));
+    end if;
+    v_target_count := v_target_count + (v_result->>'target_count')::integer;
+    v_flow_count := v_flow_count + coalesce((v_result->>'flow_count')::integer, 0);
+    v_process_count := v_process_count + coalesce((v_result->>'process_count')::integer, 0);
+    v_admitted := v_admitted || jsonb_build_array(jsonb_build_object(
+      'ordinal', (v_chunk->>'ordinal')::integer,
+      'batch_id', v_chunk->>'batch_id',
+      'target_count', (v_chunk->>'target_count')::integer,
+      'summary_audit_id', v_result->>'summary_audit_id',
+      'child_request_ids', coalesce(v_result->'child_request_ids', '[]'::jsonb)));
+  end loop;
+
+  return jsonb_build_object(
+    'ok', true,
+    'code', 'ALIAS_EXECUTION_DERIVATIVE_CHUNKS_ADMITTED',
+    'chunk_count', jsonb_array_length(v_chunks),
+    'chunk_target_bound', 50,
+    'target_count', v_target_count,
+    'flow_count', v_flow_count,
+    'process_count', v_process_count,
+    'chunks', v_admitted);
+end
+$$;
+
+alter function util.admit_dataset_alias_v2_derivative_chunks(uuid, uuid, text, text, text, jsonb) owner to postgres;
+revoke all on function util.admit_dataset_alias_v2_derivative_chunks(uuid, uuid, text, text, text, jsonb)
+  from public, anon, authenticated, service_role;
+comment on function util.admit_dataset_alias_v2_derivative_chunks(uuid, uuid, text, text, text, jsonb) is
+  'Versioned derivative orchestration: partitions the approved targets deterministically, admits every chunk through the existing bounded derivative owner inside the caller transaction, and returns the complete child-batch mapping.';
+
+
+-- Reads the complete child mapping of one versioned derivative orchestration: every chunk through the
+-- existing bounded reader, aggregated into the exact membership, counts and terminal status of the
+-- approved target set. A terminal proof exists only when every chunk reports its own causal terminal
+-- proof over exactly its own targets — no chunk, no success.
+create or replace function util.read_dataset_alias_v2_derivative_chunks(
+  p_actor_user_id uuid,
+  p_request_id uuid,
+  p_plan_sha256 text,
+  p_targets jsonb
+) returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_chunks jsonb;
+  v_chunk jsonb;
+  v_proof jsonb;
+  v_chunk_proofs jsonb := '[]'::jsonb;
+  v_target_count integer := 0;
+  v_flow_count integer := 0;
+  v_process_count integer := 0;
+  v_completed_count integer := 0;
+  v_nonterminal_count integer := 0;
+  v_failed_count integer := 0;
+  v_invalid_proof_count integer := 0;
+  v_all_terminal boolean := true;
+  v_any_failed boolean := false;
+begin
+  v_chunks := private.dataset_alias_v2_derivative_chunks(p_request_id, p_plan_sha256, p_targets);
+
+  for v_chunk in select * from jsonb_array_elements(v_chunks) as chunk loop
+    v_proof := util.read_dataset_derivative_rebuild_batch_any(
+      p_actor_user_id,
+      (v_chunk->>'batch_id')::uuid
+    );
+    v_target_count := v_target_count + coalesce((v_proof->>'target_count')::integer, 0);
+    v_flow_count := v_flow_count + coalesce((v_proof->>'flow_count')::integer, 0);
+    v_process_count := v_process_count + coalesce((v_proof->>'process_count')::integer, 0);
+    v_completed_count := v_completed_count + coalesce((v_proof->>'completed_count')::integer, 0);
+    v_nonterminal_count := v_nonterminal_count + coalesce((v_proof->>'nonterminal_count')::integer, 0);
+    v_failed_count := v_failed_count + coalesce((v_proof->>'failed_count')::integer, 0);
+    v_invalid_proof_count := v_invalid_proof_count + coalesce((v_proof->>'invalid_proof_count')::integer, 0);
+    if coalesce((v_proof->>'causal_terminal_proof')::boolean, false) is not true then
+      v_all_terminal := false;
+    end if;
+    if (v_proof->>'status') = 'failed' then
+      v_any_failed := true;
+    end if;
+    v_chunk_proofs := v_chunk_proofs || jsonb_build_array(jsonb_build_object(
+      'ordinal', (v_chunk->>'ordinal')::integer,
+      'batch_id', v_chunk->>'batch_id',
+      'status', v_proof->>'status',
+      'code', v_proof->>'code',
+      'target_count', coalesce((v_proof->>'target_count')::integer, 0),
+      'completed_count', coalesce((v_proof->>'completed_count')::integer, 0),
+      'nonterminal_count', coalesce((v_proof->>'nonterminal_count')::integer, 0),
+      'failed_count', coalesce((v_proof->>'failed_count')::integer, 0),
+      'causal_terminal_proof', coalesce((v_proof->>'causal_terminal_proof')::boolean, false)));
+  end loop;
+
+  return jsonb_build_object(
+    'schema_version', 'dataset-alias-v2-derivative-orchestration.v1',
+    'request_id', p_request_id,
+    'chunk_count', jsonb_array_length(v_chunks),
+    'chunk_target_bound', 50,
+    'target_count', v_target_count,
+    'approved_target_count', jsonb_array_length(coalesce(p_targets, '[]'::jsonb)),
+    'membership_exact', v_target_count = jsonb_array_length(coalesce(p_targets, '[]'::jsonb)),
+    'flow_count', v_flow_count,
+    'process_count', v_process_count,
+    'completed_count', v_completed_count,
+    'nonterminal_count', v_nonterminal_count,
+    'failed_count', v_failed_count,
+    'invalid_proof_count', v_invalid_proof_count,
+    'causal_terminal_proof', v_all_terminal and v_target_count = jsonb_array_length(coalesce(p_targets, '[]'::jsonb)),
+    'status', case
+      when v_any_failed then 'failed'
+      when v_all_terminal and v_target_count = jsonb_array_length(coalesce(p_targets, '[]'::jsonb)) then 'completed'
+      else 'pending'
+    end,
+    'chunks', v_chunk_proofs);
+end
+$$;
+
+alter function util.read_dataset_alias_v2_derivative_chunks(uuid, uuid, text, jsonb) owner to postgres;
+revoke all on function util.read_dataset_alias_v2_derivative_chunks(uuid, uuid, text, jsonb)
+  from public, anon, authenticated, service_role;
+comment on function util.read_dataset_alias_v2_derivative_chunks(uuid, uuid, text, jsonb) is
+  'Aggregated readback of one versioned derivative orchestration: every chunk read through the existing bounded reader, with exact membership, counts and a terminal proof only when every chunk proves its own closure.';
+
 create or replace function util.dataset_alias_execution_v2_server_context()
 returns jsonb
 language plpgsql
@@ -1006,7 +1223,7 @@ begin
         message = 'Protected alias simulation rejected';
     end if;
 
-    v_batch_result := util.admit_dataset_derivative_rebuild_batch(
+    v_batch_result := util.admit_dataset_alias_v2_derivative_chunks(
       v_actor,
       v_request_id,
       v_plan_sha256,
@@ -1586,7 +1803,7 @@ begin
           message = 'Primary/support simulation rejected';
       end if;
 
-      v_batch_result := util.admit_dataset_derivative_rebuild_batch(
+      v_batch_result := util.admit_dataset_alias_v2_derivative_chunks(
         v_actor,
         p_request_id,
         v_preflight.plan_sha256,
@@ -1598,9 +1815,9 @@ begin
       if coalesce((v_batch_result->>'ok')::boolean, false) is not true
         or (v_batch_result->>'target_count')::integer
           is distinct from (v_preflight.plan #>> '{expected,derivative_target_count}')::integer
-        or coalesce(v_batch_result->>'flow_count', v_batch_result->>'flows')::integer
+        or coalesce((v_batch_result->>'flow_count')::integer, 0)
           is distinct from (select count(*) from jsonb_array_elements(v_preflight.derivative_targets) as target where target->>'table' = 'flows')
-        or coalesce(v_batch_result->>'process_count', v_batch_result->>'processes')::integer
+        or coalesce((v_batch_result->>'process_count')::integer, 0)
           is distinct from (select count(*) from jsonb_array_elements(v_preflight.derivative_targets) as target where target->>'table' = 'processes') then
         raise exception using
           errcode = 'P0001',
@@ -2614,7 +2831,7 @@ begin
         message = 'Protected primary/support live closure is incomplete';
     end if;
 
-    v_batch_result := util.admit_dataset_derivative_rebuild_batch(
+    v_batch_result := util.admit_dataset_alias_v2_derivative_chunks(
       v_request.actor_user_id,
       v_request.id,
       v_request.plan_sha256,
@@ -2626,9 +2843,9 @@ begin
     if coalesce((v_batch_result->>'ok')::boolean, false) is not true
       or (v_batch_result->>'target_count')::integer is distinct from
         (v_preflight.plan #>> '{expected,derivative_target_count}')::integer
-      or coalesce(v_batch_result->>'flow_count', v_batch_result->>'flows')::integer is distinct from
+      or coalesce((v_batch_result->>'flow_count')::integer, 0) is distinct from
         (select count(*) from jsonb_array_elements(v_preflight.derivative_targets) as target where target->>'table' = 'flows')
-      or coalesce(v_batch_result->>'process_count', v_batch_result->>'processes')::integer is distinct from
+      or coalesce((v_batch_result->>'process_count')::integer, 0) is distinct from
         (select count(*) from jsonb_array_elements(v_preflight.derivative_targets) as target where target->>'table' = 'processes') then
       v_failure := jsonb_build_object(
         'phase', 'derivative_batch',
@@ -2880,7 +3097,11 @@ begin
     v_derivative_process_count
   from util.dataset_derivative_rebuild_requests as child
   where child.actor_user_id = v_actor
-    and child.batch_id = p_request_id;
+    and child.batch_id in (
+      select (chunk->>'batch_id')::uuid
+      from jsonb_array_elements(private.dataset_alias_v2_derivative_chunks(
+        p_request_id, v_request.plan_sha256, v_preflight.derivative_targets)) as chunk
+    );
 
   v_primary_closure :=
     util.read_dataset_alias_execution_v2_primary_closure(
@@ -2984,12 +3205,13 @@ begin
   if v_derivative_child_count > 0
     or v_request.status in ('derivatives_pending', 'completed') then
     v_batch_proof_read := true;
-    -- The versioned alias cohort's derivative batch is its own size; the shape-specific v1 alias
-    -- reader pins the fifty-target cohort and cannot read it, so the generalized reader that accepts
-    -- any declared batch shape is the one this versioned read uses.
-    v_batch_proof := util.read_dataset_derivative_rebuild_batch_any(
+    -- The versioned orchestration's own aggregate readback: every chunk through the existing bounded
+    -- reader, with exact membership and a terminal proof only when every chunk proves its closure.
+    v_batch_proof := util.read_dataset_alias_v2_derivative_chunks(
       v_actor,
-      p_request_id
+      p_request_id,
+      v_request.plan_sha256,
+      v_preflight.derivative_targets
     );
 
     select request.*
