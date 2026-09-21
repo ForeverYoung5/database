@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-21
-lastReviewedCommit: ee159966823ead649180b49ab6d961cbc7ee3101
-lastReviewedNote: "Reviewed for Database #670 with workspace #1432: records the guarded owner-draft before-content save facade beside the existing DB-CORE-WRITE-01 command routes; repo shape and generated-path boundaries are unchanged. Reviewed for Database #673 (Foundry #60) with workspace #1432: the Time alias v2 RED baseline adds one database test file only; repo contract, architecture map and proof ownership are unchanged."
+lastReviewedCommit: d71d207f669f5c2d2085fbec79b72140601d5969
+lastReviewedNote: "Reviewed for Database #670 with workspace #1432: records the guarded owner-draft before-content save facade beside the existing DB-CORE-WRITE-01 command routes; repo shape and generated-path boundaries are unchanged. Reviewed for Database #673 (Foundry #60) with workspace #1432: the Time alias v2 RED baseline adds one database test file only; repo contract, architecture map and proof ownership are unchanged. Reviewed for Database #673 (Foundry #60) with workspace #1432: the guarded v2 batch executor is now real behaviour GREEN on the isolated stack — closed envelope (counts, target snapshots and source evidence read and bound), Product-flow eligibility, the deployed five-key reference derived from the target's own common:name object, the functional-unit mutation bound to the process's reference-flow exchange, an exact replay that writes nothing, and a write-pass failure that rolls rows and audit back; the private-function inventory pin learns the fourteen v2 helpers. No governed rule, proof bar, branch or capability semantics change."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
