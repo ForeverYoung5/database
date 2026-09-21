@@ -1,0 +1,127 @@
+{
+  "schema": "tiangong-foundry.alias-v2-math-vectors.v1",
+  "factor": "0.00011415525114155251",
+  "note": "Shared credential-free vector list for the Database #673 and CLI #358 v2 numeric helpers. Both owners consume this exact file: `accepted` is the expected bounded-grammar verdict, `product` the expected canonical fixed-factor product (null when refused or out of bound).",
+  "vectors": [
+    {
+      "input": "1",
+      "accepted": true,
+      "product": "0.00011415525114155251"
+    },
+    {
+      "input": "1.0",
+      "accepted": true,
+      "product": "0.00011415525114155251"
+    },
+    {
+      "input": "0",
+      "accepted": true,
+      "product": "0"
+    },
+    {
+      "input": "-0.0",
+      "accepted": true,
+      "product": "0"
+    },
+    {
+      "input": "26.0",
+      "accepted": true,
+      "product": "0.00296803652968036526"
+    },
+    {
+      "input": "0.22917",
+      "accepted": true,
+      "product": "0.0000261609589041095887167"
+    },
+    {
+      "input": "1.18E-7",
+      "accepted": true,
+      "product": "0.00000000001347031963470319618"
+    },
+    {
+      "input": "1.03E-4",
+      "accepted": true,
+      "product": "0.00000001175799086757990853"
+    },
+    {
+      "input": "9.423E-4",
+      "accepted": true,
+      "product": "0.000000107568493150684930173"
+    },
+    {
+      "input": "1e-1",
+      "accepted": true,
+      "product": "0.000011415525114155251"
+    },
+    {
+      "input": "1E+01",
+      "accepted": true,
+      "product": "0.0011415525114155251"
+    },
+    {
+      "input": "01E0",
+      "accepted": false,
+      "product": null
+    },
+    {
+      "input": "1E030",
+      "accepted": false,
+      "product": null
+    },
+    {
+      "input": "1E-31",
+      "accepted": false,
+      "product": null
+    },
+    {
+      "input": "+1",
+      "accepted": false,
+      "product": null
+    },
+    {
+      "input": ".5",
+      "accepted": false,
+      "product": null
+    },
+    {
+      "input": "1.",
+      "accepted": false,
+      "product": null
+    },
+    {
+      "input": "1e1e1",
+      "accepted": false,
+      "product": null
+    },
+    {
+      "input": "Infinity",
+      "accepted": false,
+      "product": null
+    },
+    {
+      "input": "NaN",
+      "accepted": false,
+      "product": null
+    },
+    {
+      "input": "1_000E-4",
+      "accepted": false,
+      "product": null
+    },
+    {
+      "input": "0x10",
+      "accepted": false,
+      "product": null
+    },
+    {
+      "input": "1 ",
+      "accepted": false,
+      "product": null
+    },
+    {
+      "input": " 1",
+      "accepted": false,
+      "product": null
+    }
+  ]
+}

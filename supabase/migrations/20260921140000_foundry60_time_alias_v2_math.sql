@@ -34,10 +34,10 @@ as $$
   select
     p_amount is not null
     and octet_length(p_amount) between 1 and 64
-    and p_amount ~ '^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]{1,3})?$'
+    and p_amount ~ '^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]{1,2})?$'
     and (
       p_amount !~ '[eE]'
-      or abs(replace(substring(p_amount from '[eE]([+-]?[0-9]{1,3})$'), '+', '')::integer) <= 30
+      or abs(replace(substring(p_amount from '[eE]([+-]?[0-9]{1,2})$'), '+', '')::integer) <= 30
     )
 $$;
 
