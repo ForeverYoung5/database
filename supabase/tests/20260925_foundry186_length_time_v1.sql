@@ -9,7 +9,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth, private, util;
 
-select plan(79);
+select plan(85);
 
 -- ------------------------------------------------------------------------------------------------
 -- Fixture: canonical unit group, property, 13 claimed flows, 1 unrelated flow, 13 processes.
@@ -75,22 +75,24 @@ select process_id, flow_id, literal, i,
         'exchangeDirection', 'Output',
         'generalComment', jsonb_build_object('@xml:lang', 'en', '#text',
           'Source EcoSpold1 exchange number: ' || (7300000 + i)::text || '.'),
-        'meanAmount', literal, 'resultingAmount', literal, 'relativeStandardDeviation95In', '0.05',
-        'uncertaintyDistributionType', 'lognormal',
-        'referenceToFlowDataSet', jsonb_build_object('@refObjectId', flow_id::text, '@version', '00.00.001')),
+        'meanAmount', literal, 'resultingAmount', literal,
+        'uncertaintyDistributionType', 'undefined',
+        'referenceToFlowDataSet', jsonb_build_object('@refObjectId', flow_id::text, '@version', '00.00.001'))
+      || case when i in (1, 2) then jsonb_build_object('relativeStandardDeviation95In', '0.05') else '{}'::jsonb end,
       jsonb_build_object('@dataSetInternalID', '2', 'dataDerivationTypeStatus', 'Measured',
         'exchangeDirection', 'Input',
         'generalComment', jsonb_build_object('@xml:lang', 'en', '#text',
           'Source EcoSpold1 exchange number: ' || (7310000 + i)::text || '. (1,2,3,4,5,6,BU:7.8); ;'),
-        'meanAmount', literal, 'resultingAmount', literal, 'relativeStandardDeviation95In', '0.10',
-        'uncertaintyDistributionType', 'lognormal',
-        'referenceToFlowDataSet', jsonb_build_object('@refObjectId', flow_id::text, '@version', '00.00.001')),
+        'meanAmount', literal, 'resultingAmount', literal,
+        'uncertaintyDistributionType', 'log-normal',
+        'referenceToFlowDataSet', jsonb_build_object('@refObjectId', flow_id::text, '@version', '00.00.001'))
+      || case when i in (1, 2) then jsonb_build_object('relativeStandardDeviation95In', '0.10') else '{}'::jsonb end,
       jsonb_build_object('@dataSetInternalID', '3', 'dataDerivationTypeStatus', 'Measured',
         'exchangeDirection', 'Input',
         'generalComment', jsonb_build_object('@xml:lang', 'en', '#text',
           'Source EcoSpold1 exchange number: ' || (7320000 + i)::text || '. (year 2026, 12, 345);'),
-        'meanAmount', literal, 'resultingAmount', literal, 'relativeStandardDeviation95In', '0.20',
-        'uncertaintyDistributionType', 'lognormal',
+        'meanAmount', literal, 'resultingAmount', literal,
+        'uncertaintyDistributionType', 'log-normal',
         'referenceToFlowDataSet', jsonb_build_object('@refObjectId', flow_id::text, '@version', '00.00.001')),
       jsonb_build_object('@dataSetInternalID', '4', 'dataDerivationTypeStatus', 'Measured',
         'exchangeDirection', 'Input', 'meanAmount', '7', 'resultingAmount', '7',
@@ -245,6 +247,22 @@ select is((select count(*)::text from public.processes p join ids on ids.process
 select is((select count(*)::text from public.processes p join ids on ids.process_id = p.id
   where p.json_ordered::jsonb #>> '{processDataSet,exchanges,exchange,1,resultingAmount}' = private.dataset_length_time_v1_multiply_amount(ids.literal)), '13', 'apply: the resulting amount moved with the mean amount');
 select is((select count(distinct p.json_ordered::jsonb #>> '{processDataSet,exchanges,exchange,3,meanAmount}')::text from public.processes p join ids on ids.process_id = p.id), '1', 'apply: unrelated exchanges are untouched');
+select is((select count(*)::text
+  from public.processes p join ids on ids.process_id = p.id
+  cross join lateral jsonb_array_elements(p.json_ordered::jsonb #> '{processDataSet,exchanges,exchange}') as e
+  where e ? 'relativeStandardDeviation95In'), '4', 'uncertainty: exactly the four corpus exchanges that carry the relative field still carry it');
+select is((select string_agg(distinct e->>'relativeStandardDeviation95In', ',' order by e->>'relativeStandardDeviation95In')
+  from public.processes p join ids on ids.process_id = p.id
+  cross join lateral jsonb_array_elements(p.json_ordered::jsonb #> '{processDataSet,exchanges,exchange}') as e
+  where e ? 'relativeStandardDeviation95In'), '0.05,0.10', 'uncertainty: the preserved relative values are byte-identical to the fixture');
+select is((select count(*)::text
+  from public.processes p join ids on ids.process_id = p.id
+  cross join lateral jsonb_array_elements(p.json_ordered::jsonb #> '{processDataSet,exchanges,exchange}') as e
+  where e->>'uncertaintyDistributionType' = 'undefined'), '13', 'uncertainty: thirteen selected exchanges keep the undefined distribution');
+select is((select count(*)::text
+  from public.processes p join ids on ids.process_id = p.id
+  cross join lateral jsonb_array_elements(p.json_ordered::jsonb #> '{processDataSet,exchanges,exchange}') as e
+  where e->>'uncertaintyDistributionType' = 'log-normal'), '26', 'uncertainty: twenty-six selected exchanges keep the log-normal spelling');
 select is((select count(*)::text from public.processes p join ids on ids.process_id = p.id
   where p.json_ordered::jsonb #>> '{processDataSet,processInformation,quantitativeReference,functionalUnitOrOther,#text}' = '1 kmy'), '13', 'apply: the functional-unit text 1 kmy is byte-identical');
 select is((select count(*)::text from public.flows f join ids on ids.flow_id = f.id
@@ -462,7 +480,15 @@ select is((select (private.cmd_dataset_length_time_v1_guarded((select p from pla
 select pg_temp.set_comment('b20c0de0-0000-4000-8000-000000000001',
   jsonb_build_object('@xml:lang', 'en', '#text', '7300001'));
 select pg_temp.refresh_plan();
-select is((select (private.cmd_dataset_length_time_v1_guarded((select p from plan_doc)))->>'code'), 'LENGTH_TIME_PLAN_APPLIED', 'parse: the unambiguous bare-integer comment (legacy synthetic shape) is accepted');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select p from plan_doc)))->>'code'), 'LENGTH_TIME_DERIVE_MISMATCH', 'parse: a bare-integer comment without the anchored declaration refuses (the closed rule is the anchored form)');
+select pg_temp.set_comment('b20c0de0-0000-4000-8000-000000000001',
+  jsonb_build_object('@xml:lang', 'en', '#text', 'Source EcoSpold1 exchange number: 111111. (1,2,3,4,5,6,BU:7300001); ;'));
+select pg_temp.refresh_plan();
+select is((select (private.cmd_dataset_length_time_v1_guarded((select p from plan_doc)))->>'code'), 'LENGTH_TIME_DERIVE_MISMATCH', 'parse: a metadata number matching the claim never substitutes for the anchored declaration');
+select pg_temp.set_comment('b20c0de0-0000-4000-8000-000000000001',
+  jsonb_build_object('@xml:lang', 'en', '#text', 'Source EcoSpold1 exchange number: 7300001. (1,2,3,4,5,6,BU:7300001); ;'));
+select pg_temp.refresh_plan();
+select is((select (private.cmd_dataset_length_time_v1_guarded((select p from plan_doc)))->>'code'), 'LENGTH_TIME_PLAN_APPLIED', 'parse: the anchored declaration wins even when metadata repeats the same number');
 
 select pg_temp.reset_fixture();
 select pg_temp.refresh_plan();

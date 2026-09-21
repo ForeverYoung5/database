@@ -1,6 +1,6 @@
 CREATE OR REPLACE FUNCTION "private"."dataset_length_time_v1_replace_exchange_amounts"("p_before" "jsonb", "p_exchange" "jsonb") RETURNS "jsonb"
     LANGUAGE "plpgsql" IMMUTABLE
-    AS $_$
+    AS $$
 declare
   v_index integer := coalesce((p_exchange->>'index')::integer, -1);
   v_exchanges jsonb := p_before #> '{processDataSet,exchanges,exchange}';
@@ -17,8 +17,10 @@ begin
   if jsonb_typeof(v_entry) <> 'object' then
     return null;
   end if;
-  -- Absolute-uncertainty fields are outside this profile: only the relative uncertainty the audited
-  -- exchanges actually carry may be present.
+  -- Absolute-uncertainty fields are outside this profile. The relative field is optional evidence:
+  -- the audited corpus carries it on four of thirty-nine selected exchanges and leaves it absent on
+  -- the other thirty-five; whatever the row holds — present with its exact value, or absent — is
+  -- preserved byte for byte by the rewrite and never invented or reinterpreted.
   if v_entry ?| array['minimumAmount', 'maximumAmount', 'standardDeviation95In', 'variance', 'standardDeviation'] then
     return null;
   end if;
@@ -37,9 +39,8 @@ begin
   -- lists). Those later numbers are never the source id, so the id is taken only from the anchored
   -- label, its bounded numeric token and the mandatory period; every suffix byte is retained in the
   -- payload and never interpreted. A comment with no declaration, with the label spelled without its
-  -- token or period, or with more than one declaration is refused rather than guessed, and a bare
-  -- integer comment (the legacy synthetic shape) is accepted only when the whole comment is that one
-  -- integer, so no metadata number can ever be mistaken for the source id.
+  -- token or period, or with anything other than exactly one declaration is refused rather than
+  -- guessed, so no metadata number can ever be mistaken for the source id.
   v_comment := case jsonb_typeof(v_entry->'generalComment')
     when 'object' then v_entry->'generalComment'->>'#text'
     when 'string' then v_entry->>'generalComment'
@@ -52,11 +53,10 @@ begin
   if v_label_count > 1 then
     return null;
   end if;
-  if v_label_count = 1 then
-    v_parsed := substring(v_comment from 'Source EcoSpold1 exchange number:\s*([0-9]+)\.');
-  else
-    v_parsed := case when v_comment ~ '^[0-9]+\.?$' then rtrim(v_comment, '.') else null end;
+  if v_label_count <> 1 then
+    return null;
   end if;
+  v_parsed := substring(v_comment from 'Source EcoSpold1 exchange number:\s*([0-9]+)\.');
   if v_parsed is null or v_parsed is distinct from p_exchange->>'source_exchange_number' then
     return null;
   end if;
@@ -68,7 +68,7 @@ begin
     jsonb_set(p_before, array['processDataSet', 'exchanges', 'exchange', v_index::text, 'meanAmount'], to_jsonb(v_after), false),
     array['processDataSet', 'exchanges', 'exchange', v_index::text, 'resultingAmount'], to_jsonb(v_after), false);
 end
-$_$;
+$$;
 
 ALTER FUNCTION "private"."dataset_length_time_v1_replace_exchange_amounts"("p_before" "jsonb", "p_exchange" "jsonb") OWNER TO "postgres";
 
