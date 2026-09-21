@@ -12,6 +12,7 @@ declare
   v_process_count integer := 0;
   v_detail text;
   v_hint text;
+  v_current_ordinal integer;
 begin
   v_chunks := private.dataset_alias_v2_derivative_chunks(p_request_id, p_plan_sha256, p_targets);
 
@@ -32,6 +33,7 @@ begin
   -- observe a partially admitted target set.
   begin
     for v_chunk in select * from jsonb_array_elements(v_chunks) as chunk loop
+      v_current_ordinal := (v_chunk->>'ordinal')::integer;
       v_result := util.admit_dataset_derivative_rebuild_batch(
         p_actor_user_id,
         (v_chunk->>'batch_id')::uuid,
@@ -72,6 +74,8 @@ begin
         'ok', false,
         'code', coalesce(nullif(sqlerrm, ''), 'ALIAS_EXECUTION_DERIVATIVE_CHUNK_REFUSED'),
         'sqlstate', sqlstate,
+        'ordinal', v_current_ordinal,
+        'chunks_admitted_before_refusal', coalesce(v_current_ordinal, 1) - 1,
         'message', coalesce(nullif(v_detail, ''), 'A derivative sub-batch of the approved target set was refused'))
         || coalesce(nullif(v_hint, '')::jsonb, '{}'::jsonb);
   end;

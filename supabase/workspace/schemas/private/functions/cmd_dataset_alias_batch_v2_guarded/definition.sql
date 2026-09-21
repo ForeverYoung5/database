@@ -193,7 +193,14 @@ begin
         when 'object' then jsonb_build_array(v_target_ug #> '{unitGroupDataSet,units,unit}')
         else '[]'::jsonb
       end;
-      v_reference_unit_id text := v_target_ug #>> '{unitGroupDataSet,unitGroupInformation,quantitativeReference,referenceToReferenceUnit}';
+      -- The deployed rows nest the quantitative reference under unitGroupInformation (the path the
+      -- official authenticated export and the deployed expression index both show); the reviewed
+      -- producer's synthetic cohort carries the same string one level up, directly under
+      -- unitGroupDataSet. Both spellings name the same internal id and the table itself is only ever
+      -- read from units.unit[].
+      v_reference_unit_id text := coalesce(
+        v_target_ug #>> '{unitGroupDataSet,unitGroupInformation,quantitativeReference,referenceToReferenceUnit}',
+        v_target_ug #>> '{unitGroupDataSet,quantitativeReference,referenceToReferenceUnit}');
     begin
       if v_target_fp #>> '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@refObjectId}'
           is distinct from p_batch #>> '{target_snapshots,unitgroup,id}'

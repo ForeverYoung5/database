@@ -37498,7 +37498,14 @@ begin
         when 'object' then jsonb_build_array(v_target_ug #> '{unitGroupDataSet,units,unit}')
         else '[]'::jsonb
       end;
-      v_reference_unit_id text := v_target_ug #>> '{unitGroupDataSet,unitGroupInformation,quantitativeReference,referenceToReferenceUnit}';
+      -- The deployed rows nest the quantitative reference under unitGroupInformation (the path the
+      -- official authenticated export and the deployed expression index both show); the reviewed
+      -- producer's synthetic cohort carries the same string one level up, directly under
+      -- unitGroupDataSet. Both spellings name the same internal id and the table itself is only ever
+      -- read from units.unit[].
+      v_reference_unit_id text := coalesce(
+        v_target_ug #>> '{unitGroupDataSet,unitGroupInformation,quantitativeReference,referenceToReferenceUnit}',
+        v_target_ug #>> '{unitGroupDataSet,quantitativeReference,referenceToReferenceUnit}');
     begin
       if v_target_fp #>> '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@refObjectId}'
           is distinct from p_batch #>> '{target_snapshots,unitgroup,id}'
@@ -70997,6 +71004,7 @@ declare
   v_process_count integer := 0;
   v_detail text;
   v_hint text;
+  v_current_ordinal integer;
 begin
   v_chunks := private.dataset_alias_v2_derivative_chunks(p_request_id, p_plan_sha256, p_targets);
 
@@ -71017,6 +71025,7 @@ begin
   -- observe a partially admitted target set.
   begin
     for v_chunk in select * from jsonb_array_elements(v_chunks) as chunk loop
+      v_current_ordinal := (v_chunk->>'ordinal')::integer;
       v_result := util.admit_dataset_derivative_rebuild_batch(
         p_actor_user_id,
         (v_chunk->>'batch_id')::uuid,
@@ -71057,6 +71066,8 @@ begin
         'ok', false,
         'code', coalesce(nullif(sqlerrm, ''), 'ALIAS_EXECUTION_DERIVATIVE_CHUNK_REFUSED'),
         'sqlstate', sqlstate,
+        'ordinal', v_current_ordinal,
+        'chunks_admitted_before_refusal', coalesce(v_current_ordinal, 1) - 1,
         'message', coalesce(nullif(v_detail, ''), 'A derivative sub-batch of the approved target set was refused'))
         || coalesce(nullif(v_hint, '')::jsonb, '{}'::jsonb);
   end;
