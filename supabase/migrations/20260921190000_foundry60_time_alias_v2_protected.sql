@@ -2543,8 +2543,8 @@ begin
       or v_alias_result->>'operation_id' is distinct from v_request.operation_id
       or v_alias_result->>'plan_request_sha256'
         is distinct from v_request.plan_request_sha256
-      or (v_alias_result #>> '{counts,action_count}') is distinct from (v_plan #>> '{expected,action_count}')
-      or (v_alias_result #>> '{counts,exchange_count}') is distinct from (v_plan #>> '{expected,exchange_count}') then
+      or (v_alias_result #>> '{counts,action_count}') is distinct from (v_preflight.plan #>> '{expected,action_count}')
+      or (v_alias_result #>> '{counts,exchange_count}') is distinct from (v_preflight.plan #>> '{expected,exchange_count}') then
       v_failure := jsonb_build_object(
         'phase', 'alias',
         'code', 'ALIAS_EXECUTION_PRIMARY_REJECTED',
@@ -2555,29 +2555,31 @@ begin
         message = 'Protected primary alias execution rejected';
     end if;
 
+    -- The audit topology is the one the plan declared and the plan executor already verified: one row
+    -- audit per action, one summary per batch and the whole-plan summary. The ledger is counted here,
+    -- never trusted from the executor's response.
     select count(*)
     into v_alias_audit_count
     from private.command_audit_log as audit
     where audit.actor_user_id = v_request.actor_user_id
+      and audit.payload->>'plan_sha256' = v_request.plan_sha256
       and (
         (
           audit.command = 'cmd_dataset_alias_batch_v2_guarded'
-          and audit.payload->>'plan_sha256' = v_request.plan_sha256
-          and audit.payload->>'operation_id' = v_request.operation_id
-          and audit.payload->>'record_type' in ('row', 'batch_summary')
+          and audit.payload->>'record_type' in ('row', 'plan')
         )
         or (
           audit.command = 'cmd_dataset_alias_plan_v2_guarded'
-          and audit.payload->>'plan_request_sha256' = v_request.plan_request_sha256
           and audit.payload->>'record_type' = 'plan_summary'
         )
       );
 
-    if v_alias_audit_count <> 55 then
+    if v_alias_audit_count is distinct from
+      (v_preflight.plan #>> '{expected,audit_count}')::bigint then
       v_failure := jsonb_build_object(
         'phase', 'alias_audit',
         'code', 'ALIAS_EXECUTION_AUDIT_COUNT_MISMATCH',
-        'expected', 55,
+        'expected', (v_preflight.plan #>> '{expected,audit_count}')::bigint,
         'observed', v_alias_audit_count
       );
       raise exception using
@@ -2618,11 +2620,12 @@ begin
     );
 
     if coalesce((v_batch_result->>'ok')::boolean, false) is not true
-      or (v_batch_result->>'target_count')::integer is distinct from (select (preflight.plan #>> '{expected,derivative_target_count}')::integer from util.dataset_alias_execution_v2_preflights as preflight where preflight.id = v_request.id)
-      or coalesce(v_batch_result->>'flow_count', v_batch_result->>'flows')::integer
-        is distinct from (select count(*) from jsonb_array_elements((select preflight.plan->'derivative_targets' from util.dataset_alias_execution_v2_preflights as preflight where preflight.id = v_request.id)) as target where target->>'table' = 'flows')
-      or coalesce(v_batch_result->>'process_count', v_batch_result->>'processes')::integer
-        is distinct from (select count(*) from jsonb_array_elements((select preflight.plan->'derivative_targets' from util.dataset_alias_execution_v2_preflights as preflight where preflight.id = v_request.id)) as target where target->>'table' = 'processes') then
+      or (v_batch_result->>'target_count')::integer is distinct from
+        (v_preflight.plan #>> '{expected,derivative_target_count}')::integer
+      or coalesce(v_batch_result->>'flow_count', v_batch_result->>'flows')::integer is distinct from
+        (select count(*) from jsonb_array_elements(v_preflight.derivative_targets) as target where target->>'table' = 'flows')
+      or coalesce(v_batch_result->>'process_count', v_batch_result->>'processes')::integer is distinct from
+        (select count(*) from jsonb_array_elements(v_preflight.derivative_targets) as target where target->>'table' = 'processes') then
       v_failure := jsonb_build_object(
         'phase', 'derivative_batch',
         'code', 'ALIAS_EXECUTION_DERIVATIVE_ADMISSION_MISMATCH',
@@ -2851,17 +2854,14 @@ begin
   into v_alias_audit_count
   from private.command_audit_log as audit
   where audit.actor_user_id = v_actor
+    and audit.payload->>'plan_sha256' = v_request.plan_sha256
     and (
       (
         audit.command = 'cmd_dataset_alias_batch_v2_guarded'
-        and audit.payload->>'plan_sha256' = v_request.plan_sha256
-        and audit.payload->>'operation_id' = v_request.operation_id
-        and audit.payload->>'record_type' in ('row', 'batch_summary')
+        and audit.payload->>'record_type' in ('row', 'plan')
       )
       or (
         audit.command = 'cmd_dataset_alias_plan_v2_guarded'
-        and audit.payload->>'plan_request_sha256' =
-          v_request.plan_request_sha256
         and audit.payload->>'record_type' = 'plan_summary'
       )
     );
@@ -2889,10 +2889,17 @@ begin
   );
 
   if v_request.status in ('dispatching', 'dispatched', 'running') then
-    if v_alias_audit_count = 55
-      and v_derivative_child_count = 50
-      and v_derivative_flow_count = 23
-      and v_derivative_process_count = 27
+    if v_alias_audit_count = (v_preflight.plan #>> '{expected,audit_count}')::integer
+      and v_derivative_child_count =
+        (v_preflight.plan #>> '{expected,derivative_target_count}')::integer
+      and v_derivative_flow_count = (
+        select count(*)::integer from jsonb_array_elements(v_preflight.derivative_targets) as target
+        where target->>'table' = 'flows'
+      )
+      and v_derivative_process_count = (
+        select count(*)::integer from jsonb_array_elements(v_preflight.derivative_targets) as target
+        where target->>'table' = 'processes'
+      )
       and v_primary_closure_ok then
       update util.dataset_alias_execution_v2_requests
       set
@@ -2973,7 +2980,10 @@ begin
   if v_derivative_child_count > 0
     or v_request.status in ('derivatives_pending', 'completed') then
     v_batch_proof_read := true;
-    v_batch_proof := util.read_dataset_derivative_rebuild_batch(
+    -- The versioned alias cohort's derivative batch is its own size; the shape-specific v1 alias
+    -- reader pins the fifty-target cohort and cannot read it, so the generalized reader that accepts
+    -- any declared batch shape is the one this versioned read uses.
+    v_batch_proof := util.read_dataset_derivative_rebuild_batch_any(
       v_actor,
       p_request_id
     );
@@ -3006,10 +3016,18 @@ begin
   end if;
 
   if v_request.status = 'derivatives_pending' then
-    if v_alias_audit_count <> 55
-      or v_derivative_child_count <> 50
-      or v_derivative_flow_count <> 23
-      or v_derivative_process_count <> 27
+    if v_alias_audit_count
+        is distinct from (v_preflight.plan #>> '{expected,audit_count}')::integer
+      or v_derivative_child_count
+        is distinct from (v_preflight.plan #>> '{expected,derivative_target_count}')::integer
+      or v_derivative_flow_count is distinct from (
+        select count(*)::integer from jsonb_array_elements(v_preflight.derivative_targets) as target
+        where target->>'table' = 'flows'
+      )
+      or v_derivative_process_count is distinct from (
+        select count(*)::integer from jsonb_array_elements(v_preflight.derivative_targets) as target
+        where target->>'table' = 'processes'
+      )
       or not v_primary_closure_ok then
       update util.dataset_alias_execution_v2_requests
       set

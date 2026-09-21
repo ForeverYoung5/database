@@ -312,7 +312,8 @@ begin
         'message', 'The resubmission diverges from the stored plan summary');
     end if;
     return jsonb_build_object('ok', true, 'code', 'ALIAS_V2_PLAN_REPLAYED', 'status', 200,
-      'idempotent_replay', true, 'plan_sha256', v_plan_sha256, 'plan_request_sha256', v_plan_request_sha256,
+      'idempotent_replay', true, 'plan_sha256', v_plan_sha256, 'operation_id', v_plan_sha256,
+      'plan_request_sha256', v_plan_request_sha256,
       'batch_id', v_batch_id, 'counts', v_existing_summary->'counts', 'audit_count', v_audit_rows + v_batch_summary_rows + 1,
       'audit', jsonb_build_object('batch_result', v_batch_result));
   end if;
@@ -345,7 +346,8 @@ begin
   returning id into v_summary_id;
 
   return jsonb_build_object('ok', true, 'code', 'ALIAS_V2_PLAN_APPLIED', 'status', 200,
-    'idempotent_replay', false, 'plan_sha256', v_plan_sha256, 'plan_request_sha256', v_plan_request_sha256,
+    'idempotent_replay', false, 'plan_sha256', v_plan_sha256, 'operation_id', v_plan_sha256,
+    'plan_request_sha256', v_plan_request_sha256,
     'batch_id', v_batch_id,
     'counts', jsonb_build_object(
       'action_count', v_expected->>'action_count', 'flow_count', v_expected->>'flow_count',
