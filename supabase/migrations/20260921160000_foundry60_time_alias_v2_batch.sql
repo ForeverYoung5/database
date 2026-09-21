@@ -246,6 +246,8 @@ declare
   v_fu_count integer;
   v_prior_summary jsonb;
   v_replay boolean := false;
+  v_hint text;
+  v_detail text;
 begin
   if v_actor is null then
     return jsonb_build_object('ok', false, 'code', 'AUTH_REQUIRED', 'status', 401, 'message', 'Authentication required');
@@ -490,11 +492,13 @@ begin
           end if;
           v_prepared := v_prepared || jsonb_build_array(jsonb_build_object(
             'action_id', v_action->>'action_id', 'table', v_table, 'id', v_action->>'id', 'version', v_action->>'version',
+            'expected_modified_at', v_action->>'expected_modified_at',
             'before', v_before, 'desired', v_derived));
         elsif v_row_state is not distinct from 0 and v_row_payload = v_claim then
           -- already at the desired state: replay candidate, resolved after the write pass
           v_prepared := v_prepared || jsonb_build_array(jsonb_build_object(
             'action_id', v_action->>'action_id', 'table', v_table, 'id', v_action->>'id', 'version', v_action->>'version',
+            'expected_modified_at', v_action->>'expected_modified_at',
             'before', v_before, 'desired', v_claim, 'replayed', true));
         else
           perform private.dataset_alias_v2_deny('ALIAS_V2_ACTION_DRIFT', 409, 'An action no longer matches its frozen before content, owner, state or version', jsonb_build_object('action_id', v_action->>'action_id'));
@@ -515,7 +519,7 @@ begin
       for v_action in select * from jsonb_array_elements(v_prepared) loop
         if coalesce((v_action->>'replayed')::boolean, false) then
           select audit_log.id into v_prior_id
-          from public.command_audit_log as audit_log
+          from private.command_audit_log as audit_log
           where audit_log.command = v_command
             and audit_log.actor_user_id = v_actor
             and audit_log.target_table = v_action->>'table'
@@ -546,7 +550,7 @@ begin
         if v_committed_modified_at is null or v_committed_payload is distinct from v_action->'desired' then
           perform private.dataset_alias_v2_deny('ALIAS_V2_ACTION_DRIFT', 409, 'The guarded update lost its precondition', jsonb_build_object('action_id', v_action->>'action_id'));
         end if;
-        insert into public.command_audit_log (command, actor_user_id, target_table, target_id, target_version, payload)
+        insert into private.command_audit_log (command, actor_user_id, target_table, target_id, target_version, payload)
         values (v_command, v_actor, v_action->>'table', (v_action->>'id')::uuid, v_action->>'version',
           jsonb_build_object(
             'record_type', 'row', 'schema_version', v_schema_version, 'plan_sha256', v_plan_sha256,
@@ -565,7 +569,7 @@ begin
       -- Exact replay writes no new successful audit: the durable plan summary is the proof.
       if v_replayed = v_action_count then
         select audit_log.payload into v_prior_summary
-        from public.command_audit_log as audit_log
+        from private.command_audit_log as audit_log
         where audit_log.command = v_command
           and audit_log.actor_user_id = v_actor
           and audit_log.payload->>'record_type' = 'plan'
@@ -579,7 +583,7 @@ begin
           'counts', v_prior_summary->'counts', 'audit', jsonb_build_object('rows', v_audit_rows));
       end if;
 
-      insert into public.command_audit_log (command, actor_user_id, target_table, payload)
+      insert into private.command_audit_log (command, actor_user_id, target_table, payload)
       values (v_command, v_actor, 'flows', jsonb_build_object(
         'record_type', 'plan', 'schema_version', v_schema_version, 'plan_sha256', v_plan_sha256,
         'operation_id', v_operation_id, 'batch_id', v_batch_id, 'dimension', 'time', 'factor', v_factor,
@@ -603,11 +607,12 @@ begin
         'message', 'The v2 lock window could not be acquired; nothing was written');
     when others then
       -- All-or-none: the subtransaction's writes are already gone when this handler runs.
+      get stacked diagnostics v_hint = pg_exception_hint, v_detail = pg_exception_detail;
       if sqlstate = 'P0001' then
         return jsonb_build_object('ok', false, 'code', sqlerrm, 'status',
-          coalesce((nullif(pg_exception_hint, '')::jsonb->>'status')::integer, 409),
-          'message', pg_exception_detail,
-          'details', coalesce(nullif(pg_exception_hint, '')::jsonb->'details', '{}'::jsonb));
+          coalesce((nullif(v_hint, '')::jsonb->>'status')::integer, 409),
+          'message', v_detail,
+          'details', coalesce(nullif(v_hint, '')::jsonb->'details', '{}'::jsonb));
       end if;
       return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_INTERNAL_ERROR', 'status', 500,
         'message', 'The v2 batch failed closed without writing');
