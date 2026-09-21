@@ -377,7 +377,9 @@ begin
     );
   end if;
 
-  if v_plan->>'schema_version' is distinct from 'dataset-alias-plan.v2'
+  -- The plan schema is the closed discriminator: Time keeps its schema, Length*time has its own,
+  -- anything else refuses before any state is touched.
+  if private.dataset_protected_profile(v_plan) is null
     or v_plan->>'target_visibility' is distinct from 'owner_draft'
     or (v_plan->>'plan_sha256') !~ '^[a-f0-9]{64}$'
     -- The claimed plan digest is the producer's canonical self-hash of the plan document minus its
@@ -484,7 +486,13 @@ begin
       'plan_file_sha256', v_bindings->>'plan_file_sha256',
       'plan_sha256', v_plan_sha256
     ),
-    'target_snapshots', v_plan->'target_snapshots',
+    -- A3: one freeze shape for both profiles. The Length*time plan has no target_snapshots node of
+    -- its own, so its two canonical snapshots project into the same {flowproperty, unitgroup} shape.
+    'target_snapshots', case private.dataset_protected_profile(v_plan)
+      when 'length_time_v1' then jsonb_build_object(
+        'flowproperty', v_plan->'target_flow_property',
+        'unitgroup', v_plan->'target_unit_group')
+      else v_plan->'target_snapshots' end,
     'source_evidence', v_plan->'source_evidence',
     'sets', jsonb_build_object(
       'alias_plan_request_sha256',
@@ -657,7 +665,10 @@ begin
   -- derivative fences inside this exception block.  The controlled P0002
   -- exception always rolls those effects back before a durable token exists.
   begin
-    v_alias_result := private.cmd_dataset_alias_plan_v2_guarded(v_plan);
+    v_alias_result := case private.dataset_protected_profile(v_plan)
+      when 'alias_v2' then private.cmd_dataset_alias_plan_v2_guarded(v_plan)
+      when 'length_time_v1' then private.cmd_dataset_length_time_v1_guarded(v_plan)
+    end;
     if coalesce((v_alias_result->>'ok')::boolean, false) is not true
       or coalesce((v_alias_result->>'idempotent_replay')::boolean, true)
       or (v_alias_result #>> '{counts,action_count}') is distinct from (v_plan #>> '{expected,action_count}')
@@ -741,6 +752,10 @@ begin
         audit.command = 'cmd_dataset_alias_plan_v2_guarded'
         and audit.payload->>'plan_request_sha256' = v_plan_request_sha256
       )
+        or (
+          audit.command = 'cmd_dataset_length_time_v1_guarded'
+          and audit.payload->>'plan_sha256' = v_plan_sha256
+        )
     );
 
   select count(*)::integer

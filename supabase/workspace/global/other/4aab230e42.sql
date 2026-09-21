@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "private"."dataset_length_time_v1_scalar_ok"("p_value" "jsonb", "p_pattern" "text") IS 'Null-safe required-scalar check: the value must be a JSON string matching the pattern; JSON null, absent keys, numbers and malformed strings all return false.';

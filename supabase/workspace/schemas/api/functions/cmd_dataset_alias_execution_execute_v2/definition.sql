@@ -122,7 +122,10 @@ begin
   );
 
   begin
-    v_alias_result := private.cmd_dataset_alias_plan_v2_guarded(v_preflight.plan);
+    v_alias_result := case private.dataset_protected_profile(v_preflight.plan)
+      when 'alias_v2' then private.cmd_dataset_alias_plan_v2_guarded(v_preflight.plan)
+      when 'length_time_v1' then private.cmd_dataset_length_time_v1_guarded(v_preflight.plan)
+    end;
 
     if coalesce((v_alias_result->>'ok')::boolean, false) is not true
       or coalesce((v_alias_result->>'idempotent_replay')::boolean, true)
@@ -159,6 +162,10 @@ begin
           audit.command = 'cmd_dataset_alias_plan_v2_guarded'
           and audit.payload->>'record_type' = 'plan_summary'
         )
+        or (
+          audit.command = 'cmd_dataset_length_time_v1_guarded'
+          and audit.payload->>'record_type' in ('row', 'plan', 'plan_summary')
+        )
       );
 
     if v_alias_audit_count is distinct from
@@ -174,11 +181,12 @@ begin
         message = 'Protected alias audit set is incomplete';
     end if;
 
-    v_primary_closure :=
-      util.read_dataset_alias_execution_v2_primary_closure(
-        v_request.actor_user_id,
-        v_preflight.plan
-      );
+    v_primary_closure := case private.dataset_protected_profile(v_preflight.plan)
+      when 'alias_v2' then util.read_dataset_alias_execution_v2_primary_closure(
+        v_request.actor_user_id, v_preflight.plan)
+      when 'length_time_v1' then util.read_dataset_length_time_v1_primary_closure(
+        v_request.actor_user_id, v_preflight.plan)
+    end;
 
     if coalesce(
         (v_primary_closure->>'live_closure_proof')::boolean,

@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "util"."read_dataset_length_time_v1_terminal_proof"("p_actor_user_id" "uuid", "p_plan" "jsonb") IS 'Strict 5-key Length*time terminal proof (status/plan_sha256/counts/audit/readback) built from the committed ledger identifiers and fresh current-row observations; the functional-unit text must equal the plan before image because this profile never moves it.';

@@ -151,6 +151,10 @@ begin
         audit.command = 'cmd_dataset_alias_plan_v2_guarded'
         and audit.payload->>'record_type' = 'plan_summary'
       )
+        or (
+          audit.command = 'cmd_dataset_length_time_v1_guarded'
+          and audit.payload->>'record_type' in ('row', 'plan', 'plan_summary')
+        )
     );
 
   select
@@ -169,11 +173,12 @@ begin
         p_request_id, v_request.plan_sha256, v_preflight.derivative_targets)) as chunk
     );
 
-  v_primary_closure :=
-    util.read_dataset_alias_execution_v2_primary_closure(
-      v_actor,
-      v_preflight.plan
-    );
+  v_primary_closure := case private.dataset_protected_profile(v_preflight.plan)
+      when 'alias_v2' then util.read_dataset_alias_execution_v2_primary_closure(
+        v_actor, v_preflight.plan)
+      when 'length_time_v1' then util.read_dataset_length_time_v1_primary_closure(
+        v_actor, v_preflight.plan)
+    end;
   v_primary_closure_ok := coalesce(
     (v_primary_closure->>'live_closure_proof')::boolean,
     false
@@ -452,7 +457,10 @@ begin
     and v_batch_proof->>'status' = 'completed'
     and coalesce((v_batch_proof->>'causal_terminal_proof')::boolean, false) is true
     and coalesce((v_batch_proof->>'membership_exact')::boolean, false) is true then
-    v_terminal_proof := util.read_dataset_alias_execution_v2_terminal_proof(v_actor, v_preflight.plan);
+    v_terminal_proof := case private.dataset_protected_profile(v_preflight.plan)
+      when 'alias_v2' then util.read_dataset_alias_execution_v2_terminal_proof(v_actor, v_preflight.plan)
+      when 'length_time_v1' then util.read_dataset_length_time_v1_terminal_proof(v_actor, v_preflight.plan)
+    end;
   end if;
 
   return jsonb_build_object(

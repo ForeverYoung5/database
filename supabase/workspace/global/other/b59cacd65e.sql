@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "private"."dataset_protected_profile"("p_plan" "jsonb") IS 'Closed internal profile discriminator for the protected lifecycle: the plan schema_version selects alias_v2 or length_time_v1; anything else resolves to null and is refused. Never a caller-supplied function, path or factor selector.';

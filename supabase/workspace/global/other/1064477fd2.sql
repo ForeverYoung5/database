@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "private"."dataset_length_time_v1_factor"() IS 'The reviewed Length*time kmy-to-m*a constant factor 1000; the plan, the locked unit group and the derived ratio must all agree on it.';
