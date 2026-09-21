@@ -33,8 +33,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-21
-lastReviewedCommit: 47168c0
-lastReviewedNote: "Reviewed for Database #670 with workspace #1432: adds the guarded atomic owner-draft before-content save proof row (SQL suite plus the two-session concurrency runner); existing change-type rows and deployment boundaries are unchanged."
+lastReviewedCommit: ee159966823ead649180b49ab6d961cbc7ee3101
+lastReviewedNote: "Reviewed for Database #670 with workspace #1432: adds the guarded atomic owner-draft before-content save proof row (SQL suite plus the two-session concurrency runner); existing change-type rows and deployment boundaries are unchanged. Reviewed for Database #673 (Foundry #60) with workspace #1432: adds the Time alias v2 wire RED baseline under supabase/tests; it pins the frozen v1 surface and its v2-payload refusal and asserts the not-yet-implemented v2 contract surface, so no rule, proof bar, branch or capability semantics change."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

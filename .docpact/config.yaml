@@ -1,8 +1,8 @@
 version: 1
 layout: repo
 lastReviewedAt: "2026-09-21"
-lastReviewedCommit: "47168c0"
-lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the guarded atomic owner-draft before-content save adds one api facade, one capability manifest row and one SQL/concurrency proof pair; governed routing, ownership, coverage and lint rules are unchanged."
+lastReviewedCommit: "ee159966823ead649180b49ab6d961cbc7ee3101"
+lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the guarded atomic owner-draft before-content save adds one api facade, one capability manifest row and one SQL/concurrency proof pair; governed routing, ownership, coverage and lint rules are unchanged. Reviewed for Database #673 (Foundry #60) with workspace #1432: adds the Time alias v2 wire RED baseline under supabase/tests; it pins the frozen v1 surface and its v2-payload refusal and asserts the not-yet-implemented v2 contract surface, so no rule, proof bar, branch or capability semantics change."
 
 # Keep deterministic governance facts here.
 # AGENTS.md remains the repo contract entrypoint.
