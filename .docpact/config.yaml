@@ -1,7 +1,7 @@
 version: 1
 layout: repo
 lastReviewedAt: "2026-09-21"
-lastReviewedCommit: 7f3c73651b5743bd4ff7da54e4ce0918c1229b63
+lastReviewedCommit: "47168c0"
 lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the guarded atomic owner-draft before-content save adds one api facade, one capability manifest row and one SQL/concurrency proof pair; governed routing, ownership, coverage and lint rules are unchanged."
 
 # Keep deterministic governance facts here.

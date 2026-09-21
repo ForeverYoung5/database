@@ -23,7 +23,7 @@ checkPaths:
   - .env.supabase.dev.local.example
   - .env.supabase.main.local.example
 lastReviewedAt: 2026-09-21
-lastReviewedCommit: f3d91da8daaba375b04cd454957b56c652e75605
+lastReviewedCommit: 47168c0
 lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the local contract step gains one guarded owner-draft save suite; branch bindings, Preview classifier inputs, persistent-Dev deploy steps and hosted verification are unchanged."
 related:
   - ../../AGENTS.md

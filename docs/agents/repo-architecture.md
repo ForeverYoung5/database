@@ -31,7 +31,7 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-21
-lastReviewedCommit: 7f3c73651b5743bd4ff7da54e4ce0918c1229b63
+lastReviewedCommit: 47168c0
 lastReviewedNote: "Reviewed for Database #670 with workspace #1432: records the guarded owner-draft before-content save facade beside the existing DB-CORE-WRITE-01 command routes; repo shape and generated-path boundaries are unchanged."
 related:
   - ../../AGENTS.md

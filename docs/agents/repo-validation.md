@@ -33,7 +33,7 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-21
-lastReviewedCommit: 7f3c73651b5743bd4ff7da54e4ce0918c1229b63
+lastReviewedCommit: 47168c0
 lastReviewedNote: "Reviewed for Database #670 with workspace #1432: adds the guarded atomic owner-draft before-content save proof row (SQL suite plus the two-session concurrency runner); existing change-type rows and deployment boundaries are unchanged."
 related:
   - ../../AGENTS.md
