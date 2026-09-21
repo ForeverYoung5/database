@@ -469,14 +469,12 @@ begin
         when 'object' then jsonb_build_array(v_target_ug #> '{unitGroupDataSet,units,unit}')
         else '[]'::jsonb
       end;
-      -- The deployed rows nest the quantitative reference under unitGroupInformation (the path the
-      -- official authenticated export and the deployed expression index both show); the reviewed
-      -- producer's synthetic cohort carries the same string one level up, directly under
-      -- unitGroupDataSet. Both spellings name the same internal id and the table itself is only ever
-      -- read from units.unit[].
-      v_reference_unit_id text := coalesce(
-        v_target_ug #>> '{unitGroupDataSet,unitGroupInformation,quantitativeReference,referenceToReferenceUnit}',
-        v_target_ug #>> '{unitGroupDataSet,quantitativeReference,referenceToReferenceUnit}');
+      -- The base unit is selected at its one canonical parent path, exactly as the official
+      -- authenticated export and the deployed expression index show it:
+      -- unitGroupDataSet.unitGroupInformation.quantitativeReference.referenceToReferenceUnit. A
+      -- root-level lookalike is not a fallback — it yields no reference id here and the unit group is
+      -- refused below — and the table itself is only ever read from units.unit[].
+      v_reference_unit_id text := v_target_ug #>> '{unitGroupDataSet,unitGroupInformation,quantitativeReference,referenceToReferenceUnit}';
     begin
       if v_target_fp #>> '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@refObjectId}'
           is distinct from p_batch #>> '{target_snapshots,unitgroup,id}'
@@ -493,7 +491,7 @@ begin
           where unit->>'name' = 'hr' and (unit->>'meanValue')::numeric = private.dataset_alias_v2_factor()
         ) then
         perform private.dataset_alias_v2_deny('ALIAS_V2_FACTOR_UNSUPPORTED', 409,
-          'The target unit group does not carry the reviewed year base and exact hour factor');
+          'The target unit group does not carry the reviewed year base and exact hour factor at the canonical quantitative-reference path');
       end if;
     end;
 
