@@ -982,6 +982,7 @@ begin
         || '/rest/v1/rpc/cmd_dataset_alias_execution_execute_v2',
       headers => jsonb_build_object(
         'Content-Type', 'application/json',
+        'Content-Profile', 'api',
         'Authorization', 'Bearer ' || v_service_key,
         'apikey', v_service_key
       ),
@@ -1080,7 +1081,7 @@ $_$;
 ALTER FUNCTION "api"."cmd_dataset_alias_execution_admit_v2_guarded"("p_request" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "api"."cmd_dataset_alias_execution_admit_v2_guarded"("p_request" "jsonb") IS 'Consumes one actor-owned unexpired preflight token, binds three passed gate digests, persists attempt_count=1, and enqueues at most one service executor request. Repeated admission is rejected and status/readback never redispatches.';
+COMMENT ON FUNCTION "api"."cmd_dataset_alias_execution_admit_v2_guarded"("p_request" "jsonb") IS 'Consumes one actor-owned unexpired preflight token, binds three passed gate digests, persists attempt_count=1, and enqueues at most one service executor request whose queued callback explicitly selects the exposed api content profile. Repeated admission is rejected and status/readback never redispatches.';
 
 
 

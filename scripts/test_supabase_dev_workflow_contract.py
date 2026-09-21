@@ -404,6 +404,7 @@ def main() -> int:
         "supabase db reset --no-seed",
         "supabase test db supabase/tests/20260830_oauth_client_capability_foundation.sql",
         "supabase test db supabase/tests/20260831_oauth_actor_command_capabilities.sql",
+        "supabase test db supabase/tests/20260925_foundry60_cli_alias_oauth_capability.sql",
         "supabase test db supabase/tests/20260827_portal_sitemap_shards_v1.sql",
         "supabase test db supabase/tests/20260909_review_queue_full_text_search.sql",
         "supabase test db supabase/tests/20260909_tidas_partial_import.sql",
@@ -423,6 +424,7 @@ def main() -> int:
         "and .max_rows == 1000",
         "Accept-Profile: private",
         "Content-Profile: public",
+        "python3 scripts/test_protected_alias_postgrest_routing.py",
     )
     failures.extend(f"missing {token}" for token in required if token not in text)
 

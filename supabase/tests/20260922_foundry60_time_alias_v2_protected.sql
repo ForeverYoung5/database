@@ -22,7 +22,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth, private;
 
-select plan(70);
+select plan(75);
 
 -- ------------------------------------------------------------------------------------------------
 -- Fixture: the CLI's own before images, seeded exactly as emitted (the generated block also clears
@@ -315,6 +315,54 @@ select is(
    where request.id = 'fcfbc113-8d7e-575c-a7f3-ba5abfbf2265'::uuid),
   1,
   'exactly one executor callback is queued'
+);
+-- The queued packet is the deployed transport contract: it must address the exact
+-- executor route, select the exposed `api` schema explicitly, carry the service-key
+-- authentication, and keep only the nonce-bound request body.
+select is(
+  (select queued.method || ' ' || queued.url
+     from net.http_request_queue as queued
+     join util.dataset_alias_execution_v2_requests as request on request.net_request_id = queued.id
+    where request.id = 'fcfbc113-8d7e-575c-a7f3-ba5abfbf2265'::uuid),
+  'POST https://qgzvkongdjqiiamzbbts.supabase.co/rest/v1/rpc/cmd_dataset_alias_execution_execute_v2',
+  'the queued callback targets the exact protected executor route'
+);
+select is(
+  (select concat_ws('|',
+      queued.headers ->> 'Content-Type',
+      coalesce(queued.headers ->> 'Content-Profile', '<omitted>'))
+     from net.http_request_queue as queued
+     join util.dataset_alias_execution_v2_requests as request on request.net_request_id = queued.id
+    where request.id = 'fcfbc113-8d7e-575c-a7f3-ba5abfbf2265'::uuid),
+  'application/json|api',
+  'the queued callback explicitly selects the exposed api content profile'
+);
+select is(
+  (select concat_ws('|',
+      (queued.headers ->> 'Authorization' = 'Bearer ' || util.project_secret_key())::text,
+      (queued.headers ->> 'apikey' = util.project_secret_key())::text)
+     from net.http_request_queue as queued
+     join util.dataset_alias_execution_v2_requests as request on request.net_request_id = queued.id
+    where request.id = 'fcfbc113-8d7e-575c-a7f3-ba5abfbf2265'::uuid),
+  'true|true',
+  'the queued callback keeps the service-key authentication headers'
+);
+select is(
+  (select (select array_agg(key order by key)
+             from jsonb_object_keys(convert_from(queued.body, 'UTF8')::jsonb) as key)
+     from net.http_request_queue as queued
+     join util.dataset_alias_execution_v2_requests as request on request.net_request_id = queued.id
+    where request.id = 'fcfbc113-8d7e-575c-a7f3-ba5abfbf2265'::uuid),
+  array['p_nonce', 'p_request_id']::text[],
+  'the queued callback body keeps exactly the nonce-bound request fields'
+);
+select is(
+  (select convert_from(queued.body, 'UTF8')::jsonb ->> 'p_request_id' = request.id::text
+     from net.http_request_queue as queued
+     join util.dataset_alias_execution_v2_requests as request on request.net_request_id = queued.id
+    where request.id = 'fcfbc113-8d7e-575c-a7f3-ba5abfbf2265'::uuid),
+  true,
+  'the queued callback body binds the admitted request identity'
 );
 select is(
   (api.cmd_dataset_alias_execution_admit_v2_guarded(pg_temp.admit_request(
