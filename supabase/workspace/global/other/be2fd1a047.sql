@@ -1,1 +1,0 @@
-COMMENT ON FUNCTION "util"."read_dataset_length_time_v1_primary_closure"("p_actor" "uuid", "p_plan" "jsonb") IS 'Fresh Length*time primary closure readback: every claimed owner-draft process must currently hold exactly its claimed desired payload for this actor.';

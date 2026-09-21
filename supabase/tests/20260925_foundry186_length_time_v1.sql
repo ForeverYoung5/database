@@ -9,7 +9,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth, private, util;
 
-select plan(109);
+select plan(121);
 
 -- ------------------------------------------------------------------------------------------------
 -- Fixture: canonical unit group, property, 13 claimed flows, 1 unrelated flow, 13 processes.
@@ -566,6 +566,52 @@ select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.re
 select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.reseal(jsonb_set(pg_temp.build_plan(), '{expected}', (pg_temp.build_plan()->'expected') - 'audit_count', false)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'absent: an expected block missing one count refuses');
 select is((select count(*)::text from private.command_audit_log), (select n::text from audits_ref), 'absent: every absent-field refusal wrote zero audit rows');
 select is((select count(*)::text from public.processes p join ids on ids.process_id = p.id where p.json_ordered::jsonb #>> '{processDataSet,exchanges,exchange,0,meanAmount}' = ids.literal), '13', 'absent: every process row still holds its byte-exact before literal');
+select pg_temp.reset_fixture();
+select pg_temp.refresh_plan();
+
+-- ------------------------------------------------------------------------------------------------
+-- 9. Post-apply fresh-read drift: live_closure_proof is not a claimed-row-count tautology. Every
+-- case applies the real plan, drifts the live world, and asserts the read-time proof refuses.
+-- ------------------------------------------------------------------------------------------------
+select pg_temp.reset_fixture();
+select pg_temp.refresh_plan();
+create temp table run_apply on commit drop as select private.cmd_dataset_length_time_v1_guarded((select p from plan_doc)) as r;
+select is((select util.read_dataset_length_time_v1_primary_closure('c536ee37-64ab-427b-b7e3-4e2bb4fdffb7', (select p from plan_doc))->>'live_closure_proof'), 'true', 'fresh read: the applied fixture still closes on every revalidated layer');
+select is((select util.read_dataset_length_time_v1_primary_closure('c536ee37-64ab-427b-b7e3-4e2bb4fdffb7', (select p from plan_doc))->>'occurrence_closure_ok'), 'true', 'fresh read: the exact global occurrence closure holds at read time');
+
+-- A. a new live consumer of a claimed flow (the process rows are at their desired image now)
+insert into public.processes (id, version, user_id, state_code, json_ordered, modified_at)
+select 'b20c0de0-0000-4000-8000-0000000000aa', '00.00.001', 'c536ee37-64ab-427b-b7e3-4e2bb4fdffb7', 0,
+  (select p #> '{actions,0,desired_json_ordered}' from plan_doc), timestamptz '2026-09-22 00:00:02+00';
+create temp table drift_extra on commit drop as select util.read_dataset_length_time_v1_primary_closure('c536ee37-64ab-427b-b7e3-4e2bb4fdffb7', (select p from plan_doc)) as c;
+select is((select c->>'live_closure_proof' from drift_extra), 'false', 'fresh read: an extra live consumer breaks the closure (39 -> 42)');
+select is((select c->>'occurrence_closure_ok' from drift_extra), 'false', 'fresh read: the occurrence closure reports the mismatch');
+select is((select c->>'live_occurrence_count' from drift_extra), '42', 'fresh read: the live occurrence count is recomputed, not claimed');
+select is((select c->>'claimed_occurrence_count' from drift_extra), '39', 'fresh read: the claimed occurrence count comes from the plan');
+delete from public.processes where id = 'b20c0de0-0000-4000-8000-0000000000aa';
+
+-- B. the canonical unit group rescaled after apply
+select pg_temp.set_ug_kmy(to_jsonb('999'::text));
+create temp table drift_ug on commit drop as select util.read_dataset_length_time_v1_primary_closure('c536ee37-64ab-427b-b7e3-4e2bb4fdffb7', (select p from plan_doc)) as c;
+select is((select c->>'support_binding_ok' from drift_ug), 'false', 'fresh read: a rescaled canonical factor breaks the support binding');
+select is((select c->>'live_closure_proof' from drift_ug), 'false', 'fresh read: a rescaled canonical factor is not applied');
+select pg_temp.restore_ug();
+
+-- C. a claimed read-only flow payload drifted
+create temp table flow_first on commit drop as select flow_id as id from ids order by i limit 1;
+update public.flows set json_ordered = jsonb_set(json_ordered::jsonb, '{flowDataSet,flowInformation,dataSetInformation,common:name}', to_jsonb('drifted'::text), true)::json
+  where id = (select id from flow_first);
+create temp table drift_flow on commit drop as select util.read_dataset_length_time_v1_primary_closure('c536ee37-64ab-427b-b7e3-4e2bb4fdffb7', (select p from plan_doc)) as c;
+select is((select c->>'flow_snapshot_drift_count' from drift_flow), '1', 'fresh read: a drifted read-only flow is counted, never silently accepted');
+select is((select c->>'live_closure_proof' from drift_flow), 'false', 'fresh read: a drifted read-only flow is not applied');
+select pg_temp.reset_fixture();
+select pg_temp.refresh_plan();
+
+-- D. the terminal proof refuses to label drift applied (the same gate the public read uses)
+select is((select util.read_dataset_length_time_v1_terminal_proof('c536ee37-64ab-427b-b7e3-4e2bb4fdffb7', (select p from plan_doc))->>'status'), 'failed', 'fresh read: the terminal proof refuses a drifted fixture');
+-- E. and the positive path still ends applied once the fixture is clean again
+create temp table run_apply2 on commit drop as select private.cmd_dataset_length_time_v1_guarded((select p from plan_doc)) as r;
+select is((select util.read_dataset_length_time_v1_terminal_proof('c536ee37-64ab-427b-b7e3-4e2bb4fdffb7', (select p from plan_doc))->>'status'), 'applied', 'fresh read: the clean applied fixture still proves applied');
 select pg_temp.reset_fixture();
 select pg_temp.refresh_plan();
 

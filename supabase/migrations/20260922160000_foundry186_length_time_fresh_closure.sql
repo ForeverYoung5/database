@@ -1,7 +1,28 @@
-CREATE OR REPLACE FUNCTION "util"."read_dataset_length_time_v1_primary_closure"("p_actor" "uuid", "p_plan" "jsonb") RETURNS "jsonb"
-    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
-    SET "search_path" TO ''
-    AS $$
+-- Foundry #186 / Database #674: the Length*time fresh read closure re-validates the whole claim.
+--
+-- Root reproduced a proof gap (rollback-only probe): the closure labelled only the thirteen claimed
+-- Process payload matches as live_closure_proof, so after a valid apply an extra live consumer of a
+-- claimed Flow (39 -> 42 occurrences) or a rescaled canonical unit group (kmy 1000 -> 999) still
+-- reported the fresh closure true. A live_closure_proof must not be a claimed-row-count tautology:
+-- the profile's scientific meaning rests on the bound referents, so the read re-validates them.
+--
+-- The hardened closure re-checks, on the same read snapshot and without taking any lock:
+--   1. every claimed read-only Flow: its live payload digest equals the plan's declared digest and the
+--      row is still visible to the actor (published state 100, or a state-0 row owned by the actor);
+--   2. the canonical FlowProperty and UnitGroup digests, and the unit group's own factor premise
+--      (reference m*a at 1, kmy at the reviewed constant) at the canonical path;
+--   3. the exact global occurrence closure: every live occurrence of the claimed flows, any owner and
+--      any state, is exactly the plan's claimed instance set and every live occurrence is a state-0
+--      row of the actor.
+-- A false closure is reported as counts and booleans only; no foreign payload is ever returned.
+-- Time's closure is untouched (its own evidence has not shown this defect).
+
+create or replace function util.read_dataset_length_time_v1_primary_closure(p_actor uuid, p_plan jsonb)
+returns jsonb
+language plpgsql
+stable security definer
+set search_path to ''
+as $$
 declare
   v_action jsonb;
   v_found boolean;
@@ -159,6 +180,7 @@ begin
 end
 $$;
 
-ALTER FUNCTION "util"."read_dataset_length_time_v1_primary_closure"("p_actor" "uuid", "p_plan" "jsonb") OWNER TO "postgres";
-
-REVOKE ALL ON FUNCTION "util"."read_dataset_length_time_v1_primary_closure"("p_actor" "uuid", "p_plan" "jsonb") FROM PUBLIC;
+alter function util.read_dataset_length_time_v1_primary_closure(uuid, jsonb) owner to postgres;
+revoke all on function util.read_dataset_length_time_v1_primary_closure(uuid, jsonb) from public;
+comment on function util.read_dataset_length_time_v1_primary_closure(uuid, jsonb) is
+  'Fresh Length*time primary closure readback: every claimed owner-draft process must hold its claimed desired payload, every claimed read-only flow must still match its declared digest and remain visible, the canonical property and unit group must still bind with the reviewed ratio, and the exact global occurrence closure of the claimed flows must still hold. Reported as counts and booleans only; no foreign payload is returned.';
