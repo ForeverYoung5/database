@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "private"."dataset_alias_v2_multiply_amount"("p_amount" "text", "p_factor" "text") IS 'Exact decimal multiplication by the approved v2 factor; bounded input, canonical output, null otherwise.';
