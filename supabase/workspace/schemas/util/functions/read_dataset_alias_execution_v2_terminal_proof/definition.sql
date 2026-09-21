@@ -93,4 +93,6 @@ begin
 end
 $$;
 
-ALTER FUNCTION "util"."read_dataset_alias_execution_v2_terminal_proof"("p_actor_user_id" "uuid", "p_plan" "jsonb") OWNER TO "supabase_admin";
+ALTER FUNCTION "util"."read_dataset_alias_execution_v2_terminal_proof"("p_actor_user_id" "uuid", "p_plan" "jsonb") OWNER TO "postgres";
+
+REVOKE ALL ON FUNCTION "util"."read_dataset_alias_execution_v2_terminal_proof"("p_actor_user_id" "uuid", "p_plan" "jsonb") FROM PUBLIC;

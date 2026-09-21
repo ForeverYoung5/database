@@ -77227,7 +77227,11 @@ end
 $$;
 
 
-ALTER FUNCTION "util"."read_dataset_alias_execution_v2_terminal_proof"("p_actor_user_id" "uuid", "p_plan" "jsonb") OWNER TO "supabase_admin";
+ALTER FUNCTION "util"."read_dataset_alias_execution_v2_terminal_proof"("p_actor_user_id" "uuid", "p_plan" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "util"."read_dataset_alias_execution_v2_terminal_proof"("p_actor_user_id" "uuid", "p_plan" "jsonb") IS 'Strict 5-key terminal proof (status/plan_sha256/counts/audit/readback) built from the committed ledger identifiers and fresh current-row observations. Callers emit it only after the live primary closure and every derivative child causal terminal proof pass.';
+
 
 
 CREATE OR REPLACE FUNCTION "util"."read_dataset_alias_v2_derivative_chunks"("p_actor_user_id" "uuid", "p_request_id" "uuid", "p_plan_sha256" "text", "p_targets" "jsonb") RETURNS "jsonb"
@@ -90198,6 +90202,10 @@ REVOKE ALL ON FUNCTION "util"."read_dataset_alias_execution_primary_closure"("p_
 
 
 REVOKE ALL ON FUNCTION "util"."read_dataset_alias_execution_v2_primary_closure"("p_actor" "uuid", "p_plan" "jsonb") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "util"."read_dataset_alias_execution_v2_terminal_proof"("p_actor_user_id" "uuid", "p_plan" "jsonb") FROM PUBLIC;
 
 
 
