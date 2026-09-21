@@ -11,6 +11,9 @@ declare
   v_row jsonb;
   v_plan_summary_id bigint;
   v_batch_summary_id bigint;
+  v_drift_count integer := 0;
+  v_desired_sha256 text;
+  v_expected_text text;
 begin
   select coalesce(jsonb_agg(jsonb_build_object(
       'audit_id', audit.id,
@@ -56,17 +59,27 @@ begin
       and process.user_id = p_actor_user_id
       and process.state_code = 0;
     if v_row is not null then
-      -- No text action exists in this profile: the functional unit text must equal the plan's own
-      -- before image, byte for byte.
-      v_row := jsonb_set(v_row, '{functional_unit_text}', coalesce(
-        to_jsonb(v_action #>> '{expected_json_ordered,processDataSet,processInformation,quantitativeReference,functionalUnitOrOther,#text}'),
-        'null'::jsonb), false);
+      -- The reported observation is the live row, never the plan's claim: a drifted payload or a
+      -- drifted functional-unit text is reported as it actually is, and it also marks the proof as
+      -- not applied. No text action exists in this profile, so the expectation is the plan's own
+      -- before image.
+      v_desired_sha256 := v_action->>'desired_sha256';
+      v_expected_text := v_action #>> '{expected_json_ordered,processDataSet,processInformation,quantitativeReference,functionalUnitOrOther,#text}';
+      if (v_row->>'observed_sha256') is distinct from v_desired_sha256
+        or (v_row->>'functional_unit_text') is distinct from v_expected_text then
+        v_drift_count := v_drift_count + 1;
+      end if;
       v_readback_rows := v_readback_rows || jsonb_build_array(v_row);
     end if;
   end loop;
 
   return jsonb_build_object(
-    'status', 'applied',
+    -- Applied only when every claimed row is observed exactly at its desired image with its expected
+    -- functional-unit text; a drifted observation can never be labelled applied.
+    'status', case
+      when v_drift_count = 0
+        and jsonb_array_length(v_readback_rows) = coalesce((v_expected->>'action_count')::integer, -1)
+      then 'applied' else 'failed' end,
     'plan_sha256', v_plan_sha256,
     'counts', v_expected,
     'audit', jsonb_build_object(

@@ -48,9 +48,9 @@ begin
       perform private.dataset_alias_v2_deny('LENGTH_TIME_PLAN_INVALID', 400, 'Plan request must match dataset-length-time-plan.v1 exactly');
     end if;
     if p_plan->>'schema_version' is distinct from v_schema_version
-      or (p_plan->>'plan_sha256') !~ '^[a-f0-9]{64}$'
-      or (p_plan->>'actor_id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-      or p_plan->>'target_visibility' is distinct from 'owner_draft'
+      or not private.dataset_length_time_v1_scalar_ok(p_plan->'plan_sha256', '^[a-f0-9]{64}$')
+      or not private.dataset_length_time_v1_scalar_ok(p_plan->'actor_id', '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+      or not private.dataset_length_time_v1_scalar_ok(p_plan->'target_visibility', '^owner_draft$')
       or jsonb_typeof(p_plan->'flow_snapshots') is distinct from 'array'
       or jsonb_array_length(p_plan->'flow_snapshots') < 1
       or jsonb_typeof(p_plan->'target_flow_property') is distinct from 'object'
@@ -59,7 +59,22 @@ begin
       or jsonb_typeof(p_plan->'expected') is distinct from 'object'
       or jsonb_typeof(p_plan->'actions') is distinct from 'array'
       or jsonb_array_length(p_plan->'actions') < 1
-      or jsonb_array_length(p_plan->'actions') > 4096 then
+      or jsonb_array_length(p_plan->'actions') > 4096
+      -- The two canonical support snapshots are closed three-key objects with typed scalars.
+      or (exists (
+            select 1 from jsonb_object_keys(p_plan->'target_flow_property') as key(name)
+            where key.name <> all (array['id', 'version', 'sha256']))
+          or (select count(*) from jsonb_object_keys(p_plan->'target_flow_property')) <> 3
+          or not private.dataset_length_time_v1_scalar_ok(p_plan->'target_flow_property'->'id', '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+          or not private.dataset_length_time_v1_scalar_ok(p_plan->'target_flow_property'->'version', '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$')
+          or not private.dataset_length_time_v1_scalar_ok(p_plan->'target_flow_property'->'sha256', '^[a-f0-9]{64}$'))
+      or (exists (
+            select 1 from jsonb_object_keys(p_plan->'target_unit_group') as key(name)
+            where key.name <> all (array['id', 'version', 'sha256']))
+          or (select count(*) from jsonb_object_keys(p_plan->'target_unit_group')) <> 3
+          or not private.dataset_length_time_v1_scalar_ok(p_plan->'target_unit_group'->'id', '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+          or not private.dataset_length_time_v1_scalar_ok(p_plan->'target_unit_group'->'version', '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$')
+          or not private.dataset_length_time_v1_scalar_ok(p_plan->'target_unit_group'->'sha256', '^[a-f0-9]{64}$')) then
       perform private.dataset_alias_v2_deny('LENGTH_TIME_PLAN_INVALID', 400,
         'Plan identity, actor, owner_draft visibility, read-only flow snapshots, canonical property and unit group, source evidence, expected counts and between one and 4096 actions are required');
     end if;
@@ -153,6 +168,10 @@ begin
       v_reference_unit_id := v_target_ug #>> '{unitGroupDataSet,unitGroupInformation,quantitativeReference,referenceToReferenceUnit}';
       if v_target_fp #>> '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@refObjectId}'
             is distinct from (p_plan #>> '{target_unit_group,id}')
+        or v_target_fp #>> '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@version}'
+            is distinct from (p_plan #>> '{target_unit_group,version}')
+        or coalesce(v_target_fp #>> '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@type}', 'unit group data set')
+            is distinct from 'unit group data set'
         or coalesce(v_reference_unit_id, '') = ''
         or not exists (
           select 1 from jsonb_array_elements(v_units) as unit
@@ -171,25 +190,29 @@ begin
       select (unit->>'meanValue')::numeric into v_ratio
       from jsonb_array_elements(v_units) as unit
       where unit->>'name' = 'kmy';
+      -- The evidence block is a closed five-key object with typed scalars: a JSON null, an absent key
+      -- or a wrong type is a shape refusal before any semantics are compared.
+      if exists (
+        select 1 from jsonb_object_keys(p_plan->'source_evidence') as key(name)
+        where key.name <> all (array['sha256', 'source_unit', 'reference_unit', 'factor', 'instance_count'])
+      ) or (select count(*) from jsonb_object_keys(p_plan->'source_evidence')) <> 5
+        or not private.dataset_length_time_v1_scalar_ok(p_plan->'source_evidence'->'sha256', '^[a-f0-9]{64}$')
+        or not private.dataset_length_time_v1_scalar_ok(p_plan->'source_evidence'->'source_unit', '^kmy$')
+        or not private.dataset_length_time_v1_scalar_ok(p_plan->'source_evidence'->'reference_unit', '^m\*a$')
+        or not private.dataset_length_time_v1_scalar_ok(p_plan->'source_evidence'->'factor', '^[0-9]+$')
+        or not private.dataset_length_time_v1_nonneg_int_ok(p_plan->'source_evidence'->'instance_count') then
+        perform private.dataset_alias_v2_deny('LENGTH_TIME_PLAN_INVALID', 400,
+          'The source evidence block must carry exactly the reviewed digest, unit pair, factor and instance count, each a JSON string of the declared shape');
+      end if;
       -- Three independent factor checks: the declared constant, the locked data, and the derived ratio.
       if p_plan #>> '{source_evidence,factor}' is distinct from v_factor
-        or jsonb_typeof(p_plan->'source_evidence'->'factor') is distinct from 'string'
         or p_plan #>> '{source_evidence,source_unit}' is distinct from 'kmy'
         or p_plan #>> '{source_evidence,reference_unit}' is distinct from 'm*a'
-        or (p_plan #>> '{source_evidence,sha256}') !~ '^[a-f0-9]{64}$'
-        or (p_plan #>> '{source_evidence,instance_count}') !~ '^[0-9]+$'
         or v_ratio is null
         or v_ratio is distinct from private.dataset_length_time_v1_factor()
         or v_ratio is distinct from (p_plan #>> '{source_evidence,factor}')::numeric then
         perform private.dataset_alias_v2_deny('LENGTH_TIME_FACTOR_MISMATCH', 409,
           'The declared factor, the locked unit-group ratio and the reviewed constant 1000 must be one value; source unit kmy and reference unit m*a are required');
-      end if;
-      if exists (
-        select 1 from jsonb_object_keys(p_plan->'source_evidence') as key(name)
-        where key.name <> all (array['sha256', 'source_unit', 'reference_unit', 'factor', 'instance_count'])
-      ) or (select count(*) from jsonb_object_keys(p_plan->'source_evidence')) <> 5 then
-        perform private.dataset_alias_v2_deny('LENGTH_TIME_PLAN_INVALID', 400,
-          'The source evidence block must carry exactly the reviewed digest, unit pair, factor and instance count');
       end if;
     end;
 
@@ -208,9 +231,9 @@ begin
         where key.name <> all (array['id', 'version', 'sha256'])
       )
       or (select count(*) from jsonb_object_keys(entry.value)) <> 3
-      or (entry.value->>'id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-      or (entry.value->>'version') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
-      or (entry.value->>'sha256') !~ '^[a-f0-9]{64}$'
+      or not private.dataset_length_time_v1_scalar_ok(entry.value->'id', '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+      or not private.dataset_length_time_v1_scalar_ok(entry.value->'version', '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$')
+      or not private.dataset_length_time_v1_scalar_ok(entry.value->'sha256', '^[a-f0-9]{64}$')
     ) then
       perform private.dataset_alias_v2_deny('LENGTH_TIME_PLAN_INVALID', 400,
         'The flow snapshot block must carry exactly id, version and sha256 per read-only flow');
@@ -283,15 +306,16 @@ begin
         perform private.dataset_alias_v2_deny('LENGTH_TIME_PLAN_INVALID', 400, 'Unknown action keys are refused');
       end if;
       if v_action->>'table' is distinct from 'processes'
-        or (v_action->>'id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-        or (v_action->>'version') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+        or not private.dataset_length_time_v1_scalar_ok(v_action->'id', '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+        or not private.dataset_length_time_v1_scalar_ok(v_action->'version', '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$')
         or (v_action->>'expected_state_code')::integer is distinct from 0
         or jsonb_typeof(v_action->'expected_json_ordered') is distinct from 'object'
         or jsonb_typeof(v_action->'desired_json_ordered') is distinct from 'object'
         or jsonb_typeof(v_action->'mutation') is distinct from 'object'
-        or coalesce(v_action->>'expected_modified_at', '1970-01-01T00:00:00Z') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'
-        or (v_action->>'before_sha256') !~ '^[a-f0-9]{64}$'
-        or (v_action->>'desired_sha256') !~ '^[a-f0-9]{64}$' then
+        or not private.dataset_length_time_v1_scalar_ok(v_action->'expected_modified_at',
+             '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$')
+        or not private.dataset_length_time_v1_scalar_ok(v_action->'before_sha256', '^[a-f0-9]{64}$')
+        or not private.dataset_length_time_v1_scalar_ok(v_action->'desired_sha256', '^[a-f0-9]{64}$') then
         perform private.dataset_alias_v2_deny('LENGTH_TIME_PLAN_INVALID', 400,
           'Every action must be one owner-draft process with its complete before and desired payloads, digests and mutation',
           jsonb_build_object('action_id', v_action->>'action_id'));
@@ -324,12 +348,12 @@ begin
         ) then
           perform private.dataset_alias_v2_deny('LENGTH_TIME_PLAN_INVALID', 400, 'Unknown instance keys are refused');
         end if;
-        if (v_instance->>'index') !~ '^[0-9]+$'
-          or coalesce(v_instance->>'internal_id', '') = ''
-          or (v_instance->>'source_exchange_number') !~ '^[0-9]+$'
-          or v_instance->>'direction' not in ('Input', 'Output')
-          or (v_instance->>'flow_id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-          or (v_instance->>'flow_version') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+        if not private.dataset_length_time_v1_nonneg_int_ok(v_instance->'index')
+          or not private.dataset_length_time_v1_scalar_ok(v_instance->'internal_id', '^.+$')
+          or not private.dataset_length_time_v1_scalar_ok(v_instance->'source_exchange_number', '^[0-9]+$')
+          or not private.dataset_length_time_v1_scalar_ok(v_instance->'direction', '^(Input|Output)$')
+          or not private.dataset_length_time_v1_scalar_ok(v_instance->'flow_id', '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+          or not private.dataset_length_time_v1_scalar_ok(v_instance->'flow_version', '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$')
           or not private.dataset_alias_v2_amount_grammar_ok(v_instance->>'before_literal')
           or not private.dataset_alias_v2_amount_grammar_ok(v_instance->>'after_literal')
           or not exists (

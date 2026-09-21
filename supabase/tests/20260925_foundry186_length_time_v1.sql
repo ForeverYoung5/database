@@ -9,7 +9,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth, private, util;
 
-select plan(53);
+select plan(79);
 
 -- ------------------------------------------------------------------------------------------------
 -- Fixture: canonical unit group, property, 13 claimed flows, 1 unrelated flow, 13 processes.
@@ -72,17 +72,23 @@ select process_id, flow_id, literal, i,
         'functionalUnitOrOther', jsonb_build_object('@xml:lang', 'en', '#text', '1 kmy'))),
     'exchanges', jsonb_build_object('exchange', jsonb_build_array(
       jsonb_build_object('@dataSetInternalID', '1', 'dataDerivationTypeStatus', 'Measured',
-        'exchangeDirection', 'Output', 'generalComment', 'source 7300' || lpad(i::text, 3, '0'),
+        'exchangeDirection', 'Output',
+        'generalComment', jsonb_build_object('@xml:lang', 'en', '#text',
+          'Source EcoSpold1 exchange number: ' || (7300000 + i)::text || '.'),
         'meanAmount', literal, 'resultingAmount', literal, 'relativeStandardDeviation95In', '0.05',
         'uncertaintyDistributionType', 'lognormal',
         'referenceToFlowDataSet', jsonb_build_object('@refObjectId', flow_id::text, '@version', '00.00.001')),
       jsonb_build_object('@dataSetInternalID', '2', 'dataDerivationTypeStatus', 'Measured',
-        'exchangeDirection', 'Input', 'generalComment', 'source 7310' || lpad(i::text, 3, '0'),
+        'exchangeDirection', 'Input',
+        'generalComment', jsonb_build_object('@xml:lang', 'en', '#text',
+          'Source EcoSpold1 exchange number: ' || (7310000 + i)::text || '. (1,2,3,4,5,6,BU:7.8); ;'),
         'meanAmount', literal, 'resultingAmount', literal, 'relativeStandardDeviation95In', '0.10',
         'uncertaintyDistributionType', 'lognormal',
         'referenceToFlowDataSet', jsonb_build_object('@refObjectId', flow_id::text, '@version', '00.00.001')),
       jsonb_build_object('@dataSetInternalID', '3', 'dataDerivationTypeStatus', 'Measured',
-        'exchangeDirection', 'Input', 'generalComment', 'source 7320' || lpad(i::text, 3, '0'),
+        'exchangeDirection', 'Input',
+        'generalComment', jsonb_build_object('@xml:lang', 'en', '#text',
+          'Source EcoSpold1 exchange number: ' || (7320000 + i)::text || '. (year 2026, 12, 345);'),
         'meanAmount', literal, 'resultingAmount', literal, 'relativeStandardDeviation95In', '0.20',
         'uncertaintyDistributionType', 'lognormal',
         'referenceToFlowDataSet', jsonb_build_object('@refObjectId', flow_id::text, '@version', '00.00.001')),
@@ -186,6 +192,11 @@ begin
   from fixture_rows f where p.id = f.process_id;
   delete from private.command_audit_log where command = 'cmd_dataset_length_time_v1_guarded';
 end $$;
+
+create or replace function pg_temp.reseal(p_plan jsonb)
+returns jsonb language sql immutable as $$
+  select p_plan || jsonb_build_object('plan_sha256', util.dataset_alias_execution_v2_artifact_sha256(p_plan - 'plan_sha256'))
+$$;
 
 create or replace function pg_temp.refresh_plan()
 returns void language plpgsql as $$
@@ -343,6 +354,118 @@ select is((select (private.cmd_dataset_length_time_v1_guarded((select p from pla
 select is((select count(*)::text from private.command_audit_log), (select n::text from audits_before), 'late failure: zero audit rows survive');
 select is((select count(*)::text from public.processes p join ids on ids.process_id = p.id
   where p.json_ordered::jsonb #>> '{processDataSet,exchanges,exchange,0,meanAmount}' = ids.literal), '13', 'late failure: every process row still holds its byte-exact before literal (zero rows written)');
+
+-- ------------------------------------------------------------------------------------------------
+-- 5. Hardening: required scalars must be present and of the declared type. A JSON null in a
+-- required field must refuse exactly like a malformed string — `NULL !~ regex` is not a check —
+-- and a support binding must never be satisfied by a mismatched reference. Every case: 0 writes.
+-- ------------------------------------------------------------------------------------------------
+select pg_temp.reset_fixture();
+select pg_temp.refresh_plan();
+
+-- a required scalar that is JSON null
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.seal(jsonb_set(pg_temp.build_plan(), '{source_evidence,sha256}', 'null'::jsonb)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'null-safety: a JSON-null source digest refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.seal(jsonb_set(pg_temp.build_plan(), '{source_evidence,instance_count}', 'null'::jsonb)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'null-safety: a JSON-null source instance count refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.seal(jsonb_set(pg_temp.build_plan(), '{source_evidence,instance_count}', to_jsonb('39'::text))))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'null-safety: a quoted source instance count refuses (the wire carries counts as numbers)');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.seal(jsonb_set(pg_temp.build_plan(), '{target_unit_group,sha256}', 'null'::jsonb)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'null-safety: a JSON-null unit-group digest refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.seal(jsonb_set(pg_temp.build_plan(), '{target_flow_property,version}', 'null'::jsonb)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'null-safety: a JSON-null property version refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.seal(jsonb_set(pg_temp.build_plan(), '{flow_snapshots,0,sha256}', 'null'::jsonb)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'null-safety: a JSON-null flow-snapshot digest refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.seal(jsonb_set(pg_temp.build_plan(), '{actions,0,mutation,exchanges,0,source_exchange_number}', 'null'::jsonb)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'null-safety: a JSON-null source exchange number refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.seal(jsonb_set(pg_temp.build_plan(), '{actions,0,mutation,exchanges,0,after_literal}', 'null'::jsonb)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'null-safety: a JSON-null after literal refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.seal(jsonb_set(pg_temp.build_plan(), '{actions,0,expected_modified_at}', 'null'::jsonb)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'null-safety: a JSON-null expected modification timestamp refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.reseal(jsonb_set(pg_temp.build_plan(), '{actions,0,before_sha256}', 'null'::jsonb)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'null-safety: a JSON-null claimed before digest refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.reseal(jsonb_set(pg_temp.build_plan(), '{actions,0,desired_sha256}', 'null'::jsonb)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'null-safety: a JSON-null claimed desired digest refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.seal(jsonb_set(pg_temp.build_plan(), '{expected,action_count}', 'null'::jsonb)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'null-safety: a JSON-null expected count refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.seal(jsonb_set(pg_temp.build_plan(), '{source_evidence,schema_extra}', 'null'::jsonb)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'null-safety: an extra source-evidence key refuses even when null');
+
+-- a genuinely absent key (not null): the evidence block loses its digest entirely
+create temp table plan_nokey on commit drop as
+  select pg_temp.seal((pg_temp.build_plan() - 'source_evidence')
+    || jsonb_build_object('source_evidence', (pg_temp.build_plan()->'source_evidence') - 'sha256')) as p;
+select is((select (private.cmd_dataset_length_time_v1_guarded((select p from plan_nokey)))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'null-safety: an absent source digest key refuses');
+
+-- required keys of the two canonical support snapshots are an exact closed set
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.seal(jsonb_set(pg_temp.build_plan(), '{target_unit_group,extra}', 'true'::jsonb, true)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'null-safety: an extra canonical unit-group key refuses');
+
+-- a support binding must never be satisfied by a mismatched reference: the locked property points
+-- at a unit-group version that does not exist, and its own declared digest matches that row.
+update public.flowproperties
+set json_ordered = jsonb_set(json_ordered::jsonb, '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@version}', to_jsonb('99.99.999'::text))::json
+where id = 'fd9d0d42-3655-5f1d-aa2f-e9ae1134fc82';
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.seal(pg_temp.build_plan()))))->>'code'), 'LENGTH_TIME_UNITGROUP_MISMATCH', 'support binding: a canonical property pointing at a nonexistent unit-group version refuses');
+update public.flowproperties
+set json_ordered = jsonb_set(json_ordered::jsonb, '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@version}', to_jsonb('01.00.000'::text))::json
+where id = 'fd9d0d42-3655-5f1d-aa2f-e9ae1134fc82';
+
+-- the terminal proof must report the live observation, and must not call a drifted row applied
+select pg_temp.reset_fixture();
+select pg_temp.refresh_plan();
+create temp table run_drift on commit drop as select private.cmd_dataset_length_time_v1_guarded((select p from plan_doc)) as r;
+update public.processes
+set json_ordered = jsonb_set(json_ordered::jsonb, '{processDataSet,processInformation,quantitativeReference,functionalUnitOrOther,#text}', to_jsonb('DRIFTED FU'::text))::json
+where id = 'b20c0de0-0000-4000-8000-000000000001';
+select is((select util.read_dataset_length_time_v1_terminal_proof('c536ee37-64ab-427b-b7e3-4e2bb4fdffb7', (select p from plan_doc)) #>> '{readback,rows,0,functional_unit_text}'), 'DRIFTED FU', 'observation: the terminal proof reports the live functional-unit text, never the plan claim');
+select isnt((select util.read_dataset_length_time_v1_terminal_proof('c536ee37-64ab-427b-b7e3-4e2bb4fdffb7', (select p from plan_doc))->>'status'), 'applied', 'observation: a drifted row is never labelled applied by the terminal proof');
+create temp table proof_drift on commit drop as select util.read_dataset_length_time_v1_terminal_proof('c536ee37-64ab-427b-b7e3-4e2bb4fdffb7', (select p from plan_doc)) as t;
+select is((select count(*)::text from jsonb_array_elements((select t#>'{readback,rows}' from proof_drift)) as row where row->>'observed_sha256' = (select a->>'desired_sha256' from jsonb_array_elements((select p->'actions' from plan_doc)) as a where a->>'id' = row->>'id')), '12', 'observation: only the rows actually at their desired image count as observed');
+select is((select util.read_dataset_length_time_v1_primary_closure('c536ee37-64ab-427b-b7e3-4e2bb4fdffb7', (select p from plan_doc))->>'live_closure_proof'), 'false', 'observation: the fresh closure refuses a drifted row');
+select pg_temp.reset_fixture();
+select pg_temp.refresh_plan();
+
+-- ------------------------------------------------------------------------------------------------
+-- 6. The anchored source-number parse against the real comment shapes: the deployed corpus carries
+-- the comment as an object with a #text node and the suffix bytes (which contain further numbers)
+-- must never be interpreted as the source id. Every case: 0 writes.
+-- ------------------------------------------------------------------------------------------------
+select pg_temp.reset_fixture();
+select pg_temp.refresh_plan();
+
+create or replace function pg_temp.set_comment(p_process uuid, p_comment jsonb)
+returns void language plpgsql as $$
+begin
+  update public.processes
+  set json_ordered = jsonb_set(json_ordered::jsonb, '{processDataSet,exchanges,exchange,0,generalComment}', p_comment, true)::json
+  where id = p_process;
+  -- the plan builder reads the frozen fixture table, so the comment mutation must live there too;
+  -- otherwise the rebuilt plan would still claim the pristine payload and the CAS would fire first.
+  update fixture_rows
+  set payload = jsonb_set(payload, '{processDataSet,exchanges,exchange,0,generalComment}', p_comment, true)
+  where process_id = p_process;
+end $$;
+
+-- the positive shape is the fixture itself: thirteen plain declarations and twenty-six with metadata
+-- suffixes were applied in section 2; here the negatives.
+select pg_temp.set_comment('b20c0de0-0000-4000-8000-000000000001',
+  jsonb_build_object('@xml:lang', 'en', '#text', '(1,2,3,4,5,6,BU:7.8); year 2026;'));
+select pg_temp.refresh_plan();
+select is((select (private.cmd_dataset_length_time_v1_guarded((select p from plan_doc)))->>'code'), 'LENGTH_TIME_DERIVE_MISMATCH', 'parse: metadata numbers without the anchored declaration refuse (never mistaken for the source id)');
+
+select pg_temp.set_comment('b20c0de0-0000-4000-8000-000000000001',
+  jsonb_build_object('@xml:lang', 'en', '#text', 'Source EcoSpold1 exchange number: 999999.'));
+select pg_temp.refresh_plan();
+select is((select (private.cmd_dataset_length_time_v1_guarded((select p from plan_doc)))->>'code'), 'LENGTH_TIME_DERIVE_MISMATCH', 'parse: a declaration whose number differs from the plan refuses');
+
+select pg_temp.set_comment('b20c0de0-0000-4000-8000-000000000001',
+  jsonb_build_object('@xml:lang', 'en', '#text', 'Source EcoSpold1 exchange number: 7300001. Source EcoSpold1 exchange number: 7300002.'));
+select pg_temp.refresh_plan();
+select is((select (private.cmd_dataset_length_time_v1_guarded((select p from plan_doc)))->>'code'), 'LENGTH_TIME_DERIVE_MISMATCH', 'parse: two source-number declarations are ambiguous and refuse');
+
+select pg_temp.set_comment('b20c0de0-0000-4000-8000-000000000001',
+  jsonb_build_object('@xml:lang', 'en', '#text', 'Source EcoSpold1 exchange number: 7300001 without its period'));
+select pg_temp.refresh_plan();
+select is((select (private.cmd_dataset_length_time_v1_guarded((select p from plan_doc)))->>'code'), 'LENGTH_TIME_DERIVE_MISMATCH', 'parse: the anchored declaration without its period refuses');
+
+select pg_temp.set_comment('b20c0de0-0000-4000-8000-000000000001', 'null'::jsonb);
+select pg_temp.refresh_plan();
+select is((select (private.cmd_dataset_length_time_v1_guarded((select p from plan_doc)))->>'code'), 'LENGTH_TIME_DERIVE_MISMATCH', 'parse: a JSON-null comment node refuses');
+
+select pg_temp.set_comment('b20c0de0-0000-4000-8000-000000000001',
+  jsonb_build_object('@xml:lang', 'en', '#text', '7300001'));
+select pg_temp.refresh_plan();
+select is((select (private.cmd_dataset_length_time_v1_guarded((select p from plan_doc)))->>'code'), 'LENGTH_TIME_PLAN_APPLIED', 'parse: the unambiguous bare-integer comment (legacy synthetic shape) is accepted');
+
+select pg_temp.reset_fixture();
+select pg_temp.refresh_plan();
 
 select * from finish();
 rollback;

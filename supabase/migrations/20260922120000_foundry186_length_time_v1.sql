@@ -115,6 +115,41 @@ comment on function private.dataset_length_time_v1_multiply_amount(text) is
   'Exact decimal multiplication by the reviewed Length*time factor 1000: bounded input grammar, canonical plain-decimal output, null otherwise; no float path.';
 
 -- ------------------------------------------------------------------------------------------------
+-- A required scalar is exactly a JSON string of the declared shape. This exists because `NULL !~ regex`
+-- is unknown, not true: without it a JSON null in a required field would slip through every pattern
+-- check. Null, absent, wrong-typed and malformed values all refuse identically.
+-- ------------------------------------------------------------------------------------------------
+create or replace function private.dataset_length_time_v1_scalar_ok(p_value jsonb, p_pattern text)
+returns boolean
+language sql
+immutable
+as $$
+  select jsonb_typeof(p_value) = 'string' and (p_value #>> '{}') ~ p_pattern
+$$;
+
+alter function private.dataset_length_time_v1_scalar_ok(jsonb, text) owner to postgres;
+revoke all on function private.dataset_length_time_v1_scalar_ok(jsonb, text) from public;
+comment on function private.dataset_length_time_v1_scalar_ok(jsonb, text) is
+  'Null-safe required-scalar check: the value must be a JSON string matching the pattern; JSON null, absent keys, numbers and malformed strings all return false.';
+
+-- ------------------------------------------------------------------------------------------------
+-- A required count is exactly a JSON number holding a non-negative integer: the wire carries counts
+-- as numbers (never quoted), so a quoted count, a JSON null or a fractional value all refuse.
+-- ------------------------------------------------------------------------------------------------
+create or replace function private.dataset_length_time_v1_nonneg_int_ok(p_value jsonb)
+returns boolean
+language sql
+immutable
+as $$
+  select jsonb_typeof(p_value) = 'number' and (p_value #>> '{}') ~ '^[0-9]+$'
+$$;
+
+alter function private.dataset_length_time_v1_nonneg_int_ok(jsonb) owner to postgres;
+revoke all on function private.dataset_length_time_v1_nonneg_int_ok(jsonb) from public;
+comment on function private.dataset_length_time_v1_nonneg_int_ok(jsonb) is
+  'Null-safe required-count check: a JSON number holding a non-negative integer; a quoted count, a JSON null or a fractional value all return false.';
+
+-- ------------------------------------------------------------------------------------------------
 -- One exchange instance: the two named amount leaves move from the stored literal to its exact
 -- product, every other byte survives, and the original literal is part of the proof (a
 -- numerically-equal but differently spelled value is refused).
@@ -129,6 +164,9 @@ declare
   v_exchanges jsonb := p_before #> '{processDataSet,exchanges,exchange}';
   v_entry jsonb;
   v_after text;
+  v_comment text;
+  v_label_count integer;
+  v_parsed text;
 begin
   if v_index < 0 or jsonb_typeof(v_exchanges) <> 'array' or v_index >= jsonb_array_length(v_exchanges) then
     return null;
@@ -150,10 +188,34 @@ begin
     or v_entry->>'resultingAmount' is distinct from p_exchange->>'before_literal' then
     return null;
   end if;
-  -- The reviewed source number is bound through the stored source comment, exactly as the Time
-  -- profile binds its functional unit: the comment must exist and carry the declared number as a
-  -- whole numeric token, so an exchange without its reviewed source comment fails closed.
-  if coalesce(v_entry->>'generalComment', '') !~ ('(^|[^0-9])' || coalesce(p_exchange->>'source_exchange_number', '') || '([^0-9]|$)') then
+  -- The reviewed source number is bound through the stored source comment, parsed from its anchored
+  -- label exactly as the CLI producer does. The deployed corpus carries the comment as an object with
+  -- a #text node whose text begins `Source EcoSpold1 exchange number: <N>.` — thirteen end there and
+  -- twenty-six continue with source metadata that contains further numbers (years, BU codes, indexed
+  -- lists). Those later numbers are never the source id, so the id is taken only from the anchored
+  -- label, its bounded numeric token and the mandatory period; every suffix byte is retained in the
+  -- payload and never interpreted. A comment with no declaration, with the label spelled without its
+  -- token or period, or with more than one declaration is refused rather than guessed, and a bare
+  -- integer comment (the legacy synthetic shape) is accepted only when the whole comment is that one
+  -- integer, so no metadata number can ever be mistaken for the source id.
+  v_comment := case jsonb_typeof(v_entry->'generalComment')
+    when 'object' then v_entry->'generalComment'->>'#text'
+    when 'string' then v_entry->>'generalComment'
+    else null end;
+  if v_comment is null then
+    return null;
+  end if;
+  v_label_count := (length(v_comment) - length(replace(v_comment, 'Source EcoSpold1 exchange number:', '')))
+    / length('Source EcoSpold1 exchange number:');
+  if v_label_count > 1 then
+    return null;
+  end if;
+  if v_label_count = 1 then
+    v_parsed := substring(v_comment from 'Source EcoSpold1 exchange number:\s*([0-9]+)\.');
+  else
+    v_parsed := case when v_comment ~ '^[0-9]+\.?$' then rtrim(v_comment, '.') else null end;
+  end if;
+  if v_parsed is null or v_parsed is distinct from p_exchange->>'source_exchange_number' then
     return null;
   end if;
   v_after := private.dataset_length_time_v1_multiply_amount(p_exchange->>'before_literal');
@@ -228,9 +290,9 @@ begin
       perform private.dataset_alias_v2_deny('LENGTH_TIME_PLAN_INVALID', 400, 'Plan request must match dataset-length-time-plan.v1 exactly');
     end if;
     if p_plan->>'schema_version' is distinct from v_schema_version
-      or (p_plan->>'plan_sha256') !~ '^[a-f0-9]{64}$'
-      or (p_plan->>'actor_id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-      or p_plan->>'target_visibility' is distinct from 'owner_draft'
+      or not private.dataset_length_time_v1_scalar_ok(p_plan->'plan_sha256', '^[a-f0-9]{64}$')
+      or not private.dataset_length_time_v1_scalar_ok(p_plan->'actor_id', '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+      or not private.dataset_length_time_v1_scalar_ok(p_plan->'target_visibility', '^owner_draft$')
       or jsonb_typeof(p_plan->'flow_snapshots') is distinct from 'array'
       or jsonb_array_length(p_plan->'flow_snapshots') < 1
       or jsonb_typeof(p_plan->'target_flow_property') is distinct from 'object'
@@ -239,7 +301,22 @@ begin
       or jsonb_typeof(p_plan->'expected') is distinct from 'object'
       or jsonb_typeof(p_plan->'actions') is distinct from 'array'
       or jsonb_array_length(p_plan->'actions') < 1
-      or jsonb_array_length(p_plan->'actions') > 4096 then
+      or jsonb_array_length(p_plan->'actions') > 4096
+      -- The two canonical support snapshots are closed three-key objects with typed scalars.
+      or (exists (
+            select 1 from jsonb_object_keys(p_plan->'target_flow_property') as key(name)
+            where key.name <> all (array['id', 'version', 'sha256']))
+          or (select count(*) from jsonb_object_keys(p_plan->'target_flow_property')) <> 3
+          or not private.dataset_length_time_v1_scalar_ok(p_plan->'target_flow_property'->'id', '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+          or not private.dataset_length_time_v1_scalar_ok(p_plan->'target_flow_property'->'version', '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$')
+          or not private.dataset_length_time_v1_scalar_ok(p_plan->'target_flow_property'->'sha256', '^[a-f0-9]{64}$'))
+      or (exists (
+            select 1 from jsonb_object_keys(p_plan->'target_unit_group') as key(name)
+            where key.name <> all (array['id', 'version', 'sha256']))
+          or (select count(*) from jsonb_object_keys(p_plan->'target_unit_group')) <> 3
+          or not private.dataset_length_time_v1_scalar_ok(p_plan->'target_unit_group'->'id', '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+          or not private.dataset_length_time_v1_scalar_ok(p_plan->'target_unit_group'->'version', '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$')
+          or not private.dataset_length_time_v1_scalar_ok(p_plan->'target_unit_group'->'sha256', '^[a-f0-9]{64}$')) then
       perform private.dataset_alias_v2_deny('LENGTH_TIME_PLAN_INVALID', 400,
         'Plan identity, actor, owner_draft visibility, read-only flow snapshots, canonical property and unit group, source evidence, expected counts and between one and 4096 actions are required');
     end if;
@@ -333,6 +410,10 @@ begin
       v_reference_unit_id := v_target_ug #>> '{unitGroupDataSet,unitGroupInformation,quantitativeReference,referenceToReferenceUnit}';
       if v_target_fp #>> '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@refObjectId}'
             is distinct from (p_plan #>> '{target_unit_group,id}')
+        or v_target_fp #>> '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@version}'
+            is distinct from (p_plan #>> '{target_unit_group,version}')
+        or coalesce(v_target_fp #>> '{flowPropertyDataSet,flowPropertiesInformation,quantitativeReference,referenceToReferenceUnitGroup,@type}', 'unit group data set')
+            is distinct from 'unit group data set'
         or coalesce(v_reference_unit_id, '') = ''
         or not exists (
           select 1 from jsonb_array_elements(v_units) as unit
@@ -351,25 +432,29 @@ begin
       select (unit->>'meanValue')::numeric into v_ratio
       from jsonb_array_elements(v_units) as unit
       where unit->>'name' = 'kmy';
+      -- The evidence block is a closed five-key object with typed scalars: a JSON null, an absent key
+      -- or a wrong type is a shape refusal before any semantics are compared.
+      if exists (
+        select 1 from jsonb_object_keys(p_plan->'source_evidence') as key(name)
+        where key.name <> all (array['sha256', 'source_unit', 'reference_unit', 'factor', 'instance_count'])
+      ) or (select count(*) from jsonb_object_keys(p_plan->'source_evidence')) <> 5
+        or not private.dataset_length_time_v1_scalar_ok(p_plan->'source_evidence'->'sha256', '^[a-f0-9]{64}$')
+        or not private.dataset_length_time_v1_scalar_ok(p_plan->'source_evidence'->'source_unit', '^kmy$')
+        or not private.dataset_length_time_v1_scalar_ok(p_plan->'source_evidence'->'reference_unit', '^m\*a$')
+        or not private.dataset_length_time_v1_scalar_ok(p_plan->'source_evidence'->'factor', '^[0-9]+$')
+        or not private.dataset_length_time_v1_nonneg_int_ok(p_plan->'source_evidence'->'instance_count') then
+        perform private.dataset_alias_v2_deny('LENGTH_TIME_PLAN_INVALID', 400,
+          'The source evidence block must carry exactly the reviewed digest, unit pair, factor and instance count, each a JSON string of the declared shape');
+      end if;
       -- Three independent factor checks: the declared constant, the locked data, and the derived ratio.
       if p_plan #>> '{source_evidence,factor}' is distinct from v_factor
-        or jsonb_typeof(p_plan->'source_evidence'->'factor') is distinct from 'string'
         or p_plan #>> '{source_evidence,source_unit}' is distinct from 'kmy'
         or p_plan #>> '{source_evidence,reference_unit}' is distinct from 'm*a'
-        or (p_plan #>> '{source_evidence,sha256}') !~ '^[a-f0-9]{64}$'
-        or (p_plan #>> '{source_evidence,instance_count}') !~ '^[0-9]+$'
         or v_ratio is null
         or v_ratio is distinct from private.dataset_length_time_v1_factor()
         or v_ratio is distinct from (p_plan #>> '{source_evidence,factor}')::numeric then
         perform private.dataset_alias_v2_deny('LENGTH_TIME_FACTOR_MISMATCH', 409,
           'The declared factor, the locked unit-group ratio and the reviewed constant 1000 must be one value; source unit kmy and reference unit m*a are required');
-      end if;
-      if exists (
-        select 1 from jsonb_object_keys(p_plan->'source_evidence') as key(name)
-        where key.name <> all (array['sha256', 'source_unit', 'reference_unit', 'factor', 'instance_count'])
-      ) or (select count(*) from jsonb_object_keys(p_plan->'source_evidence')) <> 5 then
-        perform private.dataset_alias_v2_deny('LENGTH_TIME_PLAN_INVALID', 400,
-          'The source evidence block must carry exactly the reviewed digest, unit pair, factor and instance count');
       end if;
     end;
 
@@ -388,9 +473,9 @@ begin
         where key.name <> all (array['id', 'version', 'sha256'])
       )
       or (select count(*) from jsonb_object_keys(entry.value)) <> 3
-      or (entry.value->>'id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-      or (entry.value->>'version') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
-      or (entry.value->>'sha256') !~ '^[a-f0-9]{64}$'
+      or not private.dataset_length_time_v1_scalar_ok(entry.value->'id', '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+      or not private.dataset_length_time_v1_scalar_ok(entry.value->'version', '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$')
+      or not private.dataset_length_time_v1_scalar_ok(entry.value->'sha256', '^[a-f0-9]{64}$')
     ) then
       perform private.dataset_alias_v2_deny('LENGTH_TIME_PLAN_INVALID', 400,
         'The flow snapshot block must carry exactly id, version and sha256 per read-only flow');
@@ -463,15 +548,16 @@ begin
         perform private.dataset_alias_v2_deny('LENGTH_TIME_PLAN_INVALID', 400, 'Unknown action keys are refused');
       end if;
       if v_action->>'table' is distinct from 'processes'
-        or (v_action->>'id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-        or (v_action->>'version') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+        or not private.dataset_length_time_v1_scalar_ok(v_action->'id', '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+        or not private.dataset_length_time_v1_scalar_ok(v_action->'version', '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$')
         or (v_action->>'expected_state_code')::integer is distinct from 0
         or jsonb_typeof(v_action->'expected_json_ordered') is distinct from 'object'
         or jsonb_typeof(v_action->'desired_json_ordered') is distinct from 'object'
         or jsonb_typeof(v_action->'mutation') is distinct from 'object'
-        or coalesce(v_action->>'expected_modified_at', '1970-01-01T00:00:00Z') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'
-        or (v_action->>'before_sha256') !~ '^[a-f0-9]{64}$'
-        or (v_action->>'desired_sha256') !~ '^[a-f0-9]{64}$' then
+        or not private.dataset_length_time_v1_scalar_ok(v_action->'expected_modified_at',
+             '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$')
+        or not private.dataset_length_time_v1_scalar_ok(v_action->'before_sha256', '^[a-f0-9]{64}$')
+        or not private.dataset_length_time_v1_scalar_ok(v_action->'desired_sha256', '^[a-f0-9]{64}$') then
         perform private.dataset_alias_v2_deny('LENGTH_TIME_PLAN_INVALID', 400,
           'Every action must be one owner-draft process with its complete before and desired payloads, digests and mutation',
           jsonb_build_object('action_id', v_action->>'action_id'));
@@ -504,12 +590,12 @@ begin
         ) then
           perform private.dataset_alias_v2_deny('LENGTH_TIME_PLAN_INVALID', 400, 'Unknown instance keys are refused');
         end if;
-        if (v_instance->>'index') !~ '^[0-9]+$'
-          or coalesce(v_instance->>'internal_id', '') = ''
-          or (v_instance->>'source_exchange_number') !~ '^[0-9]+$'
-          or v_instance->>'direction' not in ('Input', 'Output')
-          or (v_instance->>'flow_id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-          or (v_instance->>'flow_version') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+        if not private.dataset_length_time_v1_nonneg_int_ok(v_instance->'index')
+          or not private.dataset_length_time_v1_scalar_ok(v_instance->'internal_id', '^.+$')
+          or not private.dataset_length_time_v1_scalar_ok(v_instance->'source_exchange_number', '^[0-9]+$')
+          or not private.dataset_length_time_v1_scalar_ok(v_instance->'direction', '^(Input|Output)$')
+          or not private.dataset_length_time_v1_scalar_ok(v_instance->'flow_id', '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+          or not private.dataset_length_time_v1_scalar_ok(v_instance->'flow_version', '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$')
           or not private.dataset_alias_v2_amount_grammar_ok(v_instance->>'before_literal')
           or not private.dataset_alias_v2_amount_grammar_ok(v_instance->>'after_literal')
           or not exists (
@@ -855,6 +941,9 @@ declare
   v_row jsonb;
   v_plan_summary_id bigint;
   v_batch_summary_id bigint;
+  v_drift_count integer := 0;
+  v_desired_sha256 text;
+  v_expected_text text;
 begin
   select coalesce(jsonb_agg(jsonb_build_object(
       'audit_id', audit.id,
@@ -900,17 +989,27 @@ begin
       and process.user_id = p_actor_user_id
       and process.state_code = 0;
     if v_row is not null then
-      -- No text action exists in this profile: the functional unit text must equal the plan's own
-      -- before image, byte for byte.
-      v_row := jsonb_set(v_row, '{functional_unit_text}', coalesce(
-        to_jsonb(v_action #>> '{expected_json_ordered,processDataSet,processInformation,quantitativeReference,functionalUnitOrOther,#text}'),
-        'null'::jsonb), false);
+      -- The reported observation is the live row, never the plan's claim: a drifted payload or a
+      -- drifted functional-unit text is reported as it actually is, and it also marks the proof as
+      -- not applied. No text action exists in this profile, so the expectation is the plan's own
+      -- before image.
+      v_desired_sha256 := v_action->>'desired_sha256';
+      v_expected_text := v_action #>> '{expected_json_ordered,processDataSet,processInformation,quantitativeReference,functionalUnitOrOther,#text}';
+      if (v_row->>'observed_sha256') is distinct from v_desired_sha256
+        or (v_row->>'functional_unit_text') is distinct from v_expected_text then
+        v_drift_count := v_drift_count + 1;
+      end if;
       v_readback_rows := v_readback_rows || jsonb_build_array(v_row);
     end if;
   end loop;
 
   return jsonb_build_object(
-    'status', 'applied',
+    -- Applied only when every claimed row is observed exactly at its desired image with its expected
+    -- functional-unit text; a drifted observation can never be labelled applied.
+    'status', case
+      when v_drift_count = 0
+        and jsonb_array_length(v_readback_rows) = coalesce((v_expected->>'action_count')::integer, -1)
+      then 'applied' else 'failed' end,
     'plan_sha256', v_plan_sha256,
     'counts', v_expected,
     'audit', jsonb_build_object(

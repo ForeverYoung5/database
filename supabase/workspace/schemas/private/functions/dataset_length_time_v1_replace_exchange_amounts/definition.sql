@@ -6,6 +6,9 @@ declare
   v_exchanges jsonb := p_before #> '{processDataSet,exchanges,exchange}';
   v_entry jsonb;
   v_after text;
+  v_comment text;
+  v_label_count integer;
+  v_parsed text;
 begin
   if v_index < 0 or jsonb_typeof(v_exchanges) <> 'array' or v_index >= jsonb_array_length(v_exchanges) then
     return null;
@@ -27,10 +30,34 @@ begin
     or v_entry->>'resultingAmount' is distinct from p_exchange->>'before_literal' then
     return null;
   end if;
-  -- The reviewed source number is bound through the stored source comment, exactly as the Time
-  -- profile binds its functional unit: the comment must exist and carry the declared number as a
-  -- whole numeric token, so an exchange without its reviewed source comment fails closed.
-  if coalesce(v_entry->>'generalComment', '') !~ ('(^|[^0-9])' || coalesce(p_exchange->>'source_exchange_number', '') || '([^0-9]|$)') then
+  -- The reviewed source number is bound through the stored source comment, parsed from its anchored
+  -- label exactly as the CLI producer does. The deployed corpus carries the comment as an object with
+  -- a #text node whose text begins `Source EcoSpold1 exchange number: <N>.` — thirteen end there and
+  -- twenty-six continue with source metadata that contains further numbers (years, BU codes, indexed
+  -- lists). Those later numbers are never the source id, so the id is taken only from the anchored
+  -- label, its bounded numeric token and the mandatory period; every suffix byte is retained in the
+  -- payload and never interpreted. A comment with no declaration, with the label spelled without its
+  -- token or period, or with more than one declaration is refused rather than guessed, and a bare
+  -- integer comment (the legacy synthetic shape) is accepted only when the whole comment is that one
+  -- integer, so no metadata number can ever be mistaken for the source id.
+  v_comment := case jsonb_typeof(v_entry->'generalComment')
+    when 'object' then v_entry->'generalComment'->>'#text'
+    when 'string' then v_entry->>'generalComment'
+    else null end;
+  if v_comment is null then
+    return null;
+  end if;
+  v_label_count := (length(v_comment) - length(replace(v_comment, 'Source EcoSpold1 exchange number:', '')))
+    / length('Source EcoSpold1 exchange number:');
+  if v_label_count > 1 then
+    return null;
+  end if;
+  if v_label_count = 1 then
+    v_parsed := substring(v_comment from 'Source EcoSpold1 exchange number:\s*([0-9]+)\.');
+  else
+    v_parsed := case when v_comment ~ '^[0-9]+\.?$' then rtrim(v_comment, '.') else null end;
+  end if;
+  if v_parsed is null or v_parsed is distinct from p_exchange->>'source_exchange_number' then
     return null;
   end if;
   v_after := private.dataset_length_time_v1_multiply_amount(p_exchange->>'before_literal');
