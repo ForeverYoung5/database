@@ -180,7 +180,10 @@ begin
 
   if p_gate_name = 'primary_support_plan' then
     begin
-      v_alias_result := private.cmd_dataset_alias_plan_v2_guarded(v_preflight.plan);
+      v_alias_result := case private.dataset_protected_profile(v_preflight.plan)
+        when 'alias_v2' then private.cmd_dataset_alias_plan_v2_guarded(v_preflight.plan)
+        when 'length_time_v1' then private.cmd_dataset_length_time_v1_guarded(v_preflight.plan)
+    end;
       if coalesce((v_alias_result->>'ok')::boolean, false) is not true
         or coalesce((v_alias_result->>'idempotent_replay')::boolean, true)
         or (v_alias_result #>> '{counts,action_count}') is distinct from (v_preflight.plan #>> '{expected,action_count}')
@@ -265,6 +268,10 @@ begin
           audit.command = 'cmd_dataset_alias_plan_v2_guarded'
           and audit.payload->>'plan_request_sha256' =
             v_preflight.plan_request_sha256
+        )
+        or (
+          audit.command = 'cmd_dataset_length_time_v1_guarded'
+          and audit.payload->>'plan_sha256' = v_preflight.plan_sha256
         )
       );
 

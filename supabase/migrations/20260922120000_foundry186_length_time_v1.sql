@@ -47,7 +47,11 @@ returns boolean
 language sql
 immutable
 as $$
-  select jsonb_typeof(p_plan) = 'object'
+  -- The closed key set is exact in both directions: the ten declared keys must all be present and
+  -- nothing else may appear, so a missing required node is refused here rather than surfacing later
+  -- as a NULL comparison somewhere downstream.
+  select coalesce(jsonb_typeof(p_plan) = 'object', false)
+    and (select count(*) from jsonb_object_keys(p_plan)) = 10
     and not exists (
       select 1
       from jsonb_object_keys(p_plan) as key(name)
@@ -124,7 +128,11 @@ returns boolean
 language sql
 immutable
 as $$
-  select jsonb_typeof(p_value) = 'string' and (p_value #>> '{}') ~ p_pattern
+  -- coalesce is load-bearing: for an absent key the argument is SQL NULL and `jsonb_typeof(NULL) =
+  -- 'string'` is NULL, not false, so an uncoalesced helper would return NULL and every
+  -- `not helper(...)` guard would silently pass. An absent, null, wrongly-typed or malformed value
+  -- all return false here.
+  select coalesce(jsonb_typeof(p_value) = 'string' and (p_value #>> '{}') ~ p_pattern, false)
 $$;
 
 alter function private.dataset_length_time_v1_scalar_ok(jsonb, text) owner to postgres;
@@ -141,7 +149,7 @@ returns boolean
 language sql
 immutable
 as $$
-  select jsonb_typeof(p_value) = 'number' and (p_value #>> '{}') ~ '^[0-9]+$'
+  select coalesce(jsonb_typeof(p_value) = 'number' and (p_value #>> '{}') ~ '^[0-9]+$', false)
 $$;
 
 alter function private.dataset_length_time_v1_nonneg_int_ok(jsonb) owner to postgres;

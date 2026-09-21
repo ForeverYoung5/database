@@ -1208,7 +1208,10 @@ begin
   );
 
   begin
-    v_alias_result := private.cmd_dataset_alias_plan_v2_guarded(v_preflight.plan);
+    v_alias_result := case private.dataset_protected_profile(v_preflight.plan)
+      when 'alias_v2' then private.cmd_dataset_alias_plan_v2_guarded(v_preflight.plan)
+      when 'length_time_v1' then private.cmd_dataset_length_time_v1_guarded(v_preflight.plan)
+    end;
 
     if coalesce((v_alias_result->>'ok')::boolean, false) is not true
       or coalesce((v_alias_result->>'idempotent_replay')::boolean, true)
@@ -1245,6 +1248,10 @@ begin
           audit.command = 'cmd_dataset_alias_plan_v2_guarded'
           and audit.payload->>'record_type' = 'plan_summary'
         )
+        or (
+          audit.command = 'cmd_dataset_length_time_v1_guarded'
+          and audit.payload->>'record_type' in ('row', 'plan', 'plan_summary')
+        )
       );
 
     if v_alias_audit_count is distinct from
@@ -1260,11 +1267,12 @@ begin
         message = 'Protected alias audit set is incomplete';
     end if;
 
-    v_primary_closure :=
-      util.read_dataset_alias_execution_v2_primary_closure(
-        v_request.actor_user_id,
-        v_preflight.plan
-      );
+    v_primary_closure := case private.dataset_protected_profile(v_preflight.plan)
+      when 'alias_v2' then util.read_dataset_alias_execution_v2_primary_closure(
+        v_request.actor_user_id, v_preflight.plan)
+      when 'length_time_v1' then util.read_dataset_length_time_v1_primary_closure(
+        v_request.actor_user_id, v_preflight.plan)
+    end;
 
     if coalesce(
         (v_primary_closure->>'live_closure_proof')::boolean,
@@ -2092,7 +2100,10 @@ begin
 
   if p_gate_name = 'primary_support_plan' then
     begin
-      v_alias_result := private.cmd_dataset_alias_plan_v2_guarded(v_preflight.plan);
+      v_alias_result := case private.dataset_protected_profile(v_preflight.plan)
+        when 'alias_v2' then private.cmd_dataset_alias_plan_v2_guarded(v_preflight.plan)
+        when 'length_time_v1' then private.cmd_dataset_length_time_v1_guarded(v_preflight.plan)
+    end;
       if coalesce((v_alias_result->>'ok')::boolean, false) is not true
         or coalesce((v_alias_result->>'idempotent_replay')::boolean, true)
         or (v_alias_result #>> '{counts,action_count}') is distinct from (v_preflight.plan #>> '{expected,action_count}')
@@ -2177,6 +2188,10 @@ begin
           audit.command = 'cmd_dataset_alias_plan_v2_guarded'
           and audit.payload->>'plan_request_sha256' =
             v_preflight.plan_request_sha256
+        )
+        or (
+          audit.command = 'cmd_dataset_length_time_v1_guarded'
+          and audit.payload->>'plan_sha256' = v_preflight.plan_sha256
         )
       );
 
@@ -3887,7 +3902,9 @@ begin
     );
   end if;
 
-  if v_plan->>'schema_version' is distinct from 'dataset-alias-plan.v2'
+  -- The plan schema is the closed discriminator: Time keeps its schema, Length*time has its own,
+  -- anything else refuses before any state is touched.
+  if private.dataset_protected_profile(v_plan) is null
     or v_plan->>'target_visibility' is distinct from 'owner_draft'
     or (v_plan->>'plan_sha256') !~ '^[a-f0-9]{64}$'
     -- The claimed plan digest is the producer's canonical self-hash of the plan document minus its
@@ -3994,7 +4011,13 @@ begin
       'plan_file_sha256', v_bindings->>'plan_file_sha256',
       'plan_sha256', v_plan_sha256
     ),
-    'target_snapshots', v_plan->'target_snapshots',
+    -- A3: one freeze shape for both profiles. The Length*time plan has no target_snapshots node of
+    -- its own, so its two canonical snapshots project into the same {flowproperty, unitgroup} shape.
+    'target_snapshots', case private.dataset_protected_profile(v_plan)
+      when 'length_time_v1' then jsonb_build_object(
+        'flowproperty', v_plan->'target_flow_property',
+        'unitgroup', v_plan->'target_unit_group')
+      else v_plan->'target_snapshots' end,
     'source_evidence', v_plan->'source_evidence',
     'sets', jsonb_build_object(
       'alias_plan_request_sha256',
@@ -4167,7 +4190,10 @@ begin
   -- derivative fences inside this exception block.  The controlled P0002
   -- exception always rolls those effects back before a durable token exists.
   begin
-    v_alias_result := private.cmd_dataset_alias_plan_v2_guarded(v_plan);
+    v_alias_result := case private.dataset_protected_profile(v_plan)
+      when 'alias_v2' then private.cmd_dataset_alias_plan_v2_guarded(v_plan)
+      when 'length_time_v1' then private.cmd_dataset_length_time_v1_guarded(v_plan)
+    end;
     if coalesce((v_alias_result->>'ok')::boolean, false) is not true
       or coalesce((v_alias_result->>'idempotent_replay')::boolean, true)
       or (v_alias_result #>> '{counts,action_count}') is distinct from (v_plan #>> '{expected,action_count}')
@@ -4251,6 +4277,10 @@ begin
         audit.command = 'cmd_dataset_alias_plan_v2_guarded'
         and audit.payload->>'plan_request_sha256' = v_plan_request_sha256
       )
+        or (
+          audit.command = 'cmd_dataset_length_time_v1_guarded'
+          and audit.payload->>'plan_sha256' = v_plan_sha256
+        )
     );
 
   select count(*)::integer
@@ -5229,6 +5259,10 @@ begin
         audit.command = 'cmd_dataset_alias_plan_v2_guarded'
         and audit.payload->>'record_type' = 'plan_summary'
       )
+        or (
+          audit.command = 'cmd_dataset_length_time_v1_guarded'
+          and audit.payload->>'record_type' in ('row', 'plan', 'plan_summary')
+        )
     );
 
   select
@@ -5247,11 +5281,12 @@ begin
         p_request_id, v_request.plan_sha256, v_preflight.derivative_targets)) as chunk
     );
 
-  v_primary_closure :=
-    util.read_dataset_alias_execution_v2_primary_closure(
-      v_actor,
-      v_preflight.plan
-    );
+  v_primary_closure := case private.dataset_protected_profile(v_preflight.plan)
+      when 'alias_v2' then util.read_dataset_alias_execution_v2_primary_closure(
+        v_actor, v_preflight.plan)
+      when 'length_time_v1' then util.read_dataset_length_time_v1_primary_closure(
+        v_actor, v_preflight.plan)
+    end;
   v_primary_closure_ok := coalesce(
     (v_primary_closure->>'live_closure_proof')::boolean,
     false
@@ -5530,7 +5565,10 @@ begin
     and v_batch_proof->>'status' = 'completed'
     and coalesce((v_batch_proof->>'causal_terminal_proof')::boolean, false) is true
     and coalesce((v_batch_proof->>'membership_exact')::boolean, false) is true then
-    v_terminal_proof := util.read_dataset_alias_execution_v2_terminal_proof(v_actor, v_preflight.plan);
+    v_terminal_proof := case private.dataset_protected_profile(v_preflight.plan)
+      when 'alias_v2' then util.read_dataset_alias_execution_v2_terminal_proof(v_actor, v_preflight.plan)
+      when 'length_time_v1' then util.read_dataset_length_time_v1_terminal_proof(v_actor, v_preflight.plan)
+    end;
   end if;
 
   return jsonb_build_object(
@@ -48065,7 +48103,7 @@ COMMENT ON FUNCTION "private"."dataset_length_time_v1_multiply_amount"("p_amount
 CREATE OR REPLACE FUNCTION "private"."dataset_length_time_v1_nonneg_int_ok"("p_value" "jsonb") RETURNS boolean
     LANGUAGE "sql" IMMUTABLE
     AS $_$
-  select jsonb_typeof(p_value) = 'number' and (p_value #>> '{}') ~ '^[0-9]+$'
+  select coalesce(jsonb_typeof(p_value) = 'number' and (p_value #>> '{}') ~ '^[0-9]+$', false)
 $_$;
 
 
@@ -48079,7 +48117,11 @@ COMMENT ON FUNCTION "private"."dataset_length_time_v1_nonneg_int_ok"("p_value" "
 CREATE OR REPLACE FUNCTION "private"."dataset_length_time_v1_plan_keys_ok"("p_plan" "jsonb") RETURNS boolean
     LANGUAGE "sql" IMMUTABLE
     AS $$
-  select jsonb_typeof(p_plan) = 'object'
+  -- The closed key set is exact in both directions: the ten declared keys must all be present and
+  -- nothing else may appear, so a missing required node is refused here rather than surfacing later
+  -- as a NULL comparison somewhere downstream.
+  select coalesce(jsonb_typeof(p_plan) = 'object', false)
+    and (select count(*) from jsonb_object_keys(p_plan)) = 10
     and not exists (
       select 1
       from jsonb_object_keys(p_plan) as key(name)
@@ -48182,7 +48224,11 @@ COMMENT ON FUNCTION "private"."dataset_length_time_v1_replace_exchange_amounts"(
 CREATE OR REPLACE FUNCTION "private"."dataset_length_time_v1_scalar_ok"("p_value" "jsonb", "p_pattern" "text") RETURNS boolean
     LANGUAGE "sql" IMMUTABLE
     AS $$
-  select jsonb_typeof(p_value) = 'string' and (p_value #>> '{}') ~ p_pattern
+  -- coalesce is load-bearing: for an absent key the argument is SQL NULL and `jsonb_typeof(NULL) =
+  -- 'string'` is NULL, not false, so an uncoalesced helper would return NULL and every
+  -- `not helper(...)` guard would silently pass. An absent, null, wrongly-typed or malformed value
+  -- all return false here.
+  select coalesce(jsonb_typeof(p_value) = 'string' and (p_value #>> '{}') ~ p_pattern, false)
 $$;
 
 

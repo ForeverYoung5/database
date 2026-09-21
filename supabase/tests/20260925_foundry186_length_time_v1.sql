@@ -9,7 +9,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth, private, util;
 
-select plan(89);
+select plan(109);
 
 -- ------------------------------------------------------------------------------------------------
 -- Fixture: canonical unit group, property, 13 claimed flows, 1 unrelated flow, 13 processes.
@@ -499,6 +499,13 @@ select pg_temp.refresh_plan();
 -- ------------------------------------------------------------------------------------------------
 select pg_temp.reset_fixture();
 select pg_temp.refresh_plan();
+create temp table ug_pristine on commit drop as
+  select json_ordered::jsonb as payload from public.unitgroups where id = '8a1e27de-c1e7-5049-94bd-6c7ba80f52d1';
+create or replace function pg_temp.restore_ug() returns void language plpgsql as $$
+begin
+  update public.unitgroups set json_ordered = (select payload from ug_pristine)::json
+  where id = '8a1e27de-c1e7-5049-94bd-6c7ba80f52d1';
+end $$;
 create or replace function pg_temp.set_ug_kmy(p_value jsonb) returns void language plpgsql as $$
 begin
   update public.unitgroups
@@ -524,7 +531,41 @@ select pg_temp.reset_fixture();
 select pg_temp.set_ug_kmy(to_jsonb('not-a-number'::text));
 select pg_temp.refresh_plan();
 select is((select (private.cmd_dataset_length_time_v1_guarded((select p from plan_doc)))->>'code'), 'LENGTH_TIME_UNITGROUP_MISMATCH', 'factor spelling: a malformed factor refuses cleanly instead of raising');
-select pg_temp.set_ug_kmy(to_jsonb('1.0'::text));
+select pg_temp.restore_ug();
+select pg_temp.reset_fixture();
+select pg_temp.refresh_plan();
+
+-- ------------------------------------------------------------------------------------------------
+-- 8. Absent required fields (root's F1): the closed envelopes must refuse a *missing* node, not just
+-- a null one. The helpers return false for SQL NULL, the plan key set is exact in both directions,
+-- and every required node is dropped one at a time. Each case: 0 writes, 0 audit rows.
+-- ------------------------------------------------------------------------------------------------
+select pg_temp.reset_fixture();
+select pg_temp.refresh_plan();
+create temp table audits_ref on commit drop as select count(*)::bigint as n from private.command_audit_log;
+
+select is((select private.dataset_length_time_v1_scalar_ok(null::jsonb, '^.+$')), false, 'absent: the required-scalar helper returns false (never NULL) for an SQL NULL');
+select is((select private.dataset_length_time_v1_nonneg_int_ok(null::jsonb)), false, 'absent: the required-count helper returns false (never NULL) for an SQL NULL');
+select isnt((select private.dataset_length_time_v1_plan_keys_ok(jsonb_build_object('schema_version', 'dataset-length-time-plan.v1'))), true, 'absent: a plan missing nine of its ten keys is refused by the key set');
+
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.reseal(pg_temp.build_plan() - 'target_visibility'))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'absent: a plan without target_visibility refuses (root F1)');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.reseal(pg_temp.build_plan() - 'flow_snapshots'))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'absent: a plan without flow_snapshots refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.reseal(pg_temp.build_plan() - 'target_flow_property'))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'absent: a plan without the canonical property snapshot refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.reseal(pg_temp.build_plan() - 'target_unit_group'))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'absent: a plan without the canonical unit-group snapshot refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.reseal(pg_temp.build_plan() - 'expected'))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'absent: a plan without the expected block refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.reseal(pg_temp.build_plan() - 'source_evidence'))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'absent: a plan without the source evidence refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.reseal(pg_temp.build_plan() - 'actor_id'))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'absent: a plan without its actor refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded(pg_temp.build_plan() - 'plan_sha256'))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'absent: a plan without its self-hash refuses');
+
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.reseal(jsonb_set(pg_temp.build_plan(), '{actions,0}', (pg_temp.build_plan()->'actions'->0) - 'expected_modified_at', false)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'absent: an action without its expected modification timestamp refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.reseal(jsonb_set(pg_temp.build_plan(), '{actions,0}', (pg_temp.build_plan()->'actions'->0) - 'before_sha256', false)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'absent: an action without its claimed before digest refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.reseal(jsonb_set(pg_temp.build_plan(), '{actions,0,mutation,exchanges,0}', (pg_temp.build_plan()#>'{actions,0,mutation,exchanges,0}') - 'source_exchange_number', false)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'absent: an instance without its source exchange number refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.reseal(jsonb_set(pg_temp.build_plan(), '{actions,0,mutation,exchanges,0}', (pg_temp.build_plan()#>'{actions,0,mutation,exchanges,0}') - 'flow_version', false)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'absent: an instance without its flow version refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.reseal(jsonb_set(pg_temp.build_plan(), '{flow_snapshots,0}', (pg_temp.build_plan()->'flow_snapshots'->0) - 'sha256', false)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'absent: a flow snapshot without its digest refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.reseal(jsonb_set(pg_temp.build_plan(), '{target_unit_group}', (pg_temp.build_plan()->'target_unit_group') - 'version', false)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'absent: a canonical snapshot without its version refuses');
+select is((select (private.cmd_dataset_length_time_v1_guarded((select pg_temp.reseal(jsonb_set(pg_temp.build_plan(), '{expected}', (pg_temp.build_plan()->'expected') - 'audit_count', false)))))->>'code'), 'LENGTH_TIME_PLAN_INVALID', 'absent: an expected block missing one count refuses');
+select is((select count(*)::text from private.command_audit_log), (select n::text from audits_ref), 'absent: every absent-field refusal wrote zero audit rows');
+select is((select count(*)::text from public.processes p join ids on ids.process_id = p.id where p.json_ordered::jsonb #>> '{processDataSet,exchanges,exchange,0,meanAmount}' = ids.literal), '13', 'absent: every process row still holds its byte-exact before literal');
 select pg_temp.reset_fixture();
 select pg_temp.refresh_plan();
 
