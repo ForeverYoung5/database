@@ -177,7 +177,10 @@ immutable
 as $$
   select case
     when p_before_text is null then null
-    when p_before_text ~ '^(1|1\.0) a([^A-Za-z].*|)$' then regexp_replace(p_before_text, '^(1|1\.0) a', '\1 hr', '')
+    -- The reviewed CLI rule: exactly the quantity `1` or `1.0`, exactly one space, the single unit token
+    -- `a`, then whitespace and a non-empty suffix that is preserved byte for byte. An empty suffix and a
+    -- glued `a2` are refused; nothing else in the text is touched.
+    when p_before_text ~ '^(1|1\.0) a[[:space:]]+[^[:space:]]' then regexp_replace(p_before_text, '^(1|1\.0) a', '\1 hr', '')
     else null
   end
 $$;
@@ -299,7 +302,7 @@ begin
       select 1 from jsonb_object_keys(p_batch) as key(name)
       where key.name <> all (array[
         'schema_version', 'batch_id', 'plan_sha256', 'dimension', 'factor', 'target_visibility',
-        'target_snapshots', 'source_evidence', 'counts', 'text_actions', 'actions'
+        'target_snapshots', 'source_evidence', 'source_alias', 'counts', 'text_actions', 'actions'
       ])
     ) then
       perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400, 'Unknown batch keys are refused');
@@ -704,6 +707,17 @@ begin
       end if;
       v_alias_fp_source_ug_id := p_batch #>> '{source_evidence,source_unitgroup,id}';
       v_alias_fp_source_ug_version := p_batch #>> '{source_evidence,source_unitgroup,version}';
+      if p_batch->'source_alias' is not null
+        and (p_batch #>> '{source_alias,sha256}') is distinct from private.dataset_alias_v2_payload_sha256(v_alias_fp_row) then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
+          'The declared source alias digest is not the locked alias flow property payload');
+      end if;
+      if p_batch->'source_alias' is not null
+        and ((p_batch #>> '{source_alias,id}') is distinct from v_alias_fp_id
+          or (p_batch #>> '{source_alias,version}') is distinct from v_alias_fp_version) then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
+          'The declared source alias identity is not the alias the frozen before payloads reference');
+      end if;
     end;
 
     -- The derived reference is the deployed five-key shape (root-verified against the live BAFU Time flow

@@ -30,9 +30,8 @@ as $$
       select 1
       from jsonb_object_keys(p_plan) as key(name)
       where key.name <> all (array[
-        'schema_version', 'actor_id', 'target_visibility', 'source_evidence', 'target_snapshots',
-        'expected', 'text_action_count', 'dimensions', 'text_actions', 'derivative_targets', 'actions',
-        'plan_sha256'
+        'schema_version', 'actor_id', 'target_visibility', 'source_alias', 'source_evidence',
+        'target_snapshots', 'expected', 'dimensions', 'text_actions', 'actions', 'plan_sha256'
       ])
     )
 $$;
@@ -116,11 +115,10 @@ begin
     or jsonb_typeof(p_plan->'expected') is distinct from 'object'
     or jsonb_typeof(p_plan->'dimensions') is distinct from 'array'
     or jsonb_typeof(p_plan->'text_actions') is distinct from 'array'
-    or jsonb_typeof(p_plan->'derivative_targets') is distinct from 'array'
     or jsonb_typeof(p_plan->'actions') is distinct from 'array'
     or jsonb_array_length(p_plan->'actions') < 1 then
     return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 400,
-      'message', 'Plan identity, actor, owner_draft visibility, evidence, expected counts, dimension, text actions, derivative targets and action list are required');
+      'message', 'Plan identity, actor, owner_draft visibility, source alias, evidence, expected counts, dimension, text actions and action list are required');
   end if;
 
   if (p_plan->>'actor_id')::uuid is distinct from v_actor then
@@ -133,9 +131,10 @@ begin
     select 1 from jsonb_object_keys(p_plan->'expected') as key(name)
     where key.name <> all (array[
       'action_count', 'batch_count', 'exchange_count', 'amount_field_count', 'unrelated_exchange_count',
-      'audit_count', 'flowproperty_count', 'flow_count', 'process_count', 'derivative_target_count'
+      'audit_count', 'flowproperty_count', 'flow_count', 'process_count', 'derivative_target_count',
+      'text_action_count'
     ])
-  ) or (select count(*) from jsonb_object_keys(p_plan->'expected')) <> 10
+  ) or (select count(*) from jsonb_object_keys(p_plan->'expected')) <> 11
     or (p_plan #>> '{expected,action_count}') !~ '^[0-9]+$'
     or (p_plan #>> '{expected,batch_count}') !~ '^[0-9]+$'
     or (p_plan #>> '{expected,exchange_count}') !~ '^[0-9]+$'
@@ -146,7 +145,7 @@ begin
     or (p_plan #>> '{expected,flow_count}') !~ '^[0-9]+$'
     or (p_plan #>> '{expected,process_count}') !~ '^[0-9]+$'
     or (p_plan #>> '{expected,derivative_target_count}') !~ '^[0-9]+$'
-    or (p_plan->>'text_action_count') !~ '^[0-9]+$' then
+    or (p_plan #>> '{expected,text_action_count}') !~ '^[0-9]+$' then
     return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 400,
       'message', 'The expected block must carry exactly the ten flat v1 keys, and the versioned text_action_count, all numeric');
   end if;
@@ -154,14 +153,27 @@ begin
 
   -- Counts the plan declares about itself must hold before anything else runs.
   if (v_expected->>'action_count')::integer is distinct from jsonb_array_length(p_plan->'actions')
-    or (v_expected->>'batch_count')::integer is distinct from jsonb_array_length(p_plan->'dimensions')
-    or (v_expected->>'text_action_count') is not null then
+    or (v_expected->>'batch_count')::integer is distinct from jsonb_array_length(p_plan->'dimensions') then
     return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 400,
       'message', 'Declared action, batch or text-action counts do not match the plan itself');
   end if;
-  if (p_plan->>'text_action_count')::integer is distinct from jsonb_array_length(p_plan->'text_actions') then
+  if (v_expected->>'text_action_count')::integer is distinct from jsonb_array_length(p_plan->'text_actions') then
     return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 400,
       'message', 'The declared text-action count does not match the text-action block');
+  end if;
+
+  -- The external plan's source alias identity and source-evidence semantics.
+  if jsonb_typeof(p_plan->'source_alias') is distinct from 'object'
+    or coalesce(p_plan #>> '{source_alias,id}', '') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    or coalesce(p_plan #>> '{source_alias,version}', '') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+    or coalesce(p_plan #>> '{source_alias,sha256}', '') !~ '^[a-f0-9]{64}$'
+    or jsonb_typeof(p_plan->'source_evidence') is distinct from 'object'
+    or coalesce(p_plan #>> '{source_evidence,cohort_sha256}', '') !~ '^[a-f0-9]{64}$'
+    or (p_plan #>> '{source_evidence,cohort_sha256}') is distinct from (p_plan #>> '{source_evidence,expected_cohort_sha256}')
+    or coalesce(p_plan #>> '{source_evidence,original_source_unit}', '') = ''
+    or jsonb_typeof(p_plan->'source_evidence'->'declared_source_unitgroup') is distinct from 'object' then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 400,
+      'message', 'The plan must carry its source alias identity, equal declared cohort digests and the declared/original source unit semantics');
   end if;
 
   -- Exactly one `time` dimension; the factor is the approved constant and both unit-group pointers must be
@@ -173,45 +185,24 @@ begin
   v_dimension := p_plan->'dimensions'->0;
   if v_dimension->>'dimension' is distinct from 'time'
     or v_dimension->>'factor' is distinct from private.dataset_alias_v2_factor()::text
-    or (v_dimension #>> '{source_unitgroup,id}') is distinct from (p_plan #>> '{source_evidence,source_unitgroup,id}')
-    or (v_dimension #>> '{source_unitgroup,version}') is distinct from (p_plan #>> '{source_evidence,source_unitgroup,version}')
+    or (v_dimension #>> '{declared_source_unitgroup,id}') is distinct from (p_plan #>> '{source_evidence,declared_source_unitgroup,id}')
+    or (v_dimension #>> '{declared_source_unitgroup,version}') is distinct from (p_plan #>> '{source_evidence,declared_source_unitgroup,version}')
     or (v_dimension #>> '{target_unitgroup,id}') is distinct from (p_plan #>> '{target_snapshots,unitgroup,id}')
     or (v_dimension #>> '{target_unitgroup,version}') is distinct from (p_plan #>> '{target_snapshots,unitgroup,version}') then
     return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_DIMENSION_UNSUPPORTED', 'status', 400,
       'message', 'The single dimension must be time with the approved factor and the evidence unit groups');
   end if;
 
-  -- One six-key derivative target per actual changed Flow/Process identity, actor-bound and state 0; the
-  -- declared derivative target count must be the exact unique target count, never a placeholder.
-  if exists (
-    select 1 from jsonb_array_elements(p_plan->'derivative_targets') as target(value)
-    where not private.dataset_alias_v2_derivative_target_ok(target.value)
-      or target.value->>'user_id' is distinct from v_actor::text
-  ) then
-    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 400,
-      'message', 'Every derivative target must be one six-key row for this actor in the owner-draft state');
-  end if;
-  if (select count(distinct (target.value->>'table') || '|' || (target.value->>'id') || '|' || (target.value->>'version'))
-        from jsonb_array_elements(p_plan->'derivative_targets') as target(value))
-      <> jsonb_array_length(p_plan->'derivative_targets')
-    or (v_expected->>'derivative_target_count')::integer is distinct from jsonb_array_length(p_plan->'derivative_targets') then
+  -- The external plan carries no derivative-target list: the protected request/freeze owns it, and the
+  -- protected adapter separately checks that list against these identities. Here the plan must declare the
+  -- exact unique changed Flow/Process identity count, and its action identities must be unique.
+  if (select count(distinct (a->>'table') || '|' || (a->>'id') || '|' || (a->>'version'))
+        from jsonb_array_elements(p_plan->'actions') as a)
+      is distinct from jsonb_array_length(p_plan->'actions')
+    or (v_expected->>'derivative_target_count')::integer
+      is distinct from jsonb_array_length(p_plan->'actions') then
     return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_COUNT_MISMATCH', 'status', 409,
-      'message', 'Derivative targets must be unique and exactly the declared count');
-  end if;
-  if (select count(distinct (a->>'id') || '|' || (a->>'version')) from jsonb_array_elements(p_plan->'actions') as a)
-      is distinct from (select count(distinct (target.value->>'id') || '|' || (target.value->>'version'))
-                          from jsonb_array_elements(p_plan->'derivative_targets') as target(value))
-    or exists (
-      select 1 from jsonb_array_elements(p_plan->'actions') as a
-      where not exists (
-        select 1 from jsonb_array_elements(p_plan->'derivative_targets') as target(value)
-        where (target.value->>'table') = a->>'table'
-          and (target.value->>'id') = a->>'id'
-          and (target.value->>'version') = a->>'version'
-      )
-    ) then
-    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_COUNT_MISMATCH', 'status', 409,
-      'message', 'Every derivative target must name one claimed action identity and no others');
+      'message', 'The declared derivative-target count must be exactly the unique changed action identities');
   end if;
 
   -- The audit topology the run must actually write: one row audit per action, one batch summary per batch
@@ -237,7 +228,11 @@ begin
     'factor', v_dimension->>'factor',
     'target_visibility', 'owner_draft',
     'target_snapshots', p_plan->'target_snapshots',
-    'source_evidence', p_plan->'source_evidence',
+    'source_evidence', jsonb_build_object(
+      'sha256', p_plan #>> '{source_evidence,sha256}',
+      'exchange_count', p_plan #>> '{source_evidence,exchange_count}',
+      'source_unitgroup', p_plan#>'{source_evidence,declared_source_unitgroup}'),
+    'source_alias', p_plan->'source_alias',
     'counts', jsonb_build_object(
       'action_count', v_expected->>'action_count',
       'flow_count', v_expected->>'flow_count',
@@ -328,8 +323,12 @@ begin
     'factor', v_dimension->>'factor', 'target_visibility', 'owner_draft',
     'expected', v_expected, 'text_action_count', (p_plan->>'text_action_count')::integer,
     'audit_count', (v_expected->>'audit_count')::integer,
-    'derivative_target_count', jsonb_array_length(p_plan->'derivative_targets'),
-    'source_evidence', p_plan->'source_evidence', 'target_snapshots', p_plan->'target_snapshots',
+    'derivative_target_count', (v_expected->>'derivative_target_count')::integer,
+    'source_evidence', jsonb_build_object(
+      'sha256', p_plan #>> '{source_evidence,sha256}',
+      'exchange_count', p_plan #>> '{source_evidence,exchange_count}',
+      'source_unitgroup', p_plan#>'{source_evidence,declared_source_unitgroup}'),
+    'source_alias', p_plan->'source_alias', 'target_snapshots', p_plan->'target_snapshots',
     'counts', jsonb_build_object(
       'action_count', v_expected->>'action_count', 'flow_count', v_expected->>'flow_count',
       'process_count', v_expected->>'process_count', 'exchange_count', v_expected->>'exchange_count',
