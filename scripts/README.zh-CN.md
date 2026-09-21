@@ -20,9 +20,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-21
-lastReviewedCommit: ee9bb7ead1c6b832a0fc94a681ae17ab5db3da4d
-lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the generated five-schema workspace and Data API types gain the guarded owner-draft before-content save facade; refresh behavior and stable-versus-generated boundaries are unchanged."
+lastReviewedAt: 2026-09-22
+lastReviewedCommit: 258788439ebc80d365923c60d3981afcf6df1a4c
+lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the generated five-schema workspace and Data API types gain the guarded owner-draft before-content save facade; refresh behavior and stable-versus-generated boundaries are unchanged. 再次复核 Database #674（Foundry #186）：工作流契约辅助脚本新增一个封闭 Length*time 档案的套件固定标记；受支持的迁移生成流程与脚本用法未变。"
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml

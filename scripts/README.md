@@ -20,9 +20,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-21
-lastReviewedCommit: ee9bb7ead1c6b832a0fc94a681ae17ab5db3da4d
-lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the generated five-schema workspace and Data API types gain the guarded owner-draft before-content save facade; refresh behavior and stable-versus-generated boundaries are unchanged."
+lastReviewedAt: 2026-09-22
+lastReviewedCommit: 258788439ebc80d365923c60d3981afcf6df1a4c
+lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the generated five-schema workspace and Data API types gain the guarded owner-draft before-content save facade; refresh behavior and stable-versus-generated boundaries are unchanged. Reviewed again for Database #674 (Foundry #186): the workflow-contract helper gains one pinned suite token for the closed Length*time profile; the supported migration-generation flows and helper usage are unchanged."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml
