@@ -16,7 +16,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth, private;
 
-select plan(84);
+select plan(94);
 
 -- ------------------------------------------------------------------------------------------------
 -- Fixture: one target unit group (year base plus the exact hour factor), one distinct source unit group
@@ -282,7 +282,10 @@ begin
       'sha256', repeat('b', 64),
       'exchange_count', v_occurrences,
       'source_unitgroup', jsonb_build_object('id', f.source_ug, 'version', '01.00.000',
-        'sha256', private.dataset_alias_v2_payload_sha256((select json_ordered::jsonb from public.unitgroups where id = f.source_ug and version = '01.00.000')))),
+        'sha256', private.dataset_alias_v2_payload_sha256((select json_ordered::jsonb from public.unitgroups where id = f.source_ug and version = '01.00.000'))),
+      -- The complete current source flow property payload, bound by its own canonical digest.
+      'source_flowproperty', jsonb_build_object('id', f.alias_fp, 'version', '00.00.001',
+        'sha256', private.dataset_alias_v2_payload_sha256((select json_ordered::jsonb from public.flowproperties where id = f.alias_fp and version = '00.00.001')))),
     'counts', jsonb_build_object(
       'action_count', (case when v_include_base then 2 else 0 end) + jsonb_array_length(v_extra_flows) + jsonb_array_length(v_extra_processes),
       'flow_count', (case when v_include_base then 1 else 0 end) + jsonb_array_length(v_extra_flows),
@@ -783,6 +786,22 @@ select is(
 
 
 -- ================================================================================================
+-- 4b. The shared functional-unit grammar, literally: quantity 1 or 1.0, one ASCII space, the unit token
+-- `a`, then a suffix that starts with an ASCII space, carries at least one non-space/non-tab character
+-- and holds no CR or LF, matched against the whole string.
+-- ================================================================================================
+select is(private.dataset_alias_v2_fu_apply_rule('1 a x'), '1 hr x', 'the reviewed form moves the unit token and keeps the suffix');
+select is(private.dataset_alias_v2_fu_apply_rule('1.0 a per unit'), '1.0 hr per unit', 'a one-space suffix survives byte for byte');
+select is(private.dataset_alias_v2_fu_apply_rule('1.0 a  two spaces'), '1.0 hr  two spaces', 'a suffix may start with several spaces as long as one character is not a space');
+select is(private.dataset_alias_v2_fu_apply_rule('1.0 a x  '), '1.0 hr x  ', 'trailing spaces inside the suffix survive');
+select is(private.dataset_alias_v2_fu_apply_rule('1.0 a'), null, 'an empty suffix is refused');
+select is(private.dataset_alias_v2_fu_apply_rule('1.0 a '), null, 'a whitespace-only suffix is refused');
+select is(private.dataset_alias_v2_fu_apply_rule('1.0 a2'), null, 'a glued unit token is refused');
+select is(private.dataset_alias_v2_fu_apply_rule(e'1.0 a\tx'), null, 'a tab separator is refused');
+select is(private.dataset_alias_v2_fu_apply_rule(e'1.0 a x\ny'), null, 'a suffix spanning lines is refused');
+select is(private.dataset_alias_v2_fu_apply_rule(e'1.0 a x\r'), null, 'a trailing carriage return is refused');
+
+-- ================================================================================================
 -- 5. The plan executor: the shared plan envelope, its single time dimension and its whole-plan proof.
 -- ================================================================================================
 create or replace function pg_temp.v2_plan(p_extras jsonb default '{}'::jsonb)
@@ -791,6 +810,8 @@ declare
   f record;
   b jsonb;
   v_targets jsonb;
+  v_plan jsonb;
+  v_plan_sha256 text;
 begin
   select * into f from v2_fixture;
   b := pg_temp.v2_batch(coalesce(p_extras->'batch', '{}'::jsonb));
@@ -803,7 +824,7 @@ begin
     order by a->>'id', a->>'version'), '[]'::jsonb)
     into v_targets
   from jsonb_array_elements(b->'actions') as a;
-  return jsonb_build_object(
+  v_plan := jsonb_build_object(
     'schema_version', 'dataset-alias-plan.v2',
     'actor_id', f.actor,
     'target_visibility', 'owner_draft',
@@ -820,6 +841,7 @@ begin
       -- shape or it would only prove the executor accepts a shape the real producer never sends.
       'exchange_count', b#>'{source_evidence,exchange_count}',
       'declared_source_unitgroup', b#>'{source_evidence,source_unitgroup}',
+      'source_flowproperty', b#>'{source_evidence,source_flowproperty}',
       'original_source_unit', 'hr'),
     'target_snapshots', b->'target_snapshots',
     'expected', jsonb_build_object(
@@ -841,8 +863,22 @@ begin
       'target_unitgroup', jsonb_build_object('id', f.target_ug, 'version', '01.00.000'))),
     'text_actions', b->'text_actions',
     'actions', b->'actions',
-    'plan_sha256', b->>'plan_sha256');
+    'plan_sha256', repeat('a', 64));
+
+  -- The producer's own convention: the plan digest is the canonical hash of the document minus its own
+  -- binding, which the executor now verifies before it looks up any replay.
+  v_plan_sha256 := util.dataset_alias_execution_v2_artifact_sha256(v_plan - 'plan_sha256');
+  return jsonb_set(v_plan, '{plan_sha256}', to_jsonb(v_plan_sha256));
 end
+$$;
+
+-- A mutated plan document must re-declare its own canonical digest before the executor can judge it:
+-- the digest check deliberately runs before every other plan check, so a document edited after signing
+-- is refused as a different plan.
+create or replace function pg_temp.v2_plan_signed(p_plan jsonb)
+returns jsonb language sql stable as $$
+  select jsonb_set(p_plan, '{plan_sha256}',
+    to_jsonb(util.dataset_alias_execution_v2_artifact_sha256(p_plan - 'plan_sha256')), false)
 $$;
 
 create or replace function pg_temp.v2_plan_call(p_plan jsonb)
@@ -867,57 +903,57 @@ select is(
   'a plan with an unknown key is refused'
 );
 select is(
-  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{expected,flowproperty_count}', '1'::jsonb)) ->> 'code'),
+  (pg_temp.v2_plan_call(pg_temp.v2_plan_signed(jsonb_set(pg_temp.v2_plan(), '{expected,flowproperty_count}', '1'::jsonb))) ->> 'code'),
   'ALIAS_V2_COUNT_MISMATCH',
   'a plan claiming flow-property actions is refused'
 );
 
 select is(
-  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{expected,audit_count}',
-    to_jsonb(((pg_temp.v2_plan() #>> '{expected,audit_count}')::integer + 1)))) ->> 'code'),
+  (pg_temp.v2_plan_call(pg_temp.v2_plan_signed(jsonb_set(pg_temp.v2_plan(), '{expected,audit_count}',
+    to_jsonb(((pg_temp.v2_plan() #>> '{expected,audit_count}')::integer + 1))))) ->> 'code'),
   'ALIAS_V2_COUNT_MISMATCH',
   'an audit count that is not the written row+batch+plan topology is refused'
 );
 select is(
-  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{expected,derivative_target_count}', '9'::jsonb)) ->> 'code'),
+  (pg_temp.v2_plan_call(pg_temp.v2_plan_signed(jsonb_set(pg_temp.v2_plan(), '{expected,derivative_target_count}', '9'::jsonb))) ->> 'code'),
   'ALIAS_V2_COUNT_MISMATCH',
   'a declared derivative-target count that is not the unique changed identities is refused'
 );
 select is(
-  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{expected}', (pg_temp.v2_plan()->'expected') #- '{text_action_count}')) ->> 'code'),
+  (pg_temp.v2_plan_call(pg_temp.v2_plan_signed(jsonb_set(pg_temp.v2_plan(), '{expected}', (pg_temp.v2_plan()->'expected') #- '{text_action_count}'))) ->> 'code'),
   'ALIAS_V2_PLAN_INVALID',
   'an expected block without the versioned text-action count is refused'
 );
 select is(
-  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{expected,action_count}', '"2"'::jsonb)) ->> 'code'),
+  (pg_temp.v2_plan_call(pg_temp.v2_plan_signed(jsonb_set(pg_temp.v2_plan(), '{expected,action_count}', '"2"'::jsonb))) ->> 'code'),
   'ALIAS_V2_PLAN_INVALID',
   'a quoted expected count is refused because the external plan emits JSON numbers'
 );
 select is(
-  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{source_evidence,exchange_count}', '"2"'::jsonb)) ->> 'code'),
+  (pg_temp.v2_plan_call(pg_temp.v2_plan_signed(jsonb_set(pg_temp.v2_plan(), '{source_evidence,exchange_count}', '"2"'::jsonb))) ->> 'code'),
   'ALIAS_V2_PLAN_INVALID',
   'a quoted source-evidence exchange count is refused as a different wire shape'
 );
 select is(
-  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{source_evidence,cohort_sha256}', to_jsonb(repeat('d', 64)))) ->> 'code'),
+  (pg_temp.v2_plan_call(pg_temp.v2_plan_signed(jsonb_set(pg_temp.v2_plan(), '{source_evidence,cohort_sha256}', to_jsonb(repeat('d', 64))))) ->> 'code'),
   'ALIAS_V2_PLAN_INVALID',
   'a claimed cohort digest that is not the declared expected cohort digest is refused'
 );
 select is(
-  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{source_alias,sha256}', '"not-a-digest"'::jsonb)) ->> 'code'),
+  (pg_temp.v2_plan_call(pg_temp.v2_plan_signed(jsonb_set(pg_temp.v2_plan(), '{source_alias,sha256}', '"not-a-digest"'::jsonb))) ->> 'code'),
   'ALIAS_V2_PLAN_INVALID',
   'a malformed source alias identity is refused'
 );
 select is(
-  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{source_alias,sha256}',
+  (pg_temp.v2_plan_call(pg_temp.v2_plan_signed(jsonb_set(pg_temp.v2_plan(), '{source_alias,sha256}',
     to_jsonb(private.dataset_alias_v2_payload_sha256(
       (select json_ordered::jsonb from public.flowproperties
-        where id = (select alias_fp from v2_fixture) and version = '00.00.001'))))) ->> 'code'),
+        where id = (select alias_fp from v2_fixture) and version = '00.00.001')))))) ->> 'code'),
   'ALIAS_V2_EVIDENCE_MISMATCH',
   'an alias payload digest is refused: the producer binds the identity tuple, not the row payload'
 );
 select is(
-  (pg_temp.v2_plan_call(jsonb_set(pg_temp.v2_plan(), '{source_evidence,original_source_unit}', '""'::jsonb)) ->> 'code'),
+  (pg_temp.v2_plan_call(pg_temp.v2_plan_signed(jsonb_set(pg_temp.v2_plan(), '{source_evidence,original_source_unit}', '""'::jsonb))) ->> 'code'),
   'ALIAS_V2_PLAN_INVALID',
   'a plan without the original source unit semantics is refused'
 );
@@ -1004,14 +1040,14 @@ select ok(exists (
       encode(extensions.digest(convert_to((select plan from v2_plan_fixture)::text, 'UTF8'), 'sha256'), 'hex')
 ), 'the plan summary is bound to the server digest of the submitted plan text');
 select is(
-  (pg_temp.v2_plan_call(jsonb_set((select plan from v2_plan_fixture), '{actions,1,mutation,exchanges,0,flow_id}', to_jsonb((select flow_id::text from v2_fixture)))) ->> 'code'),
+  (pg_temp.v2_plan_call(pg_temp.v2_plan_signed(jsonb_set((select plan from v2_plan_fixture), '{actions,1,mutation,exchanges,0,flow_id}', to_jsonb((select flow_id::text from v2_fixture))))) ->> 'code'),
   'ALIAS_V2_BATCH_INVALID',
   'a plan leaf refusal passes through with the batch code unchanged'
 );
 select is(
   (pg_temp.v2_plan_call(pg_temp.v2_plan()) ->> 'code') || ' / ' || (pg_temp.v2_plan_call(pg_temp.v2_plan()) ->> 'message'),
-  'ALIAS_V2_PLAN_PROOF_MISMATCH / An applied batch without its plan summary cannot be re-attested by a resubmission',
-  'a plan resubmitted after a batch-only application is refused rather than re-attested'
+  'ALIAS_V2_REPLAY_UNPROVEN / A desired-state row has no committed audit proof',
+  'a plan resubmitted under an identity whose rows were applied without its audit chain is refused, never re-attested'
 );
 delete from public.processes where id = (select uncertain_process_id from v2_fixture);
 delete from public.flows where id = (select uncertain_flow_id from v2_fixture);

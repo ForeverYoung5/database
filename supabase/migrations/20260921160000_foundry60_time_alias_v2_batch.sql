@@ -203,10 +203,13 @@ immutable
 as $$
   select case
     when p_before_text is null then null
-    -- The reviewed CLI rule: exactly the quantity `1` or `1.0`, exactly one space, the single unit token
-    -- `a`, then whitespace and a non-empty suffix that is preserved byte for byte. An empty suffix and a
-    -- glued `a2` are refused; nothing else in the text is touched.
-    when p_before_text ~ '^(1|1\.0) a[[:space:]]+[^[:space:]]' then regexp_replace(p_before_text, '^(1|1\.0) a', '\1 hr', '')
+    -- The shared reviewed rule, literally: quantity `1` or `1.0`, one ASCII space, the single unit token
+    -- `a`, then a suffix that starts with an ASCII space and carries at least one character that is
+    -- neither space nor tab, with no CR or LF anywhere — and the whole string must match, so a trailing
+    -- newline is a different text rather than a tolerated suffix. Every other byte survives unchanged.
+    -- Equivalent to the producer's `^(1|1\.0) a( [^\r\n]*[^ \t\r\n][^\r\n]*)$`.
+    when p_before_text ~ '^(1|1\.0) a( [^\r\n]*[^ \t\r\n][^\r\n]*)$'
+      then regexp_replace(p_before_text, '^(1|1\.0) a', '\1 hr', '')
     else null
   end
 $$;
@@ -392,7 +395,7 @@ begin
     end if;
     if exists (
       select 1 from jsonb_object_keys(p_batch->'source_evidence') as key(name)
-      where key.name <> all (array['sha256', 'exchange_count', 'source_unitgroup'])
+      where key.name <> all (array['sha256', 'exchange_count', 'source_unitgroup', 'source_flowproperty'])
     ) or (p_batch #>> '{source_evidence,sha256}') !~ '^[a-f0-9]{64}$'
       or (p_batch #>> '{source_evidence,exchange_count}') !~ '^[0-9]+$'
       or jsonb_typeof(p_batch->'source_evidence'->'source_unitgroup') is distinct from 'object'
@@ -402,9 +405,17 @@ begin
       )
       or (p_batch #>> '{source_evidence,source_unitgroup,id}') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
       or (p_batch #>> '{source_evidence,source_unitgroup,version}') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
-      or (p_batch #>> '{source_evidence,source_unitgroup,sha256}') !~ '^[a-f0-9]{64}$' then
+      or (p_batch #>> '{source_evidence,source_unitgroup,sha256}') !~ '^[a-f0-9]{64}$'
+      or jsonb_typeof(p_batch->'source_evidence'->'source_flowproperty') is distinct from 'object'
+      or exists (
+        select 1 from jsonb_object_keys(p_batch->'source_evidence'->'source_flowproperty') as key(name)
+        where key.name <> all (array['id', 'version', 'sha256'])
+      )
+      or (p_batch #>> '{source_evidence,source_flowproperty,id}') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      or (p_batch #>> '{source_evidence,source_flowproperty,version}') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+      or (p_batch #>> '{source_evidence,source_flowproperty,sha256}') !~ '^[a-f0-9]{64}$' then
       perform private.dataset_alias_v2_deny('ALIAS_V2_BATCH_INVALID', 400,
-        'The source evidence block must carry exactly the reviewed digest, exchange count and source unit group snapshot');
+        'The source evidence block must carry exactly the reviewed digest, exchange count, source unit group and complete source flow property snapshots');
     end if;
 
     -- Locks: unit groups inside the boundary so no concurrent factor or snapshot change can race.
@@ -739,6 +750,19 @@ begin
       end if;
       v_alias_fp_source_ug_id := p_batch #>> '{source_evidence,source_unitgroup,id}';
       v_alias_fp_source_ug_version := p_batch #>> '{source_evidence,source_unitgroup,version}';
+      -- The frozen source flow property snapshot is the complete current payload, not only its
+      -- identity: the lock holds the row, so a payload that moved after the freeze — including a
+      -- name-only change — is refused here even though the identity digest still matches.
+      if p_batch->'source_evidence'->'source_flowproperty' is null
+        or (p_batch #>> '{source_evidence,source_flowproperty,id}')
+          is distinct from v_alias_fp_id
+        or (p_batch #>> '{source_evidence,source_flowproperty,version}')
+          is distinct from v_alias_fp_version
+        or (p_batch #>> '{source_evidence,source_flowproperty,sha256}')
+          is distinct from private.dataset_alias_v2_payload_sha256(v_alias_fp_row) then
+        perform private.dataset_alias_v2_deny('ALIAS_V2_EVIDENCE_MISMATCH', 409,
+          'The frozen source flow property snapshot is not the complete locked current source flow property payload');
+      end if;
       -- The reviewed plan binds the source alias identity, not the alias row's whole payload: its
       -- digest is the canonical hash of the {id, version} tuple. The row itself is bound by the
       -- identity check below and by the declared source unit group the row must actually reference,

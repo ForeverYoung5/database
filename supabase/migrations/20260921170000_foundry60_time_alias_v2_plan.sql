@@ -178,7 +178,21 @@ begin
     or (p_plan #>> '{source_evidence,cohort_sha256}') is distinct from (p_plan #>> '{source_evidence,expected_cohort_sha256}')
     or coalesce(p_plan #>> '{source_evidence,original_source_unit}', '') = ''
     or jsonb_typeof(p_plan #> '{source_evidence,exchange_count}') is distinct from 'number'
-    or jsonb_typeof(p_plan->'source_evidence'->'declared_source_unitgroup') is distinct from 'object' then
+    or jsonb_typeof(p_plan->'source_evidence'->'declared_source_unitgroup') is distinct from 'object'
+    -- The frozen source flow property snapshot: the complete payload of the alias the plan runs
+    -- against, bound by its own canonical digest and named by the same identity the alias digest
+    -- binds. The executor compares that digest against the locked row payload.
+    or jsonb_typeof(p_plan->'source_evidence'->'source_flowproperty') is distinct from 'object'
+    or exists (
+      select 1 from jsonb_object_keys(p_plan->'source_evidence'->'source_flowproperty') as key(name)
+      where key.name <> all (array['id', 'version', 'sha256'])
+    )
+    or (select count(*) from jsonb_object_keys(p_plan->'source_evidence'->'source_flowproperty')) <> 3
+    or coalesce(p_plan #>> '{source_evidence,source_flowproperty,id}', '') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    or coalesce(p_plan #>> '{source_evidence,source_flowproperty,version}', '') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
+    or coalesce(p_plan #>> '{source_evidence,source_flowproperty,sha256}', '') !~ '^[a-f0-9]{64}$'
+    or (p_plan #>> '{source_evidence,source_flowproperty,id}') is distinct from (p_plan #>> '{source_alias,id}')
+    or (p_plan #>> '{source_evidence,source_flowproperty,version}') is distinct from (p_plan #>> '{source_alias,version}') then
     return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_INVALID', 'status', 400,
       'message', 'The plan must carry its source alias identity, equal declared cohort digests and the declared/original source unit semantics');
   end if;
@@ -225,6 +239,16 @@ begin
   v_plan_request_sha256 := encode(extensions.digest(convert_to(p_plan::text, 'UTF8'), 'sha256'), 'hex');
   v_batch_id := 'time:' || v_plan_sha256;
 
+  -- The claimed plan digest must be the canonical hash of the submitted plan document minus its own
+  -- `plan_sha256` binding, exactly as the producer computes it. This is checked before the replay lookup
+  -- below, so a changed request body that reuses an applied plan label refuses instead of returning a
+  -- stored proof for a plan it is not.
+  if util.dataset_alias_execution_v2_artifact_sha256(p_plan - 'plan_sha256')
+      is distinct from v_plan_sha256 then
+    return jsonb_build_object('ok', false, 'code', 'ALIAS_V2_PLAN_DIGEST_MISMATCH', 'status', 409,
+      'message', 'The declared plan digest is not the canonical hash of this plan document');
+  end if;
+
   -- The batch the plan executes is assembled here from the plan's own blocks; it is never accepted from a
   -- caller, so a plan and its batch cannot disagree about identity, evidence or counts.
   v_batch := jsonb_build_object(
@@ -238,7 +262,8 @@ begin
     'source_evidence', jsonb_build_object(
       'sha256', p_plan #>> '{source_evidence,sha256}',
       'exchange_count', p_plan #> '{source_evidence,exchange_count}',
-      'source_unitgroup', p_plan#>'{source_evidence,declared_source_unitgroup}'),
+      'source_unitgroup', p_plan#>'{source_evidence,declared_source_unitgroup}',
+      'source_flowproperty', p_plan#>'{source_evidence,source_flowproperty}'),
     'source_alias', p_plan->'source_alias',
     'counts', jsonb_build_object(
       'action_count', v_expected->>'action_count',
@@ -335,7 +360,8 @@ begin
     'source_evidence', jsonb_build_object(
       'sha256', p_plan #>> '{source_evidence,sha256}',
       'exchange_count', p_plan #> '{source_evidence,exchange_count}',
-      'source_unitgroup', p_plan#>'{source_evidence,declared_source_unitgroup}'),
+      'source_unitgroup', p_plan#>'{source_evidence,declared_source_unitgroup}',
+      'source_flowproperty', p_plan#>'{source_evidence,source_flowproperty}'),
     'source_alias', p_plan->'source_alias', 'target_snapshots', p_plan->'target_snapshots',
     'counts', jsonb_build_object(
       'action_count', v_expected->>'action_count', 'flow_count', v_expected->>'flow_count',

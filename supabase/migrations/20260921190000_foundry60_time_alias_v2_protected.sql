@@ -715,6 +715,10 @@ begin
   if v_plan->>'schema_version' is distinct from 'dataset-alias-plan.v2'
     or v_plan->>'target_visibility' is distinct from 'owner_draft'
     or (v_plan->>'plan_sha256') !~ '^[a-f0-9]{64}$'
+    -- The claimed plan digest is the producer's canonical self-hash of the plan document minus its
+    -- own binding; admission verifies it before anything downstream reuses the label.
+    or util.dataset_alias_execution_v2_artifact_sha256(v_plan - 'plan_sha256')
+      is distinct from (v_plan->>'plan_sha256')
     then
     return jsonb_build_object(
       'ok', false,
