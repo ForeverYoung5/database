@@ -43740,6 +43740,103 @@ $$;
 ALTER FUNCTION "private"."dataset_alias_v2_replace_fu_text"("p_before" "jsonb", "p_functional_unit" "jsonb") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "private"."dataset_derivative_http_body_candidate_ids"("p_body" "bytea") RETURNS "text"[]
+    LANGUAGE "plpgsql" STABLE
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_body jsonb;
+  v_ids text[];
+begin
+  if p_body is null then
+    return array[]::text[];
+  end if;
+  v_body := pg_catalog.convert_from(p_body, 'UTF8')::jsonb;
+  if jsonb_typeof(v_body) = 'object' then
+    select coalesce(array_agg(candidate.value), array[]::text[])
+    into v_ids
+    from (
+      select v_body #>> '{record,id}' as value
+      union all
+      select v_body #>> '{old_record,id}'
+    ) as candidate
+    where candidate.value is not null;
+    return v_ids;
+  end if;
+  if jsonb_typeof(v_body) = 'array' then
+    select coalesce(array_agg(distinct job.value->>'id'), array[]::text[])
+    into v_ids
+    from jsonb_array_elements(v_body) as job(value)
+    where job.value->>'id' is not null;
+    return v_ids;
+  end if;
+  return array[]::text[];
+exception
+  when others then
+    return array[]::text[];
+end;
+$$;
+
+
+ALTER FUNCTION "private"."dataset_derivative_http_body_candidate_ids"("p_body" "bytea") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "private"."dataset_derivative_http_body_candidate_ids"("p_body" "bytea") IS 'Ids a dispatch body can possibly match under the derivative quarantine predicate: the decoded record/old_record ids for object bodies and every embedded job id for array bodies. Presence of an id in this set is necessary (never sufficient) for util.dataset_derivative_rebuild_http_body_matches, so callers use it only as a candidate superset.';
+
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_derivative_rebuild_queue_cache"("p_targets" "jsonb") RETURNS "jsonb"
+    LANGUAGE "sql" STABLE
+    SET "search_path" TO ''
+    AS $$
+  with queue_rows as (
+    select
+      request.id,
+      request.ctid::text as ctid,
+      private.dataset_derivative_http_body_candidate_ids(request.body) as ids
+    from net.http_request_queue as request
+    where request.url like '%/functions/v1/webhook_process_embedding_ft'
+      or request.url like '%/functions/v1/webhook_flow_embedding_ft'
+      or request.url like '%/functions/v1/embedding_ft'
+  ),
+  snapshot as (
+    select jsonb_object_agg(queue_row.id::text, queue_row.ctid) as map
+    from queue_rows as queue_row
+  ),
+  target_matches as (
+    select
+      matched.ordinal,
+      jsonb_object_agg(distinct matched.id::text, true) as map
+    from (
+      select queue_row.id, target.ordinality as ordinal
+      from queue_rows as queue_row
+      cross join lateral unnest(queue_row.ids) as body_id(value)
+      join lateral (
+        select target.ordinality
+        from jsonb_array_elements(p_targets) with ordinality as target(value, ordinality)
+        where target.value->>'id' = body_id.value
+      ) as target on true
+    ) as matched
+    group by matched.ordinal
+  )
+  select jsonb_build_object(
+    'snapshot', coalesce((select snapshot.map from snapshot), '{}'::jsonb),
+    'targets', coalesce(
+      (select jsonb_object_agg(target_matches.ordinal::text, target_matches.map)
+       from target_matches),
+      '{}'::jsonb
+    )
+  )
+$$;
+
+
+ALTER FUNCTION "private"."dataset_derivative_rebuild_queue_cache"("p_targets" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "private"."dataset_derivative_rebuild_queue_cache"("p_targets" "jsonb") IS 'One-pass candidate cache over the derivative dispatch queue for a bounded batch: every queue row''s id and ctid version, plus the per-target-ordinal row-id sets derived from decoded body ids. A candidate superset for the quarantine predicate; the matcher still decides every candidate row.';
+
+
+
 CREATE OR REPLACE FUNCTION "private"."dataset_flow_identity_active_fence"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -72071,6 +72168,7 @@ declare
   v_target jsonb;
   v_snapshot jsonb;
   v_quarantine jsonb;
+  v_queue_cache jsonb;
   v_action jsonb;
   v_table text;
   v_id uuid;
@@ -72274,6 +72372,16 @@ begin
     end if;
   end loop;
 
+  -- One decode pass over the candidate dispatch queue for this bounded batch, built only after
+  -- every target above has been fully validated and locked. The cache is a strict candidate
+  -- superset: per queue row it records the row id, its ctid version and the target ordinals whose
+  -- id appears anywhere in the row's decoded body. The original matcher still decides every
+  -- candidate row at delete time, rows absent from the snapshot (new inserts or ctid rewrites)
+  -- are always candidates, and no row outside the superset can satisfy the original predicate, so
+  -- each target's delete keeps its exact original row set while the body decode is paid once per
+  -- batch instead of once per target.
+  v_queue_cache := private.dataset_derivative_rebuild_queue_cache(p_targets);
+
   select jsonb_agg(
     jsonb_build_object(
       'table', target.value->>'table',
@@ -72364,10 +72472,12 @@ begin
         message = 'Derivative rebuild batch primary changed after validation';
     end if;
 
-    v_quarantine := util.quarantine_dataset_derivative_rebuild_target(
+    v_quarantine := util.quarantine_dataset_derivative_rebuild_target_cached(
       v_table,
       v_id,
-      v_version
+      v_version,
+      v_queue_cache,
+      v_ordinal
     );
     v_request_id := pg_catalog.gen_random_uuid();
     v_action_id := 'batch:' || v_ordinal::text || ':'
@@ -73096,24 +73206,6 @@ begin
   if p_body is null
     or p_table is null
     or p_table not in ('flows', 'processes') then
-    return false;
-  end if;
-  -- Conservative byte pre-filter: without the id bytes and without any `\u` escape prefix the
-  -- decoded body cannot produce the id (only Unicode escapes can spell characters of a UUID text),
-  -- so the parse below cannot return true. The bytea overload of pg_catalog.position takes the
-  -- haystack first (unlike the `position(x in y)` text form), so p_body is the first argument;
-  -- '\x5c75' is the two-byte `\u` sequence.
-  --
-  -- One deliberate difference, visible only to a caller that inspects the raw value: for an
-  -- object-shaped body whose record.id is absent or JSON null (with neither the version nor the
-  -- table comparison false) the pre-#689 body returned SQL NULL while this early return yields
-  -- false. The true-set is identical - the early return fires only where the original could not
-  -- return true - and every caller consumes this function in a positive filter context
-  -- (DELETE/COUNT ... WHERE, WHERE EXISTS, LEFT JOIN ... ON) where NULL and false select the same
-  -- rows; the batch suite pins the class and the call-site evidence is recorded with the #689
-  -- review.
-  if pg_catalog.position(p_body, pg_catalog.convert_to(p_id::text, 'UTF8')) = 0
-    and pg_catalog.position(p_body, '\x5c75'::bytea) = 0 then
     return false;
   end if;
   v_body := pg_catalog.convert_from(p_body, 'UTF8')::jsonb;
@@ -77425,6 +77517,77 @@ $$;
 
 
 ALTER FUNCTION "util"."quarantine_dataset_derivative_rebuild_target"("p_table" "text", "p_id" "uuid", "p_version" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "util"."quarantine_dataset_derivative_rebuild_target_cached"("p_table" "text", "p_id" "uuid", "p_version" "text", "p_cache" "jsonb", "p_ordinal" integer) RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_http integer := 0;
+  v_embedding integer := 0;
+  v_pending integer := 0;
+  v_snapshot jsonb;
+  v_candidates jsonb;
+begin
+  if p_table is null or p_table not in ('flows', 'processes') then
+    raise exception using
+      errcode = '22023',
+      message = 'Derivative quarantine target table must be flows or processes';
+  end if;
+
+  v_snapshot := coalesce(p_cache->'snapshot', '{}'::jsonb);
+  v_candidates := coalesce(p_cache->'targets'->p_ordinal::text, '{}'::jsonb);
+
+  delete from net.http_request_queue as request
+  where (
+      request.url like '%/functions/v1/webhook_process_embedding_ft'
+      or request.url like '%/functions/v1/webhook_flow_embedding_ft'
+      or request.url like '%/functions/v1/embedding_ft'
+    )
+    and (
+      v_candidates ? request.id::text
+      or not (v_snapshot ? request.id::text)
+      or (v_snapshot->>request.id::text) is distinct from request.ctid::text
+    )
+    and util.dataset_derivative_rebuild_http_body_matches(
+      request.body,
+      p_table,
+      p_id,
+      p_version
+    );
+  get diagnostics v_http = row_count;
+
+  delete from pgmq.q_embedding_jobs as job
+  where job.message->>'id' = p_id::text
+    and btrim(job.message->>'version') = p_version
+    and job.message->>'schema' = 'public'
+    and job.message->>'table' = p_table
+    and job.message->>'embeddingColumn' = 'embedding_ft';
+  get diagnostics v_embedding = row_count;
+
+  delete from util.pending_embedding_jobs as pending
+  where pending.schema_name = 'public'
+    and pending.table_name = p_table
+    and pending.record_id = p_id::text
+    and btrim(pending.record_version) = p_version
+    and pending.embedding_column = 'embedding_ft';
+  get diagnostics v_pending = row_count;
+
+  return jsonb_build_object(
+    'http_requests', v_http,
+    'embedding_jobs', v_embedding,
+    'pending_jobs', v_pending
+  );
+end;
+$$;
+
+
+ALTER FUNCTION "util"."quarantine_dataset_derivative_rebuild_target_cached"("p_table" "text", "p_id" "uuid", "p_version" "text", "p_cache" "jsonb", "p_ordinal" integer) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "util"."quarantine_dataset_derivative_rebuild_target_cached"("p_table" "text", "p_id" "uuid", "p_version" "text", "p_cache" "jsonb", "p_ordinal" integer) IS 'Cached-batch variant of util.quarantine_dataset_derivative_rebuild_target: the queue delete first narrows to the cache''s candidate superset (cached matches for this ordinal, plus rows absent from the snapshot or with a changed ctid version) and the original dispatch-body matcher still decides every candidate row; the embedding-job and pending-job deletes and the returned counters are identical to the uncached owner. Internal batch-admission use only.';
+
 
 
 CREATE OR REPLACE FUNCTION "util"."queue_dataset_extraction_jobs"() RETURNS "trigger"
@@ -89896,6 +90059,14 @@ REVOKE ALL ON FUNCTION "private"."dataset_alias_v2_replace_fu_text"("p_before" "
 
 
 
+REVOKE ALL ON FUNCTION "private"."dataset_derivative_http_body_candidate_ids"("p_body" "bytea") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_derivative_rebuild_queue_cache"("p_targets" "jsonb") FROM PUBLIC;
+
+
+
 REVOKE ALL ON FUNCTION "private"."dataset_flow_identity_active_fence"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "private"."dataset_flow_identity_active_fence"() TO "api_internal_executor";
 
@@ -91730,6 +91901,10 @@ REVOKE ALL ON FUNCTION "util"."quarantine_dataset_derivative_rebuild_target"("p_
 
 
 REVOKE ALL ON FUNCTION "util"."quarantine_dataset_derivative_rebuild_target"("p_table" "text", "p_id" "uuid", "p_version" "text") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "util"."quarantine_dataset_derivative_rebuild_target_cached"("p_table" "text", "p_id" "uuid", "p_version" "text", "p_cache" "jsonb", "p_ordinal" integer) FROM PUBLIC;
 
 
 

@@ -9,6 +9,7 @@ declare
   v_target jsonb;
   v_snapshot jsonb;
   v_quarantine jsonb;
+  v_queue_cache jsonb;
   v_action jsonb;
   v_table text;
   v_id uuid;
@@ -212,6 +213,16 @@ begin
     end if;
   end loop;
 
+  -- One decode pass over the candidate dispatch queue for this bounded batch, built only after
+  -- every target above has been fully validated and locked. The cache is a strict candidate
+  -- superset: per queue row it records the row id, its ctid version and the target ordinals whose
+  -- id appears anywhere in the row's decoded body. The original matcher still decides every
+  -- candidate row at delete time, rows absent from the snapshot (new inserts or ctid rewrites)
+  -- are always candidates, and no row outside the superset can satisfy the original predicate, so
+  -- each target's delete keeps its exact original row set while the body decode is paid once per
+  -- batch instead of once per target.
+  v_queue_cache := private.dataset_derivative_rebuild_queue_cache(p_targets);
+
   select jsonb_agg(
     jsonb_build_object(
       'table', target.value->>'table',
@@ -302,10 +313,12 @@ begin
         message = 'Derivative rebuild batch primary changed after validation';
     end if;
 
-    v_quarantine := util.quarantine_dataset_derivative_rebuild_target(
+    v_quarantine := util.quarantine_dataset_derivative_rebuild_target_cached(
       v_table,
       v_id,
-      v_version
+      v_version,
+      v_queue_cache,
+      v_ordinal
     );
     v_request_id := pg_catalog.gen_random_uuid();
     v_action_id := 'batch:' || v_ordinal::text || ':'
