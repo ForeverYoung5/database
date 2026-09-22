@@ -16,7 +16,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth, private;
 
-select plan(109);
+select plan(119);
 
 -- ------------------------------------------------------------------------------------------------
 -- Fixture: one target unit group (year base plus the exact hour factor), one distinct source unit group
@@ -870,6 +870,76 @@ select is(
   'ALIAS_V2_REPLAY_CONFLICT',
   'a resubmission carrying different source evidence is refused as a replay conflict'
 );
+
+-- ================================================================================================
+-- 4b. Database #694: the row audit carries the canonical digest of what was actually written.
+-- The executor no longer recomputes those two digests; it reuses the producer's claimed
+-- before_sha256 / desired_sha256, which the untouched structural scan already proved equal to the
+-- server's canonical digest of the claimed before payload and of the server-derived payload that is
+-- committed. These assertions pin that equality against the live rows, so a future change that
+-- stopped enforcing parity could never silently publish an unverified digest.
+-- ================================================================================================
+create temp table v2_audit_row as
+  select audit_log.target_table,
+         audit_log.payload->>'before_sha256' as before_sha256,
+         audit_log.payload->>'after_sha256' as after_sha256
+  from private.command_audit_log as audit_log
+  where audit_log.command = 'cmd_dataset_alias_batch_v2_guarded'
+    and audit_log.actor_user_id = (select actor from v2_fixture)
+    and audit_log.payload->>'record_type' = 'row'
+    and audit_log.payload->>'plan_sha256' = pg_temp.v2_batch()->>'plan_sha256';
+
+select is((select count(*) from v2_audit_row), 2::bigint, 'the applied plan wrote exactly one row audit per action');
+select is(
+  (select before_sha256 from v2_audit_row where target_table = 'flows'),
+  private.dataset_alias_v2_payload_sha256(pg_temp.v2_batch()->'actions'->0->'expected_json_ordered'),
+  'the flow row audit records the canonical digest of its claimed before payload');
+select is(
+  (select after_sha256 from v2_audit_row where target_table = 'flows'),
+  private.dataset_alias_v2_payload_sha256((select json_ordered::jsonb from public.flows where id = (select flow_id from v2_fixture))),
+  'the flow row audit records the canonical digest of the payload actually written');
+select is(
+  (select before_sha256 from v2_audit_row where target_table = 'processes'),
+  private.dataset_alias_v2_payload_sha256(pg_temp.v2_batch()->'actions'->1->'expected_json_ordered'),
+  'the process row audit records the canonical digest of its claimed before payload');
+select is(
+  (select after_sha256 from v2_audit_row where target_table = 'processes'),
+  private.dataset_alias_v2_payload_sha256((select json_ordered::jsonb from public.processes where id = (select process_id from v2_fixture))),
+  'the process row audit records the canonical digest of the payload actually written');
+
+-- ================================================================================================
+-- 4c. The parity guard the #694 reuse depends on is untouched: a well-formed but wrong claimed
+-- digest — the other action's own digest, which passes every shape check — is still refused, and
+-- the refusal writes nothing at all.
+-- ================================================================================================
+create temp table v2_before_tamper as
+  select
+    (select count(*) from private.command_audit_log) as audits,
+    (select json_ordered::jsonb from public.flows where id = (select flow_id from v2_fixture)) as flow_payload,
+    (select json_ordered::jsonb from public.processes where id = (select process_id from v2_fixture)) as process_payload;
+
+select is(
+  (pg_temp.v2_call(jsonb_set(pg_temp.v2_batch(), '{actions,0,before_sha256}',
+    to_jsonb(pg_temp.v2_batch() #>> '{actions,1,before_sha256}'))) ->> 'code'),
+  'ALIAS_V2_DERIVE_MISMATCH',
+  'a well-formed before digest belonging to another action is refused as a parity mismatch');
+select is(
+  (pg_temp.v2_call(jsonb_set(pg_temp.v2_batch(), '{actions,1,desired_sha256}',
+    to_jsonb(pg_temp.v2_batch() #>> '{actions,0,desired_sha256}'))) ->> 'code'),
+  'ALIAS_V2_DERIVE_MISMATCH',
+  'a well-formed desired digest belonging to another action is refused as a parity mismatch');
+select is(
+  (select count(*) from private.command_audit_log),
+  (select audits from v2_before_tamper),
+  'a tampered claimed digest writes no audit row');
+select is(
+  (select json_ordered::jsonb from public.flows where id = (select flow_id from v2_fixture)),
+  (select flow_payload from v2_before_tamper),
+  'a tampered claimed digest leaves the flow row unchanged');
+select is(
+  (select json_ordered::jsonb from public.processes where id = (select process_id from v2_fixture)),
+  (select process_payload from v2_before_tamper),
+  'a tampered claimed digest leaves the process row unchanged');
 
 
 -- ================================================================================================

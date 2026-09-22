@@ -38011,12 +38011,12 @@ begin
           v_prepared := v_prepared || jsonb_build_array(jsonb_build_object(
             'action_id', v_action->>'action_id', 'table', v_table, 'id', v_action->>'id', 'version', v_action->>'version',
             'expected_modified_at', v_action->'expected_modified_at', 'observed_modified_at', to_jsonb(v_row_modified),
-            'before', v_before, 'desired', v_derived));
+            'before', v_before, 'desired', v_derived, 'before_sha256_verified', v_action->>'before_sha256', 'after_sha256_verified', v_action->>'desired_sha256'));
         elsif v_row_state is not distinct from 0 and v_row_payload = v_claim then
           v_replayed_count := v_replayed_count + 1;
           v_prepared := v_prepared || jsonb_build_array(jsonb_build_object(
             'action_id', v_action->>'action_id', 'table', v_table, 'id', v_action->>'id', 'version', v_action->>'version',
-            'before', v_before, 'desired', v_claim, 'replayed', true));
+            'before', v_before, 'desired', v_claim, 'replayed', true, 'before_sha256_verified', v_action->>'before_sha256', 'after_sha256_verified', v_action->>'desired_sha256'));
         else
           perform private.dataset_alias_v2_deny('ALIAS_V2_ACTION_DRIFT', 409, 'An action no longer matches its frozen before content, owner, state or version', jsonb_build_object('action_id', v_action->>'action_id'));
         end if;
@@ -38178,11 +38178,11 @@ begin
               'expected_state_code', 0, 'expected_modified_at', v_action->'expected_modified_at',
               'observed_modified_at', v_action->'observed_modified_at',
               'committed_modified_at', to_jsonb(v_committed_modified_at),
-              'before_sha256', private.dataset_alias_v2_payload_sha256(v_action->'before'),
-              'after_sha256', private.dataset_alias_v2_payload_sha256(v_action->'desired'),
+              'before_sha256', (v_action->>'before_sha256_verified'),
+              'after_sha256', (v_action->>'after_sha256_verified'),
               'hash_algorithm', 'dataset-alias-canonical-json-v1-sha256'))
           returning id into v_row_audit_id;
-          v_audit_rows := v_audit_rows || jsonb_build_array(jsonb_build_object('action_id', v_action->>'action_id', 'audit_id', v_row_audit_id::text, 'after_sha256', private.dataset_alias_v2_payload_sha256(v_action->'desired')));
+          v_audit_rows := v_audit_rows || jsonb_build_array(jsonb_build_object('action_id', v_action->>'action_id', 'audit_id', v_row_audit_id::text, 'after_sha256', (v_action->>'after_sha256_verified')));
         end loop;
 
         insert into private.command_audit_log (command, actor_user_id, target_table, payload)
@@ -38226,7 +38226,7 @@ begin
             and audit_log.payload->>'record_type' = 'row'
             and audit_log.payload->>'plan_sha256' = v_plan_sha256
             and audit_log.payload->>'action_id' = v_action->>'action_id'
-            and audit_log.payload->>'after_sha256' = private.dataset_alias_v2_payload_sha256(v_action->'desired')
+            and audit_log.payload->>'after_sha256' = (v_action->>'after_sha256_verified')
           order by audit_log.id desc limit 1;
           if v_proof_id is null then
             perform private.dataset_alias_v2_deny('ALIAS_V2_REPLAY_UNPROVEN', 409,
@@ -43313,6 +43313,19 @@ begin
     if v_array_index <= 4294967294 then
       return '\x00'::bytea || int8send(v_array_index);
     end if;
+  end if;
+
+  -- Fast path: a pure-ASCII value (U+0001..U+007F; text cannot hold U+0000) needs
+  -- no per-character loop. One C-level pass over the bytes reproduces the loop's
+  -- exact output; anything else falls through to the unchanged loop below.
+  --
+  -- The domain is fixed by the explicit C collation: under C the bracket range is
+  -- exactly the code points U+0001..U+007F, so the test never follows the database
+  -- locale or its ctype table. The empty value is excluded by the '+' quantifier
+  -- and falls to the loop, which returns the bare '\x01' prefix as before.
+  if p_value collate "C" ~ '^[\x01-\x7F]+$' then
+    return '\x01'::bytea
+      || decode(regexp_replace(encode(convert_to(p_value, 'UTF8'), 'hex'), '(..)', '00\1', 'g'), 'hex');
   end if;
 
   for v_character_index in 1..character_length(p_value) loop
