@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth;
 
-select plan(40);
+select plan(48);
 
 select ok(
   to_regprocedure(
@@ -767,6 +767,103 @@ select ok(
   ),
   'aggregate proof fails closed when one completed snapshot digest is corrupted'
 );
+
+-- ================================================================================================
+-- Database #689: the dispatch-body byte pre-filter keeps the predicate exact.
+-- ================================================================================================
+select ok(
+  util.dataset_derivative_rebuild_http_body_matches(
+    pg_catalog.convert_to(
+      '{"schema":"public","table":"processes","record":{"id":"11111111-1111-4111-8111-111111111111","version":"00.00.001"}}',
+      'UTF8'
+    ),
+    'processes',
+    '11111111-1111-4111-8111-111111111111'::uuid,
+    '00.00.001'
+  ),
+  'a verbatim dispatch body still matches its exact target'
+);
+select ok(
+  util.dataset_derivative_rebuild_http_body_matches(
+    pg_catalog.convert_to(
+      '{"schema":"public","table":"processes","record":{"id":"\u0031\u0031\u0031\u0031\u0031\u0031\u0031\u0031-1111-4111-8111-111111111111","version":"00.00.001"}}',
+      'UTF8'
+    ),
+    'processes',
+    '11111111-1111-4111-8111-111111111111'::uuid,
+    '00.00.001'
+  ),
+  'an id spelled with JSON escapes still matches through the full parse path'
+);
+select ok(
+  not util.dataset_derivative_rebuild_http_body_matches(
+    pg_catalog.convert_to(
+      '{"schema":"public","table":"processes","record":{"id":"22222222-2222-4222-8222-222222222222","version":"00.00.001"}}',
+      'UTF8'
+    ),
+    'processes',
+    '11111111-1111-4111-8111-111111111111'::uuid,
+    '00.00.001'
+  ),
+  'a body for another target stays a non-match'
+);
+select ok(
+  not util.dataset_derivative_rebuild_http_body_matches(
+    pg_catalog.convert_to(
+      '{"schema":"public","table":"processes","note":"line\nbreak","record":{"id":"22222222-2222-4222-8222-222222222222","version":"00.00.001"}}',
+      'UTF8'
+    ),
+    'processes',
+    '11111111-1111-4111-8111-111111111111'::uuid,
+    '00.00.001'
+  ),
+  'a body carrying any backslash still takes the exact parse path'
+);
+select ok(
+  net.http_post(
+    url := 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft',
+    body := jsonb_build_object(
+      'schema', 'public',
+      'table', 'processes',
+      'record', jsonb_build_object('id', '11111111-1111-4111-8111-111111111111', 'version', '00.00.001')
+    ),
+    timeout_milliseconds := 1000
+  ) is not null,
+  'the matching dispatch fixture is queued'
+);
+select ok(
+  net.http_post(
+    url := 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft',
+    body := jsonb_build_object(
+      'schema', 'public',
+      'table', 'processes',
+      'record', jsonb_build_object('id', '22222222-2222-4222-8222-222222222222', 'version', '00.00.001')
+    ),
+    timeout_milliseconds := 1000
+  ) is not null,
+  'the foreign dispatch fixture is queued'
+);
+select is(
+  (
+    util.quarantine_dataset_derivative_rebuild_target(
+      'processes',
+      '11111111-1111-4111-8111-111111111111'::uuid,
+      '00.00.001'
+    )
+  )->>'http_requests',
+  '1',
+  'quarantine still removes exactly the matching queued dispatch'
+);
+select is(
+  (
+    select count(*)::integer
+    from net.http_request_queue as request
+    where request.url like '%/functions/v1/webhook_process_embedding_ft'
+  ),
+  1,
+  'the foreign queued dispatch survives the quarantine scan'
+);
+delete from net.http_request_queue;
 
 select * from finish();
 rollback;
