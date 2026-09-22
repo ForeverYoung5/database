@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth;
 
-select plan(64);
+select plan(68);
 
 select ok(
   to_regprocedure(
@@ -1085,6 +1085,62 @@ select is(
      (select cache from q689_cache), 1))->>'http_requests',
   '0',
   'a row without a dispatch URL survives the cached delete'
+);
+
+-- plan validation accepts any hexadecimal case while the matcher compares canonical lower-case
+-- text: the cache must normalise the target side of its join and leave the body side verbatim.
+delete from net.http_request_queue;
+insert into net.http_request_queue(method, url, headers, body, timeout_milliseconds)
+values ('POST', 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft', '{}'::jsonb,
+        pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"689fffff-0000-4000-8000-000000000001","version":"00.00.001"}}','UTF8'), 1000);
+delete from q689_cache;
+insert into q689_cache
+select private.dataset_derivative_rebuild_queue_cache(
+  $q689_targets$[
+    {"table":"processes","id":"689FFFFF-0000-4000-8000-000000000001","version":"00.00.001"}
+  ]$q689_targets$::jsonb
+);
+select is(
+  (util.quarantine_dataset_derivative_rebuild_target_cached(
+     'processes', '689FFFFF-0000-4000-8000-000000000001'::uuid, '00.00.001',
+     (select cache from q689_cache), 1))->>'http_requests',
+  '1',
+  'an upper-case target id still deletes the lower-case body row through the cache'
+);
+delete from net.http_request_queue;
+insert into net.http_request_queue(method, url, headers, body, timeout_milliseconds)
+values ('POST', 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft', '{}'::jsonb,
+        pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"689fffff-0000-4000-8000-000000000001","version":"00.00.001"}}','UTF8'), 1000);
+select is(
+  (util.quarantine_dataset_derivative_rebuild_target(
+     'processes', '689FFFFF-0000-4000-8000-000000000001'::uuid, '00.00.001'))->>'http_requests',
+  '1',
+  'the uncached owner deletes the same lower-case body row for the upper-case target'
+);
+
+delete from net.http_request_queue;
+insert into net.http_request_queue(method, url, headers, body, timeout_milliseconds)
+values ('POST', 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft', '{}'::jsonb,
+        pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"689FFFFF-0000-4000-8000-000000000001","version":"00.00.001"}}','UTF8'), 1000);
+delete from q689_cache;
+insert into q689_cache
+select private.dataset_derivative_rebuild_queue_cache(
+  $q689_targets$[
+    {"table":"processes","id":"689fffff-0000-4000-8000-000000000001","version":"00.00.001"}
+  ]$q689_targets$::jsonb
+);
+select is(
+  (util.quarantine_dataset_derivative_rebuild_target_cached(
+     'processes', '689fffff-0000-4000-8000-000000000001'::uuid, '00.00.001',
+     (select cache from q689_cache), 1))->>'http_requests',
+  '0',
+  'an upper-case body id is not lower-cased by the cache: the matcher still reports a non-match'
+);
+select is(
+  (util.quarantine_dataset_derivative_rebuild_target(
+     'processes', '689fffff-0000-4000-8000-000000000001'::uuid, '00.00.001'))->>'http_requests',
+  '0',
+  'the uncached owner reports the same non-match for the upper-case body id'
 );
 
 -- a failure after the cached delete rolls the deletion back with its transaction

@@ -21,7 +21,12 @@
 --   It records, per queue row, only its id, its ctid version, and which target ordinals have that
 --   row's id anywhere in its decoded body. The body-decode superset rule: the original matcher can
 --   only return true when a decoded string equals the target id, so id-presence in the decoded body
---   is a necessary condition; the cache therefore never omits a row the matcher would delete.
+--   is a necessary condition; the cache therefore never omits a row the matcher would delete. The
+--   target side of that comparison is normalised with (id)::uuid::text because plan validation
+--   accepts any hexadecimal case while the matcher compares against the canonical lower-case
+--   p_id::text; the body side stays verbatim, exactly like the matcher, so a body id in another
+--   case remains the non-match the matcher already reports. The queue rows are MATERIALIZED so each
+--   body is decoded exactly once per batch.
 --
 --   per-target delete (row set unchanged):  candidate rows are
 --     (a) rows the cache recorded as matching this target, plus
@@ -88,7 +93,7 @@ language sql
 stable
 set search_path = ''
 as $$
-  with queue_rows as (
+  with queue_rows as materialized (
     select
       request.id,
       request.ctid::text as ctid,
@@ -113,7 +118,7 @@ as $$
       join lateral (
         select target.ordinality
         from jsonb_array_elements(p_targets) with ordinality as target(value, ordinality)
-        where target.value->>'id' = body_id.value
+        where (target.value->>'id')::uuid::text = body_id.value
       ) as target on true
     ) as matched
     group by matched.ordinal
