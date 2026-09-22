@@ -68,8 +68,8 @@ select is(
     where namespace.nspname = 'api'
       and routine.prokind = 'f'
   ),
-  303::bigint,
-  'Four Portal navigation/V3 facades plus: api contains the active cutover and consumer facades, including eight additive Portal/Next version-search APIs, two V4 review queues, two partial-import APIs, the three manager-attested Result publication RPCs, the guarded owner-draft before-content save facade, and the five versioned v2 Time-alias protected endpoints (preflight/gate/admit/read plus the service-only execute callback)'
+  305::bigint,
+  'Four Portal navigation/V3 facades plus: api contains the active cutover and consumer facades, including eight additive Portal/Next version-search APIs, two V4 review queues, two partial-import APIs, the three manager-attested Result publication RPCs, the two sample-library query/publication RPCs, the guarded owner-draft before-content save facade, and the five versioned v2 Time-alias protected endpoints (preflight/gate/admit/read plus the service-only execute callback)'
 );
 
 select is(
@@ -80,8 +80,8 @@ select is(
     where namespace.nspname = 'private'
       and routine.prokind = 'f'
   ),
-  405::bigint,
-  'Twenty-five navigation helpers plus: private contains the active helpers, including the twenty-five exact-version, thirteen composite-name and one review-search internals, two partial-import helpers, two whole-package helpers, the example write guard, the two state-120 candidate-cache helpers, the state-120 lifecycle guard, the seven manager-attested Result publication helpers, the nineteen versioned v2 Time-alias helpers (four exact-numeric, ten leaf/derivation helpers, the guarded v2 batch executor, the plan key set, the six-key derivative-target checker, the guarded v2 plan executor and the deterministic derivative-chunk partition), and the eight closed Length*time profile helpers (the closed discriminator, the plan key set, the factor constant, the exact multiply, the instance rewrite, the guarded Length*time executor, the null-safe required-scalar check and the null-safe required-count check)'
+  406::bigint,
+  'Twenty-five navigation helpers plus: private contains the active helpers, including the twenty-five exact-version, thirteen composite-name and one review-search internals, two partial-import helpers, two whole-package helpers, the example write guard, the two state-120 candidate-cache helpers, the state-120 lifecycle guard, the seven manager-attested Result publication helpers, the sample-library publication immutability guard, the nineteen versioned v2 Time-alias helpers (four exact-numeric, ten leaf/derivation helpers, the guarded v2 batch executor, the plan key set, the six-key derivative-target checker, the guarded v2 plan executor and the deterministic derivative-chunk partition), and the eight closed Length*time profile helpers (the closed discriminator, the plan key set, the factor constant, the exact multiply, the instance rewrite, the guarded Length*time executor, the null-safe required-scalar check and the null-safe required-count check)'
 );
 
 select ok(
@@ -122,8 +122,8 @@ select is(
     where not trigger_record.tgisinternal
       and namespace.nspname in ('api', 'private', 'public', 'util')
   ),
-  123::bigint,
-  'Two private navigation writers and one seed guard plus: all active application triggers and two Process composite-name sync triggers plus seven example write guards remain present, including the Result lifecycle guard and the append-only Result attestation guard'
+  124::bigint,
+  'Two private navigation writers and one seed guard plus: all active application triggers and two Process composite-name sync triggers plus seven example write guards remain present, including the Result lifecycle guard and the append-only Result and sample-library publication guards'
 );
 
 -- Two authored triggers live outside those four schemas: the guarded dataset derivative rebuild
@@ -224,8 +224,8 @@ select is(
       'util'::regnamespace
     )
   ),
-  662::bigint,
-  'Twenty-nine navigation constraints plus: all application, OAuth registry and twenty-two composite-name constraints plus ten partial-import and four whole-package constraints the Result publication attestation constraints remain present, and the versioned v2 Time-alias preflight/gate/request tables carry their own reviewed constraints'
+  664::bigint,
+  'Twenty-nine navigation constraints plus: all application, OAuth registry and twenty-two composite-name constraints plus ten partial-import and four whole-package constraints, the Result publication attestation constraints and the sample-library publication primary/foreign keys remain present, and the versioned v2 Time-alias preflight/gate/request tables carry their own reviewed constraints'
 );
 
 select is(
@@ -253,8 +253,8 @@ select is(
       and class.relkind in ('r', 'p')
       and class.relrowsecurity
   ),
-  83::bigint,
-  'RLS covers five new private navigation relations and existing tables plus four private composite-name relations and three private import plan/receipt relations'
+  84::bigint,
+  'RLS covers five new private navigation relations and existing tables plus four private composite-name relations, three private import plan/receipt relations, and the private sample-library publication relation'
 );
 
 select ok(
