@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth;
 
-select plan(40);
+select plan(68);
 
 select ok(
   to_regprocedure(
@@ -767,6 +767,402 @@ select ok(
   ),
   'aggregate proof fails closed when one completed snapshot digest is corrupted'
 );
+
+-- ================================================================================================
+-- Database #689: the original dispatch-body predicate, and the batch queue-cache quarantine path.
+-- ================================================================================================
+select ok(
+  util.dataset_derivative_rebuild_http_body_matches(
+    pg_catalog.convert_to(
+      '{"schema":"public","table":"processes","record":{"id":"11111111-1111-4111-8111-111111111111","version":"00.00.001"}}',
+      'UTF8'
+    ),
+    'processes',
+    '11111111-1111-4111-8111-111111111111'::uuid,
+    '00.00.001'
+  ),
+  'a verbatim dispatch body matches its exact target'
+);
+select ok(
+  util.dataset_derivative_rebuild_http_body_matches(
+    pg_catalog.convert_to(
+      '{"schema":"public","table":"processes","record":{"id":"\u0031\u0031\u0031\u0031\u0031\u0031\u0031\u0031-1111-4111-8111-111111111111","version":"00.00.001"}}',
+      'UTF8'
+    ),
+    'processes',
+    '11111111-1111-4111-8111-111111111111'::uuid,
+    '00.00.001'
+  ),
+  'an id spelled with JSON escapes still matches'
+);
+select ok(
+  not util.dataset_derivative_rebuild_http_body_matches(
+    pg_catalog.convert_to(
+      '{"schema":"public","table":"processes","record":{"id":"22222222-2222-4222-8222-222222222222","version":"00.00.001"}}',
+      'UTF8'
+    ),
+    'processes',
+    '11111111-1111-4111-8111-111111111111'::uuid,
+    '00.00.001'
+  ),
+  'a body for another target stays a non-match'
+);
+select ok(
+  not util.dataset_derivative_rebuild_http_body_matches(
+    pg_catalog.convert_to(
+      '{"schema":"public","table":"processes","note":"line\nbreak","record":{"id":"22222222-2222-4222-8222-222222222222","version":"00.00.001"}}',
+      'UTF8'
+    ),
+    'processes',
+    '11111111-1111-4111-8111-111111111111'::uuid,
+    '00.00.001'
+  ),
+  'a non-matching body carrying ordinary escapes stays a non-match'
+);
+select ok(
+  util.dataset_derivative_rebuild_http_body_matches(
+    pg_catalog.convert_to(
+      '{"schema":"public","table":"processes","note":"markdown\nwith \"quotes\", \\ backslash and / slash","record":{"id":"11111111-1111-4111-8111-111111111111","version":"00.00.001"}}',
+      'UTF8'
+    ),
+    'processes',
+    '11111111-1111-4111-8111-111111111111'::uuid,
+    '00.00.001'
+  ),
+  'a matching body with newline, quote, backslash and slash escapes still matches'
+);
+select ok(
+  not util.dataset_derivative_rebuild_http_body_matches(
+    pg_catalog.convert_to(
+      '{"schema":"public","table":"processes","record":{"id":"22222222-2222-4222-8222-222222222222","version":"00.00.001","note":"c:\\\\u0031 decoy"}}',
+      'UTF8'
+    ),
+    'processes',
+    '11111111-1111-4111-8111-111111111111'::uuid,
+    '00.00.001'
+  ),
+  'an escaped-backslash Unicode decoy resolves to a non-match'
+);
+select ok(
+  util.dataset_derivative_rebuild_http_body_matches(
+    pg_catalog.convert_to(
+      '{"schema":"public","table":"processes","note":"prose mentions \\u0031 literally","record":{"id":"11111111-1111-4111-8111-111111111111","version":"00.00.001"}}',
+      'UTF8'
+    ),
+    'processes',
+    '11111111-1111-4111-8111-111111111111'::uuid,
+    '00.00.001'
+  ),
+  'a matching body carrying a literal Unicode-escape decoy still matches'
+);
+select is(
+  util.dataset_derivative_rebuild_http_body_matches(
+    pg_catalog.convert_to(
+      '{"schema":"public","table":"processes","record":{"id":"xgarbage","version":"00.00.001"}}',
+      'UTF8'
+    ),
+    'processes',
+    null,
+    '00.00.001'
+  ),
+  null,
+  'a null target id keeps the original null result'
+);
+select is(
+  util.dataset_derivative_rebuild_http_body_matches(
+    pg_catalog.convert_to(
+      '{"schema":"public","table":"processes","record":{"version":"00.00.001"}}',
+      'UTF8'
+    ),
+    'processes',
+    '11111111-1111-4111-8111-111111111111'::uuid,
+    '00.00.001'
+  ),
+  null,
+  'a body without record.id keeps the original null result'
+);
+select ok(
+  not util.dataset_derivative_rebuild_http_body_matches('\x'::bytea, 'processes',
+    '11111111-1111-4111-8111-111111111111'::uuid, '00.00.001'),
+  'an empty body is a non-match'
+);
+
+-- ------------------------------------------------------------------------------------------------
+-- Cache path: one decode pass per bounded batch, original per-target delete semantics.
+-- ------------------------------------------------------------------------------------------------
+create temporary table q689_cache as
+select private.dataset_derivative_rebuild_queue_cache(
+  $q689_targets$[
+    {"table":"processes","id":"11111111-1111-4111-8111-111111111111","version":"00.00.001"},
+    {"table":"processes","id":"22222222-2222-4222-8222-222222222222","version":"00.00.001"}
+  ]$q689_targets$::jsonb
+) as cache;
+
+insert into net.http_request_queue(method, url, headers, body, timeout_milliseconds) values
+  ('POST', 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft', '{}'::jsonb,
+   pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"11111111-1111-4111-8111-111111111111","version":"00.00.001","extracted_md":"markdown\nline \"q\" \\ b"}}','UTF8'), 1000),
+  ('POST', 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft', '{}'::jsonb,
+   pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"22222222-2222-4222-8222-222222222222","version":"00.00.001"}}','UTF8'), 1000),
+  ('POST', 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft', '{}'::jsonb,
+   pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"11111111-1111-4111-8111-111111111111","version":"00.00.002"}}','UTF8'), 1000),
+  ('POST', 'http://127.0.0.1:9/functions/v1/embedding_ft', '{}'::jsonb,
+   pg_catalog.convert_to('[{"id":"11111111-1111-4111-8111-111111111111","version":"00.00.001","schema":"public","table":"processes","embeddingColumn":"embedding_ft"},{"id":"22222222-2222-4222-8222-222222222222","version":"00.00.001","schema":"public","table":"processes","embeddingColumn":"embedding_ft"}]','UTF8'), 1000),
+  ('POST', 'http://127.0.0.1:9/functions/v1/other_function', '{}'::jsonb,
+   pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"11111111-1111-4111-8111-111111111111","version":"00.00.001"}}','UTF8'), 1000),
+  ('POST', 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft', '{}'::jsonb,
+   pg_catalog.convert_to('{"broken":','UTF8'), 1000),
+  ('POST', 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft', '{}'::jsonb,
+   pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"33333333-3333-4333-8333-333333333333","version":"00.00.001"}}','UTF8'), 1000),
+  ('POST', 'http://127.0.0.1:9/functions/v1/webhook_flow_embedding_ft', '{}'::jsonb,
+   pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"11111111-1111-4111-8111-111111111111","version":"00.00.001"}}','UTF8'), 1000);
+
+-- rebuild the cache now that the queue exists
+delete from q689_cache;
+insert into q689_cache
+select private.dataset_derivative_rebuild_queue_cache(
+  $q689_targets$[
+    {"table":"processes","id":"11111111-1111-4111-8111-111111111111","version":"00.00.001"},
+    {"table":"processes","id":"22222222-2222-4222-8222-222222222222","version":"00.00.001"}
+  ]$q689_targets$::jsonb
+);
+
+select is(
+  (select count(*)::integer from jsonb_object_keys((select cache->'snapshot' from q689_cache))),
+  7,
+  'the cache snapshot covers exactly the seven dispatch-URL queue rows'
+);
+select is(
+  (select count(*)::integer from jsonb_object_keys((select cache->'targets'->'1' from q689_cache))),
+  4,
+  'the first target candidate map holds every row whose decoded body carries its id, including the wrong-version row the matcher will reject'
+);
+
+select is(
+  (util.quarantine_dataset_derivative_rebuild_target_cached(
+     'processes', '11111111-1111-4111-8111-111111111111'::uuid, '00.00.001',
+     (select cache from q689_cache), 1))->>'http_requests',
+  '3',
+  'the cached delete removes the single, shared-array and flow-URL rows for the first target'
+);
+select is(
+  (select count(*)::integer from net.http_request_queue),
+  5,
+  'wrong-version, unrelated-URL, malformed and foreign-target rows survive the first deletion'
+);
+select is(
+  (util.quarantine_dataset_derivative_rebuild_target_cached(
+     'processes', '22222222-2222-4222-8222-222222222222'::uuid, '00.00.001',
+     (select cache from q689_cache), 2))->>'http_requests',
+  '1',
+  'the second target removes exactly its own row and does not re-count the shared-array row'
+);
+select is(
+  (select count(*)::integer from net.http_request_queue),
+  4,
+  'wrong-version, unrelated-URL, malformed and foreign-target rows remain after both deletions'
+);
+
+-- equivalence against the uncached owner on an identical fixture: the survivors' bodies match
+create temporary table q689_cached_survivors as
+select jsonb_agg(jsonb_build_object('body', pg_catalog.encode(request.body, 'escape'))
+       order by pg_catalog.encode(request.body, 'escape')) as bodies
+from net.http_request_queue as request;
+
+delete from net.http_request_queue;
+insert into net.http_request_queue(method, url, headers, body, timeout_milliseconds)
+select method, url, headers, body, timeout_milliseconds from (
+  values
+  ('POST'::net.http_method, 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft'::text, '{}'::jsonb,
+   pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"11111111-1111-4111-8111-111111111111","version":"00.00.001","extracted_md":"markdown\nline \"q\" \\ b"}}','UTF8'), 1000),
+  ('POST'::net.http_method, 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft'::text, '{}'::jsonb,
+   pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"22222222-2222-4222-8222-222222222222","version":"00.00.001"}}','UTF8'), 1000),
+  ('POST'::net.http_method, 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft'::text, '{}'::jsonb,
+   pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"11111111-1111-4111-8111-111111111111","version":"00.00.002"}}','UTF8'), 1000),
+  ('POST'::net.http_method, 'http://127.0.0.1:9/functions/v1/embedding_ft'::text, '{}'::jsonb,
+   pg_catalog.convert_to('[{"id":"11111111-1111-4111-8111-111111111111","version":"00.00.001","schema":"public","table":"processes","embeddingColumn":"embedding_ft"},{"id":"22222222-2222-4222-8222-222222222222","version":"00.00.001","schema":"public","table":"processes","embeddingColumn":"embedding_ft"}]','UTF8'), 1000),
+  ('POST'::net.http_method, 'http://127.0.0.1:9/functions/v1/other_function'::text, '{}'::jsonb,
+   pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"11111111-1111-4111-8111-111111111111","version":"00.00.001"}}','UTF8'), 1000),
+  ('POST'::net.http_method, 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft'::text, '{}'::jsonb,
+   pg_catalog.convert_to('{"broken":','UTF8'), 1000),
+  ('POST'::net.http_method, 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft'::text, '{}'::jsonb,
+   pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"33333333-3333-4333-8333-333333333333","version":"00.00.001"}}','UTF8'), 1000),
+  ('POST'::net.http_method, 'http://127.0.0.1:9/functions/v1/webhook_flow_embedding_ft'::text, '{}'::jsonb,
+   pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"11111111-1111-4111-8111-111111111111","version":"00.00.001"}}','UTF8'), 1000)
+) as fixture(method, url, headers, body, timeout_milliseconds);
+delete from q689_cache;
+insert into q689_cache
+select private.dataset_derivative_rebuild_queue_cache(
+  $q689_targets$[
+    {"table":"processes","id":"11111111-1111-4111-8111-111111111111","version":"00.00.001"},
+    {"table":"processes","id":"22222222-2222-4222-8222-222222222222","version":"00.00.001"}
+  ]$q689_targets$::jsonb
+);
+select is(
+  (util.quarantine_dataset_derivative_rebuild_target_cached(
+     'processes', '11111111-1111-4111-8111-111111111111'::uuid, '00.00.001',
+     (select cache from q689_cache), 1))->>'http_requests',
+  '3',
+  'cached first-target deletion count matches the uncached owner'
+);
+select is(
+  (util.quarantine_dataset_derivative_rebuild_target(
+     'processes', '22222222-2222-4222-8222-222222222222'::uuid, '00.00.001'))->>'http_requests',
+  '1',
+  'the uncached owner then counts exactly the same second-target row'
+);
+select is(
+  (select jsonb_agg(jsonb_build_object('body', pg_catalog.encode(request.body, 'escape'))
+          order by pg_catalog.encode(request.body, 'escape'))
+   from net.http_request_queue as request),
+  (select bodies from q689_cached_survivors),
+  'the uncached owner leaves exactly the rows the cached path left'
+);
+
+-- a row inserted after the cache snapshot is still deleted (new-row branch)
+delete from net.http_request_queue;
+insert into net.http_request_queue(method, url, headers, body, timeout_milliseconds)
+values ('POST', 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft', '{}'::jsonb,
+        pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"22222222-2222-4222-8222-222222222222","version":"00.00.001"}}','UTF8'), 1000);
+delete from q689_cache;
+insert into q689_cache
+select private.dataset_derivative_rebuild_queue_cache(
+  $q689_targets$[
+    {"table":"processes","id":"11111111-1111-4111-8111-111111111111","version":"00.00.001"},
+    {"table":"processes","id":"22222222-2222-4222-8222-222222222222","version":"00.00.001"}
+  ]$q689_targets$::jsonb
+);
+insert into net.http_request_queue(method, url, headers, body, timeout_milliseconds)
+values ('POST', 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft', '{}'::jsonb,
+        pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"11111111-1111-4111-8111-111111111111","version":"00.00.001"}}','UTF8'), 1000);
+select is(
+  (util.quarantine_dataset_derivative_rebuild_target_cached(
+     'processes', '11111111-1111-4111-8111-111111111111'::uuid, '00.00.001',
+     (select cache from q689_cache), 1))->>'http_requests',
+  '1',
+  'a row inserted after the snapshot is still deleted through the new-row branch'
+);
+
+-- a row whose body is rewritten after the snapshot is re-decided by the matcher (ctid branch)
+delete from net.http_request_queue;
+insert into net.http_request_queue(method, url, headers, body, timeout_milliseconds)
+values ('POST', 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft', '{}'::jsonb,
+        pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"22222222-2222-4222-8222-222222222222","version":"00.00.001"}}','UTF8'), 1000);
+delete from q689_cache;
+insert into q689_cache
+select private.dataset_derivative_rebuild_queue_cache(
+  $q689_targets$[
+    {"table":"processes","id":"11111111-1111-4111-8111-111111111111","version":"00.00.001"},
+    {"table":"processes","id":"22222222-2222-4222-8222-222222222222","version":"00.00.001"}
+  ]$q689_targets$::jsonb
+);
+update net.http_request_queue
+set body = pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"11111111-1111-4111-8111-111111111111","version":"00.00.001"}}','UTF8')
+where url like '%/functions/v1/webhook_process_embedding_ft';
+select is(
+  (util.quarantine_dataset_derivative_rebuild_target_cached(
+     'processes', '11111111-1111-4111-8111-111111111111'::uuid, '00.00.001',
+     (select cache from q689_cache), 1))->>'http_requests',
+  '1',
+  'a row rewritten after the snapshot is still deleted through the changed-ctid branch'
+);
+
+-- wrong version and unrelated URL never match, cached or not
+delete from net.http_request_queue;
+insert into net.http_request_queue(method, url, headers, body, timeout_milliseconds)
+values ('POST', 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft', '{}'::jsonb,
+        pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"11111111-1111-4111-8111-111111111111","version":"00.00.002"}}','UTF8'), 1000);
+select is(
+  (util.quarantine_dataset_derivative_rebuild_target_cached(
+     'processes', '11111111-1111-4111-8111-111111111111'::uuid, '00.00.001',
+     (select cache from q689_cache), 1))->>'http_requests',
+  '0',
+  'a wrong-version candidate is still decided by the matcher and survives'
+);
+update net.http_request_queue set url = 'http://127.0.0.1:9/functions/v1/unrelated_function';
+select is(
+  (util.quarantine_dataset_derivative_rebuild_target_cached(
+     'processes', '11111111-1111-4111-8111-111111111111'::uuid, '00.00.002',
+     (select cache from q689_cache), 1))->>'http_requests',
+  '0',
+  'a row without a dispatch URL survives the cached delete'
+);
+
+-- plan validation accepts any hexadecimal case while the matcher compares canonical lower-case
+-- text: the cache must normalise the target side of its join and leave the body side verbatim.
+delete from net.http_request_queue;
+insert into net.http_request_queue(method, url, headers, body, timeout_milliseconds)
+values ('POST', 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft', '{}'::jsonb,
+        pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"689fffff-0000-4000-8000-000000000001","version":"00.00.001"}}','UTF8'), 1000);
+delete from q689_cache;
+insert into q689_cache
+select private.dataset_derivative_rebuild_queue_cache(
+  $q689_targets$[
+    {"table":"processes","id":"689FFFFF-0000-4000-8000-000000000001","version":"00.00.001"}
+  ]$q689_targets$::jsonb
+);
+select is(
+  (util.quarantine_dataset_derivative_rebuild_target_cached(
+     'processes', '689FFFFF-0000-4000-8000-000000000001'::uuid, '00.00.001',
+     (select cache from q689_cache), 1))->>'http_requests',
+  '1',
+  'an upper-case target id still deletes the lower-case body row through the cache'
+);
+delete from net.http_request_queue;
+insert into net.http_request_queue(method, url, headers, body, timeout_milliseconds)
+values ('POST', 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft', '{}'::jsonb,
+        pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"689fffff-0000-4000-8000-000000000001","version":"00.00.001"}}','UTF8'), 1000);
+select is(
+  (util.quarantine_dataset_derivative_rebuild_target(
+     'processes', '689FFFFF-0000-4000-8000-000000000001'::uuid, '00.00.001'))->>'http_requests',
+  '1',
+  'the uncached owner deletes the same lower-case body row for the upper-case target'
+);
+
+delete from net.http_request_queue;
+insert into net.http_request_queue(method, url, headers, body, timeout_milliseconds)
+values ('POST', 'http://127.0.0.1:9/functions/v1/webhook_process_embedding_ft', '{}'::jsonb,
+        pg_catalog.convert_to('{"schema":"public","table":"processes","record":{"id":"689FFFFF-0000-4000-8000-000000000001","version":"00.00.001"}}','UTF8'), 1000);
+delete from q689_cache;
+insert into q689_cache
+select private.dataset_derivative_rebuild_queue_cache(
+  $q689_targets$[
+    {"table":"processes","id":"689fffff-0000-4000-8000-000000000001","version":"00.00.001"}
+  ]$q689_targets$::jsonb
+);
+select is(
+  (util.quarantine_dataset_derivative_rebuild_target_cached(
+     'processes', '689fffff-0000-4000-8000-000000000001'::uuid, '00.00.001',
+     (select cache from q689_cache), 1))->>'http_requests',
+  '0',
+  'an upper-case body id is not lower-cased by the cache: the matcher still reports a non-match'
+);
+select is(
+  (util.quarantine_dataset_derivative_rebuild_target(
+     'processes', '689fffff-0000-4000-8000-000000000001'::uuid, '00.00.001'))->>'http_requests',
+  '0',
+  'the uncached owner reports the same non-match for the upper-case body id'
+);
+
+-- a failure after the cached delete rolls the deletion back with its transaction
+do $q689_rollback$
+begin
+  begin
+    perform util.quarantine_dataset_derivative_rebuild_target_cached(
+      'processes', '11111111-1111-4111-8111-111111111111'::uuid, '00.00.002',
+      (select cache from q689_cache), 1);
+    raise exception using errcode = 'P0001', message = 'q689 late failure';
+  exception
+    when sqlstate 'P0001' then null;
+  end;
+end;
+$q689_rollback$;
+select is(
+  (select count(*)::integer from net.http_request_queue),
+  1,
+  'a late failure rolls the cached deletion back (the row is restored)'
+);
+
+delete from net.http_request_queue;
 
 select * from finish();
 rollback;

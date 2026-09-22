@@ -1,8 +1,251 @@
-CREATE OR REPLACE FUNCTION "util"."admit_dataset_derivative_rebuild_batch"("p_actor_user_id" "uuid", "p_batch_id" "uuid", "p_plan_sha256" "text", "p_operation_id" "text", "p_reason_code" "text", "p_targets" "jsonb") RETURNS "jsonb"
-    LANGUAGE "plpgsql" SECURITY DEFINER
-    SET "search_path" TO ''
-    SET "lock_timeout" TO '5s'
-    AS $_$
+-- Database #689: the protected whole-preflight (and the real admit transaction) quarantines one
+-- derivative target at a time through util.quarantine_dataset_derivative_rebuild_target, and every
+-- quarantine call deletes from net.http_request_queue by scanning the queue and JSON-parsing each
+-- candidate dispatch body through util.dataset_derivative_rebuild_http_body_matches. Inside the
+-- rollback-only simulation the queue holds one uncommitted dispatch per target, no drainer can
+-- remove uncommitted rows, and the real bodies are built from to_jsonb(NEW)/to_jsonb(OLD) so every
+-- row carries a large payload: the measured nested-statement hotspot is 387 queue deletes at
+-- ~12.9 s and 1,143,439 shared hits for one complete-row preflight, with per-body decode repeated
+-- once per target.
+--
+-- This migration removes the repeated decode without touching the matcher: the original
+-- util.dataset_derivative_rebuild_http_body_matches definition is left exactly as it was (the
+-- earlier, insufficient prefilter variant of this migration is replaced in place and never
+-- published). The bounded batch admission instead builds ONE candidate cache per batch of at most
+-- fifty targets, after every target has been fully validated and locked, and every target's
+-- quarantine deletes through a new internal-only cached path whose row set is provably identical
+-- to the original:
+--
+--   cache (one decode pass, per batch):  {"snapshot": {queue_id: ctid, ...},
+--                                         "targets": {ordinal: {queue_id: true, ...}, ...}}
+--   It records, per queue row, only its id, its ctid version, and which target ordinals have that
+--   row's id anywhere in its decoded body. The body-decode superset rule: the original matcher can
+--   only return true when a decoded string equals the target id, so id-presence in the decoded body
+--   is a necessary condition; the cache therefore never omits a row the matcher would delete. The
+--   target side of that comparison is normalised with (id)::uuid::text because plan validation
+--   accepts any hexadecimal case while the matcher compares against the canonical lower-case
+--   p_id::text; the body side stays verbatim, exactly like the matcher, so a body id in another
+--   case remains the non-match the matcher already reports. The queue rows are MATERIALIZED so each
+--   body is decoded exactly once per batch.
+--
+--   per-target delete (row set unchanged):  candidate rows are
+--     (a) rows the cache recorded as matching this target, plus
+--     (b) rows absent from the snapshot (concurrent inserts) or whose ctid changed (rewrites),
+--   and every candidate is still decided by the original matcher on its current body. No cached
+--   match result is trusted, no row outside the (a) u (b) superset can satisfy the original
+--   predicate, and the unchanged URL predicate still applies.
+--
+-- The 3-arg quarantine, the matcher, the queue's shape, every lock, audit, count, snapshot
+-- re-check, failure rollback and replay rule are untouched; only the measured hotspot path changes.
+-- No index, no table, no global queue lock, and no weakened check is added.
+
+create or replace function private.dataset_derivative_http_body_candidate_ids(
+  p_body bytea
+) returns text[]
+language plpgsql
+stable
+set search_path = ''
+as $$
+declare
+  v_body jsonb;
+  v_ids text[];
+begin
+  if p_body is null then
+    return array[]::text[];
+  end if;
+  v_body := pg_catalog.convert_from(p_body, 'UTF8')::jsonb;
+  if jsonb_typeof(v_body) = 'object' then
+    select coalesce(array_agg(candidate.value), array[]::text[])
+    into v_ids
+    from (
+      select v_body #>> '{record,id}' as value
+      union all
+      select v_body #>> '{old_record,id}'
+    ) as candidate
+    where candidate.value is not null;
+    return v_ids;
+  end if;
+  if jsonb_typeof(v_body) = 'array' then
+    select coalesce(array_agg(distinct job.value->>'id'), array[]::text[])
+    into v_ids
+    from jsonb_array_elements(v_body) as job(value)
+    where job.value->>'id' is not null;
+    return v_ids;
+  end if;
+  return array[]::text[];
+exception
+  when others then
+    return array[]::text[];
+end;
+$$;
+
+alter function private.dataset_derivative_http_body_candidate_ids(bytea)
+  owner to postgres;
+revoke all on function private.dataset_derivative_http_body_candidate_ids(bytea)
+  from public;
+comment on function private.dataset_derivative_http_body_candidate_ids(bytea) is
+  'Ids a dispatch body can possibly match under the derivative quarantine predicate: the decoded record/old_record ids for object bodies and every embedded job id for array bodies. Presence of an id in this set is necessary (never sufficient) for util.dataset_derivative_rebuild_http_body_matches, so callers use it only as a candidate superset.';
+
+create or replace function private.dataset_derivative_rebuild_queue_cache(
+  p_targets jsonb
+) returns jsonb
+language sql
+stable
+set search_path = ''
+as $$
+  with queue_rows as materialized (
+    select
+      request.id,
+      request.ctid::text as ctid,
+      private.dataset_derivative_http_body_candidate_ids(request.body) as ids
+    from net.http_request_queue as request
+    where request.url like '%/functions/v1/webhook_process_embedding_ft'
+      or request.url like '%/functions/v1/webhook_flow_embedding_ft'
+      or request.url like '%/functions/v1/embedding_ft'
+  ),
+  snapshot as (
+    select jsonb_object_agg(queue_row.id::text, queue_row.ctid) as map
+    from queue_rows as queue_row
+  ),
+  target_matches as (
+    select
+      matched.ordinal,
+      jsonb_object_agg(distinct matched.id::text, true) as map
+    from (
+      select queue_row.id, target.ordinality as ordinal
+      from queue_rows as queue_row
+      cross join lateral unnest(queue_row.ids) as body_id(value)
+      join lateral (
+        select target.ordinality
+        from jsonb_array_elements(p_targets) with ordinality as target(value, ordinality)
+        where (target.value->>'id')::uuid::text = body_id.value
+      ) as target on true
+    ) as matched
+    group by matched.ordinal
+  )
+  select jsonb_build_object(
+    'snapshot', coalesce((select snapshot.map from snapshot), '{}'::jsonb),
+    'targets', coalesce(
+      (select jsonb_object_agg(target_matches.ordinal::text, target_matches.map)
+       from target_matches),
+      '{}'::jsonb
+    )
+  )
+$$;
+
+alter function private.dataset_derivative_rebuild_queue_cache(jsonb)
+  owner to postgres;
+revoke all on function private.dataset_derivative_rebuild_queue_cache(jsonb)
+  from public;
+comment on function private.dataset_derivative_rebuild_queue_cache(jsonb) is
+  'One-pass candidate cache over the derivative dispatch queue for a bounded batch: every queue row''s id and ctid version, plus the per-target-ordinal row-id sets derived from decoded body ids. A candidate superset for the quarantine predicate; the matcher still decides every candidate row.';
+
+create or replace function util.quarantine_dataset_derivative_rebuild_target_cached(
+  p_table text,
+  p_id uuid,
+  p_version text,
+  p_cache jsonb,
+  p_ordinal integer
+) returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_http integer := 0;
+  v_embedding integer := 0;
+  v_pending integer := 0;
+  v_snapshot jsonb;
+  v_candidates jsonb;
+begin
+  if p_table is null or p_table not in ('flows', 'processes') then
+    raise exception using
+      errcode = '22023',
+      message = 'Derivative quarantine target table must be flows or processes';
+  end if;
+
+  v_snapshot := coalesce(p_cache->'snapshot', '{}'::jsonb);
+  v_candidates := coalesce(p_cache->'targets'->p_ordinal::text, '{}'::jsonb);
+
+  delete from net.http_request_queue as request
+  where (
+      request.url like '%/functions/v1/webhook_process_embedding_ft'
+      or request.url like '%/functions/v1/webhook_flow_embedding_ft'
+      or request.url like '%/functions/v1/embedding_ft'
+    )
+    and (
+      v_candidates ? request.id::text
+      or not (v_snapshot ? request.id::text)
+      or (v_snapshot->>request.id::text) is distinct from request.ctid::text
+    )
+    and util.dataset_derivative_rebuild_http_body_matches(
+      request.body,
+      p_table,
+      p_id,
+      p_version
+    );
+  get diagnostics v_http = row_count;
+
+  delete from pgmq.q_embedding_jobs as job
+  where job.message->>'id' = p_id::text
+    and btrim(job.message->>'version') = p_version
+    and job.message->>'schema' = 'public'
+    and job.message->>'table' = p_table
+    and job.message->>'embeddingColumn' = 'embedding_ft';
+  get diagnostics v_embedding = row_count;
+
+  delete from util.pending_embedding_jobs as pending
+  where pending.schema_name = 'public'
+    and pending.table_name = p_table
+    and pending.record_id = p_id::text
+    and btrim(pending.record_version) = p_version
+    and pending.embedding_column = 'embedding_ft';
+  get diagnostics v_pending = row_count;
+
+  return jsonb_build_object(
+    'http_requests', v_http,
+    'embedding_jobs', v_embedding,
+    'pending_jobs', v_pending
+  );
+end;
+$$;
+
+alter function util.quarantine_dataset_derivative_rebuild_target_cached(
+  text,
+  uuid,
+  text,
+  jsonb,
+  integer
+) owner to postgres;
+revoke all on function util.quarantine_dataset_derivative_rebuild_target_cached(
+  text,
+  uuid,
+  text,
+  jsonb,
+  integer
+) from public, anon, authenticated, service_role;
+comment on function util.quarantine_dataset_derivative_rebuild_target_cached(
+  text,
+  uuid,
+  text,
+  jsonb,
+  integer
+) is
+  'Cached-batch variant of util.quarantine_dataset_derivative_rebuild_target: the queue delete first narrows to the cache''s candidate superset (cached matches for this ordinal, plus rows absent from the snapshot or with a changed ctid version) and the original dispatch-body matcher still decides every candidate row; the embedding-job and pending-job deletes and the returned counters are identical to the uncached owner. Internal batch-admission use only.';
+
+create or replace function util.admit_dataset_derivative_rebuild_batch(
+  p_actor_user_id uuid,
+  p_batch_id uuid,
+  p_plan_sha256 text,
+  p_operation_id text,
+  p_reason_code text,
+  p_targets jsonb
+) returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+set lock_timeout = '5s'
+as $$
 declare
   v_command constant text := 'cmd_dataset_derivative_rebuild_plan_guarded';
   v_schema_version constant text := 'dataset-derivative-rebuild-batch.v1';
@@ -478,8 +721,31 @@ exception
       errcode = '55P03',
       message = 'Derivative rebuild batch write fence could not be acquired';
 end;
-$_$;
+$$;
 
-ALTER FUNCTION "util"."admit_dataset_derivative_rebuild_batch"("p_actor_user_id" "uuid", "p_batch_id" "uuid", "p_plan_sha256" "text", "p_operation_id" "text", "p_reason_code" "text", "p_targets" "jsonb") OWNER TO "postgres";
+alter function util.admit_dataset_derivative_rebuild_batch(
+  uuid,
+  uuid,
+  text,
+  text,
+  text,
+  jsonb
+) owner to postgres;
+revoke all on function util.admit_dataset_derivative_rebuild_batch(
+  uuid,
+  uuid,
+  text,
+  text,
+  text,
+  jsonb
+) from public, anon, authenticated, service_role;
 
-REVOKE ALL ON FUNCTION "util"."admit_dataset_derivative_rebuild_batch"("p_actor_user_id" "uuid", "p_batch_id" "uuid", "p_plan_sha256" "text", "p_operation_id" "text", "p_reason_code" "text", "p_targets" "jsonb") FROM PUBLIC;
+comment on function util.admit_dataset_derivative_rebuild_batch(
+  uuid,
+  uuid,
+  text,
+  text,
+  text,
+  jsonb
+) is
+  'Private atomic admission for 1..50 unique owner-draft flow/process derivative children. Every target is validated before any quarantine/audit/request write; batch ids are non-replayable.';
