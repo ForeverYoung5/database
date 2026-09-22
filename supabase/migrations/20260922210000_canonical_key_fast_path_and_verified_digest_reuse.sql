@@ -1,8 +1,148 @@
-CREATE OR REPLACE FUNCTION "private"."cmd_dataset_alias_batch_v2_guarded"("p_batch" "jsonb") RETURNS "jsonb"
-    LANGUAGE "plpgsql" SECURITY DEFINER
-    SET "search_path" TO ''
-    SET "lock_timeout" TO '5s'
-    AS $_$
+-- Database #694: the guarded v2 preflight spends most of its budget hashing canonical JSON. A
+-- private local full-volume profile of one whole preflight (16,673 ms) attributes the largest
+-- single self-time to private.dataset_alias_js_object_key_sort_key_v1: 1,618,546 calls and
+-- 6,834 ms, i.e. ~4.2 us per call, inside the recursive private.dataset_alias_canonical_jsonb_v1
+-- that every payload digest in the chain walks. The only hosted evidence is the SQLSTATE 57014
+-- cancellation whose stack ends in that helper's per-character loop under the preflight's own
+-- 60-second statement budget; no hosted timing is claimed here.
+--
+-- The sort key appends one 4-hex-digit big-endian unit per character in an interpreted loop whose
+-- accumulator is `v_result := v_result || decode(...)`. That is quadratic in the key length and,
+-- for the short ASCII keys every TIDAS payload actually carries, dominated by the six SPI-level
+-- calls each character costs. This migration adds a single ASCII fast path in front of that loop
+-- and changes nothing else about it.
+--
+-- Equivalence, provable and byte-for-byte. For a pure-ASCII value every code point is <= 0x7F, so
+-- the loop's own output is exactly '00' followed by the character's byte, and ASCII text is stored
+-- as one byte per character in every server encoding; encode(convert_to(v,'UTF8'),'hex') is
+-- therefore exactly that hex, and prefixing each byte pair with '00' reproduces the loop byte for
+-- byte. The ASCII test is written under an explicit COLLATE "C" so that its bracket range is the
+-- code points U+0001..U+007F and never follows the database locale or its ctype table. An
+-- arithmetic octet-length test is deliberately NOT used: it happens to agree under UTF8 but would
+-- admit multi-byte characters in a single-byte server encoding. The regexp subject is the hex
+-- string, whose alphabet is exactly [0-9a-f] and whose length is always even, so '(..)' tiles it
+-- with non-overlapping left-to-right pairs and no input character can be skipped or mis-paired.
+-- The '+' quantifier keeps the empty value out of the fast path; it falls to the unchanged loop and
+-- returns the bare '\x01' prefix exactly as before. Code points above U+FFFF keep the original
+-- surrogate arithmetic. The array-index branch, the '\x01'/'\x00' prefixes, the declared volatility
+-- (IMMUTABLE STRICT PARALLEL SAFE), the pinned search_path and the ACLs are unchanged.
+--
+-- The same migration removes three recomputations from the guarded Time v2 batch executor. It does
+-- NOT weaken any guard and does NOT introduce a new digest: the two values it reuses are the
+-- producer's own before_sha256 / desired_sha256, which the pre-existing structural scan already
+-- proved equal to the server's canonical digests of the claimed payloads before any derivation or
+-- write happens --
+--
+--   * before: prepared.before is exactly expected_json_ordered, and the existing guard requires
+--     payload_sha256(expected_json_ordered) = before_sha256 for every action;
+--   * fresh desired: the existing derive-equality guard refuses unless the claimed
+--     desired_json_ordered is not distinct from the server-derived payload, so the verified
+--     desired_sha256 is the digest of the payload that is actually written;
+--   * replay desired: prepared.desired is exactly desired_json_ordered, the same value the guard
+--     hashed.
+--
+-- The two verified digests ride in the internal prepared envelope, which is never hashed, never
+-- returned and never shape-validated, so adding those keys cannot change any digest, audit field or
+-- response. The row audit therefore records byte-identical before_sha256 / after_sha256 values, and
+-- the replay proof compares against the same value it always did. A tampered before or desired
+-- digest is still refused by the untouched guard, with zero writes.
+--
+-- Scope: the Time v2 batch executor only. The shared canonical helper also serves the Length*time
+-- v1 executor and the four util dataset digest helpers; they inherit the faster sort key and keep
+-- their own recomputation, wire shape, audit fields, locks, one-shot rule and time budget.
+--
+-- Root-measured on PRIVATE LOCAL full-volume input, never hosted (the only hosted evidence remains
+-- the 57014 above): the whole preflight went 16,673.195 ms published -> 12,106.512 ms with the
+-- sort-key fast path alone -> 11,339.084 ms for THIS final migration file, i.e. the fast path plus
+-- the verified-digest reuse, ok = true, empty stderr, outer rollback, with the migration file bytes
+-- unchanged before and after the run. (A 10,388.943 ms figure circulated earlier was a prototype
+-- measurement and is superseded by 11,339.084 ms for the final file.) In the same local run the
+-- sort-key fast path reproduced the published server digest for all 774 real before/desired
+-- payloads, 774/774.
+
+-- ------------------------------------------------------------------------------------------------
+-- 1. Canonical JS object-key sort key: ASCII fast path, published loop kept verbatim as fallback.
+-- ------------------------------------------------------------------------------------------------
+create or replace function private.dataset_alias_js_object_key_sort_key_v1(p_value text)
+returns bytea
+language plpgsql
+immutable
+strict
+parallel safe
+set search_path = ''
+as $fn$
+declare
+  v_result bytea := '\x01'::bytea;
+  v_array_index bigint;
+  v_code_point integer;
+  v_supplementary integer;
+begin
+  -- stableJsonText sorts keys by JavaScript UTF-16 order before rebuilding an
+  -- object. JSON.stringify then enumerates canonical array-index keys first in
+  -- ascending numeric order. Reproduce both rules with a binary prefix plus a
+  -- big-endian numeric or UTF-16 payload. PostgreSQL text cannot contain lone
+  -- surrogates.
+  if p_value ~ '^(0|[1-9][0-9]{0,9})$' then
+    v_array_index := p_value::bigint;
+    if v_array_index <= 4294967294 then
+      return '\x00'::bytea || int8send(v_array_index);
+    end if;
+  end if;
+
+  -- Fast path: a pure-ASCII value (U+0001..U+007F; text cannot hold U+0000) needs
+  -- no per-character loop. One C-level pass over the bytes reproduces the loop's
+  -- exact output; anything else falls through to the unchanged loop below.
+  --
+  -- The domain is fixed by the explicit C collation: under C the bracket range is
+  -- exactly the code points U+0001..U+007F, so the test never follows the database
+  -- locale or its ctype table. The empty value is excluded by the '+' quantifier
+  -- and falls to the loop, which returns the bare '\x01' prefix as before.
+  if p_value collate "C" ~ '^[\x01-\x7F]+$' then
+    return '\x01'::bytea
+      || decode(regexp_replace(encode(convert_to(p_value, 'UTF8'), 'hex'), '(..)', '00\1', 'g'), 'hex');
+  end if;
+
+  for v_character_index in 1..character_length(p_value) loop
+    v_code_point := ascii(substring(p_value from v_character_index for 1));
+
+    if v_code_point <= 65535 then
+      v_result := v_result || decode(
+        lpad(to_hex(v_code_point), 4, '0'),
+        'hex'
+      );
+    else
+      v_supplementary := v_code_point - 65536;
+      v_result := v_result || decode(
+        lpad(to_hex(55296 + (v_supplementary / 1024)), 4, '0')
+          || lpad(to_hex(56320 + (v_supplementary % 1024)), 4, '0'),
+        'hex'
+      );
+    end if;
+  end loop;
+
+  return v_result;
+end;
+$fn$;
+
+alter function private.dataset_alias_js_object_key_sort_key_v1(text)
+  owner to postgres;
+
+revoke all on function private.dataset_alias_js_object_key_sort_key_v1(text)
+  from public, anon, authenticated, service_role;
+
+comment on function private.dataset_alias_js_object_key_sort_key_v1(text) is
+  'Builds a binary sort key matching stableJsonText object enumeration: canonical array indexes first, then JavaScript UTF-16 string order.';
+
+-- ------------------------------------------------------------------------------------------------
+-- 2. Guarded Time v2 batch executor: reuse the two digests the existing guard already verified.
+-- ------------------------------------------------------------------------------------------------
+create or replace function private.cmd_dataset_alias_batch_v2_guarded(p_batch jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+set lock_timeout = '5s'
+as $fn$
 declare
   v_actor uuid := auth.uid();
   v_schema_version constant text := 'dataset-alias-batch.v2';
@@ -908,8 +1048,13 @@ begin
         'message', 'The v2 batch failed closed without writing');
   end;
 end
-$_$;
+$fn$;
 
-ALTER FUNCTION "private"."cmd_dataset_alias_batch_v2_guarded"("p_batch" "jsonb") OWNER TO "postgres";
+alter function private.cmd_dataset_alias_batch_v2_guarded(jsonb)
+  owner to postgres;
 
-REVOKE ALL ON FUNCTION "private"."cmd_dataset_alias_batch_v2_guarded"("p_batch" "jsonb") FROM PUBLIC;
+revoke all on function private.cmd_dataset_alias_batch_v2_guarded(jsonb)
+  from public;
+
+comment on function private.cmd_dataset_alias_batch_v2_guarded(jsonb) is
+  'Versioned guarded v2 batch executor: all-or-none validation-then-write, exact reference closure, recomputed target and source evidence, canonical digest parity, server-derived desired payloads, ordinary audit and exact replay. The fresh-run global occurrence closure is candidate-driven through the deployed processes_json_ordered_alias_exchange_gin_idx — the containment probe is a proven superset of the exact occurrence predicate in both deployed collection shapes — so its cost follows the plan rather than the Process table. v1 untouched.';
