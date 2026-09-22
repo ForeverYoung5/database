@@ -24,6 +24,14 @@ begin
     or p_table not in ('flows', 'processes') then
     return false;
   end if;
+  -- Conservative byte pre-filter: without the id bytes and without any backslash the decoded body
+  -- cannot produce the id through an escape sequence, so the parse below cannot match. The bytea
+  -- overload of pg_catalog.position takes the haystack first (unlike the `position(x in y)` text
+  -- form), so p_body is the first argument.
+  if pg_catalog.position(p_body, pg_catalog.convert_to(p_id::text, 'UTF8')) = 0
+    and pg_catalog.position(p_body, '\x5c'::bytea) = 0 then
+    return false;
+  end if;
   v_body := pg_catalog.convert_from(p_body, 'UTF8')::jsonb;
   if jsonb_typeof(v_body) = 'object' then
     return v_body #>> '{record,id}' = p_id::text
