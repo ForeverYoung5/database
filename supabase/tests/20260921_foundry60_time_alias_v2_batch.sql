@@ -16,7 +16,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth, private;
 
-select plan(104);
+select plan(109);
 
 -- ------------------------------------------------------------------------------------------------
 -- Fixture: one target unit group (year base plus the exact hour factor), one distinct source unit group
@@ -625,6 +625,88 @@ select is(
   'a functional-unit quantity that is not the reference exchange quantity is refused'
 );
 delete from public.processes where id = (select mismatch_process_id from v2_fixture);
+
+-- 1.13 an extra live Process occurrence of a claimed Flow breaks the closure, for every owner and state
+-- The clause under test is the global occurrence set, so each probe adds one Process that consumes a
+-- claimed Flow and then removes it again. Every probe call runs inside a rolled-back subtransaction, so
+-- a probe that applies leaves no row, audit or modified_at behind for the later sections.
+create or replace function pg_temp.v2_call_rollback(p_batch jsonb)
+returns jsonb language plpgsql as $$
+declare
+  v_result jsonb;
+begin
+  begin
+    v_result := pg_temp.v2_call(p_batch);
+    raise exception using errcode = 'P0002', message = 'occurrence probe rollback';
+  exception
+    when sqlstate 'P0002' then null;
+  end;
+  return v_result;
+end
+$$;
+
+insert into public.processes (id, version, user_id, state_code, json_ordered, modified_at)
+select 'bbbbbbbb-0000-4000-8000-000000000001', '01.00.000', foreign_actor, 0,
+  to_json(pg_temp.v2_process('bbbbbbbb-0000-4000-8000-000000000001', '01.00.000', flow_id, '01.00.000', 'Alias flow')),
+  timestamp '2026-09-21 00:00:00'
+from v2_fixture;
+create temp table v2_neg_occ_foreign as select pg_temp.v2_call_rollback(pg_temp.v2_batch()) as result;
+select is((select result->>'code' from v2_neg_occ_foreign), 'ALIAS_V2_CLOSURE_MISMATCH',
+  'a foreign owner-draft occurrence of a claimed Flow is refused');
+select ok(exists (
+  select 1 from jsonb_array_elements((select result->'details' from v2_neg_occ_foreign) -> 'live_occurrences') as live
+  where live->>'process_id' = 'bbbbbbbb-0000-4000-8000-000000000001'
+    and live->>'user_id' = (select foreign_actor::text from v2_fixture)
+), 'the closure refusal names the foreign live occurrence');
+delete from public.processes where id = 'bbbbbbbb-0000-4000-8000-000000000001';
+
+insert into public.processes (id, version, user_id, state_code, json_ordered, modified_at)
+select 'bbbbbbbb-0000-4000-8000-000000000002', '01.00.000', foreign_actor, 100,
+  to_json(pg_temp.v2_process('bbbbbbbb-0000-4000-8000-000000000002', '01.00.000', flow_id, '01.00.000', 'Alias flow')),
+  timestamp '2026-09-21 00:00:00'
+from v2_fixture;
+create temp table v2_neg_occ_published as select pg_temp.v2_call_rollback(pg_temp.v2_batch()) as result;
+select is((select result->>'code' from v2_neg_occ_published), 'ALIAS_V2_CLOSURE_MISMATCH',
+  'a published occurrence from another owner is refused');
+delete from public.processes where id = 'bbbbbbbb-0000-4000-8000-000000000002';
+
+insert into public.processes (id, version, user_id, state_code, json_ordered, modified_at)
+select 'bbbbbbbb-0000-4000-8000-000000000003', '01.00.000', actor, 0,
+  to_json(pg_temp.v2_process('bbbbbbbb-0000-4000-8000-000000000003', '01.00.000', flow_id, '01.00.000', 'Alias flow')),
+  timestamp '2026-09-21 00:00:00'
+from v2_fixture;
+create temp table v2_neg_occ_own as select pg_temp.v2_call_rollback(pg_temp.v2_batch()) as result;
+select is((select result->>'code' from v2_neg_occ_own), 'ALIAS_V2_CLOSURE_MISMATCH',
+  'an unclaimed owner-draft occurrence of the same actor is refused');
+delete from public.processes where id = 'bbbbbbbb-0000-4000-8000-000000000003';
+
+-- The same Flow id at another version is not an occurrence of the claimed identity, and an unrelated
+-- Process whose exchange collection is the singleton-object shape contributes none either: the closure
+-- skips a row that cannot carry a claimed occurrence rather than expanding it.
+insert into public.processes (id, version, user_id, state_code, json_ordered, modified_at)
+select 'bbbbbbbb-0000-4000-8000-000000000004', '01.00.000', foreign_actor, 0,
+  to_json(pg_temp.v2_process('bbbbbbbb-0000-4000-8000-000000000004', '01.00.000', flow_id, '99.99.999', 'Alias flow')),
+  timestamp '2026-09-21 00:00:00'
+from v2_fixture;
+insert into public.processes (id, version, user_id, state_code, json_ordered, modified_at)
+select 'bbbbbbbb-0000-4000-8000-000000000005', '01.00.000', foreign_actor, 0,
+  jsonb_build_object('processDataSet', jsonb_build_object(
+    'processInformation', jsonb_build_object(
+      'dataSetInformation', jsonb_build_object('common:UUID', 'bbbbbbbb-0000-4000-8000-000000000005'),
+      'quantitativeReference', jsonb_build_object('referenceToReferenceFlow', '1')),
+    'exchanges', jsonb_build_object('exchange', jsonb_build_object(
+      '@dataSetInternalID', '1',
+      'meanAmount', '1',
+      'resultingAmount', '1',
+      'exchangeDirection', 'Input',
+      'referenceToFlowDataSet', pg_temp.v2_ref('flows', 'flow data set',
+        '99999999-9999-4999-8999-999999999999', '01.00.000', 'Other flow'))))),
+  timestamp '2026-09-21 00:00:00'
+from v2_fixture;
+create temp table v2_neg_occ_outside as select pg_temp.v2_call_rollback(pg_temp.v2_batch()) as result;
+select is((select result->>'code' from v2_neg_occ_outside), 'ALIAS_V2_BATCH_APPLIED',
+  'a claimed Flow id at another version and a malformed unrelated collection are not occurrences');
+delete from public.processes where id in ('bbbbbbbb-0000-4000-8000-000000000004', 'bbbbbbbb-0000-4000-8000-000000000005');
 
 -- ================================================================================================
 -- 2. A failure induced inside the write pass must roll back rows and audit alike.

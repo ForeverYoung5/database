@@ -106,8 +106,36 @@ begin
   from jsonb_array_elements(coalesce(p_plan->'actions', '[]'::jsonb)) as action
   cross join lateral jsonb_array_elements(coalesce(action->'mutation'->'exchanges', '[]'::jsonb)) as instance;
 
+  -- The same candidate-driven shape as the batch executor's occurrence closure, applied to each of
+  -- the two scans below: the normalised reference collection the deployed GIN index is built on is
+  -- probed first, and only those candidate rows are read back by primary key and expanded.
+  -- Containment is strictly weaker than the exact predicate, in both deployed collection shapes, so
+  -- the candidate set is a complete superset and the exact predicate still decides. Every drift
+  -- condition and both counts are unchanged.
+  with candidate_process_keys as materialized (
+    select distinct candidate_process.id, candidate_process.version
+    from jsonb_array_elements(coalesce(p_plan->'flow_snapshots', '[]'::jsonb)) as claimed
+    cross join lateral (
+      select dataset_process.id, dataset_process.version
+      from public.processes as dataset_process
+      where private.dataset_alias_jsonb_array_v1(
+              dataset_process.json_ordered::jsonb #> '{processDataSet,exchanges,exchange}'
+            ) @> jsonb_build_array(jsonb_build_object(
+              'referenceToFlowDataSet',
+              jsonb_build_object('@refObjectId', claimed->>'id', '@version', claimed->>'version')))
+    ) as candidate_process
+  )
   select count(*) into v_live_occurrences
-  from public.processes as process
+  from candidate_process_keys as candidate
+  cross join lateral (
+    -- LIMIT 1 is lossless because (id, version) is the primary key.
+    select candidate_process.id, candidate_process.version, candidate_process.json_ordered,
+           candidate_process.state_code, candidate_process.user_id
+    from public.processes as candidate_process
+    where candidate_process.id = candidate.id
+      and candidate_process.version = candidate.version
+    limit 1
+  ) as process
   cross join lateral jsonb_array_elements(
     coalesce(process.json_ordered::jsonb #> '{processDataSet,exchanges,exchange}', '[]'::jsonb)) as exchange
   where exists (
@@ -115,8 +143,30 @@ begin
     where claimed->>'id' = exchange.value->'referenceToFlowDataSet'->>'@refObjectId'
       and claimed->>'version' = exchange.value->'referenceToFlowDataSet'->>'@version');
 
+  with candidate_process_keys as materialized (
+    select distinct candidate_process.id, candidate_process.version
+    from jsonb_array_elements(coalesce(p_plan->'flow_snapshots', '[]'::jsonb)) as claimed
+    cross join lateral (
+      select dataset_process.id, dataset_process.version
+      from public.processes as dataset_process
+      where private.dataset_alias_jsonb_array_v1(
+              dataset_process.json_ordered::jsonb #> '{processDataSet,exchanges,exchange}'
+            ) @> jsonb_build_array(jsonb_build_object(
+              'referenceToFlowDataSet',
+              jsonb_build_object('@refObjectId', claimed->>'id', '@version', claimed->>'version')))
+    ) as candidate_process
+  )
   select count(*) into v_closure_mismatch
-  from public.processes as process
+  from candidate_process_keys as candidate
+  cross join lateral (
+    -- LIMIT 1 is lossless because (id, version) is the primary key.
+    select candidate_process.id, candidate_process.version, candidate_process.json_ordered,
+           candidate_process.state_code, candidate_process.user_id
+    from public.processes as candidate_process
+    where candidate_process.id = candidate.id
+      and candidate_process.version = candidate.version
+    limit 1
+  ) as process
   cross join lateral jsonb_array_elements(
     coalesce(process.json_ordered::jsonb #> '{processDataSet,exchanges,exchange}', '[]'::jsonb)) with ordinality as exchange
   where exists (
@@ -134,7 +184,6 @@ begin
           and (instance->>'index')::integer = exchange.ordinality - 1
           and instance->>'internal_id' = exchange.value->>'@dataSetInternalID'
           and instance->>'direction' = exchange.value->>'exchangeDirection'));
-
   v_closure_ok := v_live_occurrences = v_claimed_occurrences and v_closure_mismatch = 0;
 
   return jsonb_build_object(
