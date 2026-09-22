@@ -461,12 +461,44 @@ begin
       -- Exact global reference closure: every live occurrence of the claimed read-only flows, any
       -- owner, any state, must be exactly the claimed instance set, and every live occurrence must be
       -- an owner-draft row of this actor.
+      -- Candidate-driven, exactly as the Time batch executor's own occurrence closure is: the normalised
+      -- reference collection the deployed GIN index is built on is probed first, and only those candidate
+      -- rows are read back by primary key and expanded. Containment is strictly weaker than the exact
+      -- occurrence predicate below, in both deployed collection shapes, so the candidate set is a complete
+      -- superset and the exact check below still decides. The returned material is unchanged.
+      with candidate_process_keys as materialized (
+        select distinct candidate_process.id, candidate_process.version
+        from jsonb_array_elements(v_claimed_flows) as claimed
+        cross join lateral (
+          select dataset_process.id, dataset_process.version
+          from public.processes as dataset_process
+          where private.dataset_alias_jsonb_array_v1(
+                  dataset_process.json_ordered::jsonb
+                    #> '{processDataSet,exchanges,exchange}'
+                ) @> jsonb_build_array(jsonb_build_object(
+                  'referenceToFlowDataSet',
+                  jsonb_build_object(
+                    '@refObjectId', claimed->>'id',
+                    '@version', claimed->>'version'
+                  )
+                ))
+        ) as candidate_process
+      )
       select coalesce(jsonb_agg(jsonb_build_object('process_id', p.id, 'process_version', btrim(p.version::text),
           'state_code', p.state_code, 'user_id', p.user_id, 'index', exchange.ordinality - 1,
           'internal_id', exchange.value->>'@dataSetInternalID', 'direction', exchange.value->>'exchangeDirection')
         order by p.id, p.version, exchange.ordinality), '[]'::jsonb)
         into v_live_occurrences
-      from public.processes as p
+      from candidate_process_keys as candidate
+      cross join lateral (
+        -- LIMIT 1 is lossless because (id, version) is the primary key.
+        select candidate_process.id, candidate_process.version, candidate_process.json_ordered,
+               candidate_process.state_code, candidate_process.user_id
+        from public.processes as candidate_process
+        where candidate_process.id = candidate.id
+          and candidate_process.version = candidate.version
+        limit 1
+      ) as p
       cross join lateral jsonb_array_elements(coalesce(p.json_ordered::jsonb #> '{processDataSet,exchanges,exchange}', '[]'::jsonb)) with ordinality as exchange
       where exists (
         select 1 from jsonb_array_elements(v_claimed_flows) as claimed
