@@ -43789,7 +43789,7 @@ CREATE OR REPLACE FUNCTION "private"."dataset_derivative_rebuild_queue_cache"("p
     LANGUAGE "sql" STABLE
     SET "search_path" TO ''
     AS $$
-  with queue_rows as (
+  with queue_rows as materialized (
     select
       request.id,
       request.ctid::text as ctid,
@@ -43814,7 +43814,7 @@ CREATE OR REPLACE FUNCTION "private"."dataset_derivative_rebuild_queue_cache"("p
       join lateral (
         select target.ordinality
         from jsonb_array_elements(p_targets) with ordinality as target(value, ordinality)
-        where target.value->>'id' = body_id.value
+        where (target.value->>'id')::uuid::text = body_id.value
       ) as target on true
     ) as matched
     group by matched.ordinal
