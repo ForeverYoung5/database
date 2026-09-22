@@ -20,6 +20,19 @@ begin
     end if;
   end if;
 
+  -- Fast path: a pure-ASCII value (U+0001..U+007F; text cannot hold U+0000) needs
+  -- no per-character loop. One C-level pass over the bytes reproduces the loop's
+  -- exact output; anything else falls through to the unchanged loop below.
+  --
+  -- The domain is fixed by the explicit C collation: under C the bracket range is
+  -- exactly the code points U+0001..U+007F, so the test never follows the database
+  -- locale or its ctype table. The empty value is excluded by the '+' quantifier
+  -- and falls to the loop, which returns the bare '\x01' prefix as before.
+  if p_value collate "C" ~ '^[\x01-\x7F]+$' then
+    return '\x01'::bytea
+      || decode(regexp_replace(encode(convert_to(p_value, 'UTF8'), 'hex'), '(..)', '00\1', 'g'), 'hex');
+  end if;
+
   for v_character_index in 1..character_length(p_value) loop
     v_code_point := ascii(substring(p_value from v_character_index for 1));
 
