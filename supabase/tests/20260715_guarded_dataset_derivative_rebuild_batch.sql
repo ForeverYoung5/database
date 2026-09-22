@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth;
 
-select plan(48);
+select plan(53);
 
 select ok(
   to_regprocedure(
@@ -817,7 +817,69 @@ select ok(
     '11111111-1111-4111-8111-111111111111'::uuid,
     '00.00.001'
   ),
-  'a body carrying any backslash still takes the exact parse path'
+  'a body carrying ordinary escapes but no Unicode escape still resolves exactly'
+);
+select ok(
+  util.dataset_derivative_rebuild_http_body_matches(
+    pg_catalog.convert_to(
+      '{"schema":"public","table":"processes","note":"markdown\nwith \"quotes\", \\ backslash and / slash","record":{"id":"11111111-1111-4111-8111-111111111111","version":"00.00.001"}}',
+      'UTF8'
+    ),
+    'processes',
+    '11111111-1111-4111-8111-111111111111'::uuid,
+    '00.00.001'
+  ),
+  'a matching body with newline, quote, backslash and slash escapes still matches'
+);
+select ok(
+  not util.dataset_derivative_rebuild_http_body_matches(
+    pg_catalog.convert_to(
+      '{"schema":"public","table":"processes","record":{"id":"22222222-2222-4222-8222-222222222222","version":"00.00.001","note":"c:\\\\u0031 decoy"}}',
+      'UTF8'
+    ),
+    'processes',
+    '11111111-1111-4111-8111-111111111111'::uuid,
+    '00.00.001'
+  ),
+  'an escaped-backslash Unicode decoy still resolves through the parse path'
+);
+select ok(
+  util.dataset_derivative_rebuild_http_body_matches(
+    pg_catalog.convert_to(
+      '{"schema":"public","table":"processes","note":"prose mentions \\u0031 literally","record":{"id":"11111111-1111-4111-8111-111111111111","version":"00.00.001"}}',
+      'UTF8'
+    ),
+    'processes',
+    '11111111-1111-4111-8111-111111111111'::uuid,
+    '00.00.001'
+  ),
+  'a matching body carrying a literal Unicode-escape decoy still matches'
+);
+select is(
+  util.dataset_derivative_rebuild_http_body_matches(
+    pg_catalog.convert_to(
+      '{"schema":"public","table":"processes","record":{"id":"xgarbage","version":"00.00.001"}}',
+      'UTF8'
+    ),
+    'processes',
+    null,
+    '00.00.001'
+  ),
+  null,
+  'a null target id keeps the original null result, never a forced false'
+);
+select is(
+  util.dataset_derivative_rebuild_http_body_matches(
+    pg_catalog.convert_to(
+      '{"schema":"public","table":"processes","record":{"version":"00.00.001"}}',
+      'UTF8'
+    ),
+    'processes',
+    '11111111-1111-4111-8111-111111111111'::uuid,
+    '00.00.001'
+  ),
+  false,
+  'a body without record.id resolves to false: the pre-#689 implementation returned SQL NULL here, and every caller filters positively (DELETE/COUNT WHERE, EXISTS, LEFT JOIN ON), so the selected rows are unchanged'
 );
 select ok(
   net.http_post(

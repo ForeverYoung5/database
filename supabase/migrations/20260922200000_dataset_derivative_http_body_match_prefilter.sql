@@ -8,11 +8,18 @@
 -- structure-model cohort that matches the real plan's published structure counts.
 --
 -- This migration keeps the predicate exact and only removes impossible parses: every matching
--- branch compares a parsed JSON string value against p_id::text, so when the id bytes are absent
--- from the body AND the body contains no backslash byte (no JSON escape sequence can hide the id),
--- no JSON string inside the body can decode to the id and the parse cannot match. Bodies carrying
--- any backslash still take the original full parse path. The function is otherwise byte-identical
--- to its deployed definition; no signature, owner, ACL, caller or returned material changes.
+-- branch compares a parsed JSON string value against p_id::text, and a UUID text consists only of
+-- [0-9a-f-], so the only escape sequence that can produce a character of it is the Unicode escape
+-- `\uXXXX`; the single-character escapes (`\"` `\\` `\/` `\b` `\f` `\n` `\r` `\t`) produce only
+-- characters outside that set. Therefore, when the id bytes are absent from the body AND the body
+-- contains no `\u` prefix, no parsed JSON string inside it can equal the id and the parse cannot
+-- match. Falling back on the `\u` prefix rather than on any backslash is what keeps the fast path
+-- live for real dispatch bodies, which are built from to_jsonb(NEW)/to_jsonb(OLD) and therefore
+-- carry ordinary escape sequences (`\n`, `\"`, `\\`) from Markdown content on essentially every
+-- row. A body containing any `\u` (including the escaped-backslash decoy `\\u`) still takes the
+-- original full parse path, so the predicate stays conservative. The function is otherwise
+-- byte-identical to its deployed definition; no signature, owner, ACL, caller or returned material
+-- changes.
 create or replace function util.dataset_derivative_rebuild_http_body_matches(
   p_body bytea,
   p_table text,
@@ -31,12 +38,22 @@ begin
     or p_table not in ('flows', 'processes') then
     return false;
   end if;
-  -- Conservative byte pre-filter: without the id bytes and without any backslash the decoded body
-  -- cannot produce the id through an escape sequence, so the parse below cannot match. The bytea
-  -- overload of pg_catalog.position takes the haystack first (unlike the `position(x in y)` text
-  -- form), so p_body is the first argument.
+  -- Conservative byte pre-filter: without the id bytes and without any `\u` escape prefix the
+  -- decoded body cannot produce the id (only Unicode escapes can spell characters of a UUID text),
+  -- so the parse below cannot return true. The bytea overload of pg_catalog.position takes the
+  -- haystack first (unlike the `position(x in y)` text form), so p_body is the first argument;
+  -- '\x5c75' is the two-byte `\u` sequence.
+  --
+  -- One deliberate difference, visible only to a caller that inspects the raw value: for an
+  -- object-shaped body whose record.id is absent or JSON null (with neither the version nor the
+  -- table comparison false) the pre-#689 body returned SQL NULL while this early return yields
+  -- false. The true-set is identical - the early return fires only where the original could not
+  -- return true - and every caller consumes this function in a positive filter context
+  -- (DELETE/COUNT ... WHERE, WHERE EXISTS, LEFT JOIN ... ON) where NULL and false select the same
+  -- rows; the batch suite pins the class and the call-site evidence is recorded with the #689
+  -- review.
   if pg_catalog.position(p_body, pg_catalog.convert_to(p_id::text, 'UTF8')) = 0
-    and pg_catalog.position(p_body, '\x5c'::bytea) = 0 then
+    and pg_catalog.position(p_body, '\x5c75'::bytea) = 0 then
     return false;
   end if;
   v_body := pg_catalog.convert_from(p_body, 'UTF8')::jsonb;
