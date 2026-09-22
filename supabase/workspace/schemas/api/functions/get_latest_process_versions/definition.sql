@@ -1,4 +1,4 @@
-CREATE OR REPLACE FUNCTION "api"."get_latest_process_versions"("page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "type_of_data_set_filter" "text" DEFAULT 'all'::"text", "sort_by" "text" DEFAULT 'modified_at'::"text", "sort_direction" "text" DEFAULT 'desc'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "model_id" "uuid", "model_version" character, "total_count" bigint)
+CREATE OR REPLACE FUNCTION "api"."get_latest_process_versions"("page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "type_of_data_set_filter" "text" DEFAULT 'all'::"text", "sort_by" "text" DEFAULT 'modified_at'::"text", "sort_direction" "text" DEFAULT 'desc'::"text", "sample_origin_filter" "text" DEFAULT 'all'::"text", "sample_publication_status_filter" "text" DEFAULT 'all'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "model_id" "uuid", "model_version" character, "total_count" bigint)
     LANGUAGE "plpgsql"
     SET "search_path" TO 'api', 'private', 'public', 'util', 'extensions', 'extensions', 'pg_temp'
     SET "statement_timeout" TO '60s'
@@ -24,7 +24,7 @@ BEGIN
     WITH visible_rows AS (
       SELECT p.*
       FROM public.processes p
-      WHERE ((data_source = 'tg' AND p.state_code = 100) OR (data_source = 'ex' AND p.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
+      WHERE ((((data_source = 'tg' AND p.state_code = 100)) OR api.sample_library_row_matches_v1(data_source, p.state_code, p.user_id, p.id, p.version, '{}'::jsonb, true)) OR (data_source = 'ex' AND p.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
         AND (team_id_filter IS NULL OR p.team_id = team_id_filter)
       UNION ALL
       SELECT p.*
@@ -71,6 +71,18 @@ BEGIN
     counted_rows AS (
       SELECT latest_rows.*, count(*) OVER()::bigint AS total_count
       FROM latest_rows
+      WHERE data_source <> 'sl' OR EXISTS (
+        SELECT 1 FROM public.processes sample_scope_row
+        WHERE sample_scope_row.id = latest_rows.id
+          AND sample_scope_row.version = latest_rows.version
+          AND api.sample_library_row_matches_v1(
+            data_source, sample_scope_row.state_code, sample_scope_row.user_id,
+            sample_scope_row.id, sample_scope_row.version, jsonb_build_object(
+              '__sampleLibraryOrigin', coalesce(sample_origin_filter, 'all'),
+              '__sampleLibraryPublicationStatus', coalesce(sample_publication_status_filter, 'all')
+            ), true
+          )
+      )
     )
     SELECT
       counted_rows.id,
@@ -107,12 +119,12 @@ BEGIN
 END;
 $_$;
 
-ALTER FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text") OWNER TO "postgres";
+ALTER FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") OWNER TO "postgres";
 
-REVOKE ALL ON FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text") FROM PUBLIC;
+REVOKE ALL ON FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") FROM PUBLIC;
 
-GRANT ALL ON FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text") TO "api_internal_executor";
+GRANT ALL ON FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "api_internal_executor";
 
-GRANT ALL ON FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text") TO "anon";
+GRANT ALL ON FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "anon";
 
-GRANT ALL ON FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "authenticated";

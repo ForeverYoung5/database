@@ -1,4 +1,4 @@
-CREATE OR REPLACE FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[] DEFAULT NULL::"text"[], "p_data_source" "text" DEFAULT 'tg'::"text", "p_this_user_id" "text" DEFAULT ''::"text", "p_team_id_filter" "uuid" DEFAULT NULL::"uuid", "p_state_code_filter" integer DEFAULT NULL::integer, "p_limit" integer DEFAULT 20) RETURNS TABLE("rank" bigint, "source_entity_kind" "text", "source_id" "uuid", "source_version" character, "source_name" "text", "source_modified_at" timestamp with time zone, "source_team_id" "uuid", "source_json" "jsonb", "matched_by" "text", "matched_entity_table" "text")
+CREATE OR REPLACE FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[] DEFAULT NULL::"text"[], "p_data_source" "text" DEFAULT 'tg'::"text", "p_this_user_id" "text" DEFAULT ''::"text", "p_team_id_filter" "uuid" DEFAULT NULL::"uuid", "p_state_code_filter" integer DEFAULT NULL::integer, "p_limit" integer DEFAULT 20, "p_sample_origin_filter" "text" DEFAULT 'all'::"text", "p_sample_publication_status_filter" "text" DEFAULT 'all'::"text") RETURNS TABLE("rank" bigint, "source_entity_kind" "text", "source_id" "uuid", "source_version" character, "source_name" "text", "source_modified_at" timestamp with time zone, "source_team_id" "uuid", "source_json" "jsonb", "matched_by" "text", "matched_entity_table" "text")
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'private', 'api', 'public', 'util', 'extensions', 'extensions', 'pg_temp'
     SET "statement_timeout" TO '20s'
@@ -13,6 +13,7 @@ declare
   normalized_source_entity_kinds text[];
   branches text[] := array[]::text[];
   v_sql text;
+  sample_filter jsonb;
 begin
   normalized_data_source := coalesce(nullif(lower(btrim(p_data_source)), ''), 'tg');
   effective_user_id := private.dataset_search_effective_user_id(p_this_user_id);
@@ -20,6 +21,10 @@ begin
   normalized_limit := least(greatest(coalesce(p_limit, 20), 1), 50);
   per_entity_limit := normalized_limit;
   uuid_pattern := '%' || p_uuid::text || '%';
+  sample_filter := jsonb_build_object(
+    '__sampleLibraryOrigin', coalesce(p_sample_origin_filter, 'all'),
+    '__sampleLibraryPublicationStatus', coalesce(p_sample_publication_status_filter, 'all')
+  );
 
   if p_source_entity_kinds is not null then
     select array_agg(distinct normalized_kind order by normalized_kind)
@@ -70,7 +75,7 @@ begin
           'public.processes'::text as matched_entity_table
         from public.processes d
         where (
-            ((($1 = 'tg' AND d.state_code = 100) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
+            (((($1 = 'tg' AND d.state_code = 100) OR api.sample_library_row_matches_v1($1, d.state_code, d.user_id, d.id, d.version, $9, true)) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
             or ($1 = 'co' and d.state_code = 200 and ($3 is null or d.team_id = $3))
             or ($1 = 'my' and $2 is not null and d.user_id = $2 and ($4 is null or d.state_code = $4) and d.state_code is distinct from 120)
             or ($1 = 'te' and $3 is not null and $5 and d.team_id = $3 and ($4 is null or d.state_code = $4) and d.state_code is distinct from 120)
@@ -101,7 +106,7 @@ begin
           'public.flows'::text as matched_entity_table
         from public.flows d
         where (
-            ((($1 = 'tg' AND d.state_code = 100) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
+            (((($1 = 'tg' AND d.state_code = 100) OR api.sample_library_row_matches_v1($1, d.state_code, d.user_id, d.id, d.version, $9, false)) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
             or ($1 = 'co' and d.state_code = 200 and ($3 is null or d.team_id = $3))
             or ($1 = 'my' and $2 is not null and d.user_id = $2 and ($4 is null or d.state_code = $4))
             or ($1 = 'te' and $3 is not null and $5 and d.team_id = $3 and ($4 is null or d.state_code = $4))
@@ -132,7 +137,7 @@ begin
           'public.lifecyclemodels'::text as matched_entity_table
         from public.lifecyclemodels d
         where (
-            ((($1 = 'tg' AND d.state_code = 100) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
+            (((($1 = 'tg' AND d.state_code = 100) OR api.sample_library_row_matches_v1($1, d.state_code, d.user_id, d.id, d.version, $9, false)) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
             or ($1 = 'co' and d.state_code = 200 and ($3 is null or d.team_id = $3))
             or ($1 = 'my' and $2 is not null and d.user_id = $2 and ($4 is null or d.state_code = $4))
             or ($1 = 'te' and $3 is not null and $5 and d.team_id = $3 and ($4 is null or d.state_code = $4))
@@ -163,7 +168,7 @@ begin
           'public.sources'::text as matched_entity_table
         from public.sources d
         where (
-            ((($1 = 'tg' AND d.state_code = 100) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
+            (((($1 = 'tg' AND d.state_code = 100) OR api.sample_library_row_matches_v1($1, d.state_code, d.user_id, d.id, d.version, $9, false)) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
             or ($1 = 'co' and d.state_code = 200 and ($3 is null or d.team_id = $3))
             or ($1 = 'my' and $2 is not null and d.user_id = $2 and ($4 is null or d.state_code = $4))
             or ($1 = 'te' and $3 is not null and $5 and d.team_id = $3 and ($4 is null or d.state_code = $4))
@@ -194,7 +199,7 @@ begin
           'public.contacts'::text as matched_entity_table
         from public.contacts d
         where (
-            ((($1 = 'tg' AND d.state_code = 100) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
+            (((($1 = 'tg' AND d.state_code = 100) OR api.sample_library_row_matches_v1($1, d.state_code, d.user_id, d.id, d.version, $9, false)) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
             or ($1 = 'co' and d.state_code = 200 and ($3 is null or d.team_id = $3))
             or ($1 = 'my' and $2 is not null and d.user_id = $2 and ($4 is null or d.state_code = $4))
             or ($1 = 'te' and $3 is not null and $5 and d.team_id = $3 and ($4 is null or d.state_code = $4))
@@ -225,7 +230,7 @@ begin
           'public.unitgroups'::text as matched_entity_table
         from public.unitgroups d
         where (
-            ((($1 = 'tg' AND d.state_code = 100) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
+            (((($1 = 'tg' AND d.state_code = 100) OR api.sample_library_row_matches_v1($1, d.state_code, d.user_id, d.id, d.version, $9, false)) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
             or ($1 = 'co' and d.state_code = 200 and ($3 is null or d.team_id = $3))
             or ($1 = 'my' and $2 is not null and d.user_id = $2 and ($4 is null or d.state_code = $4))
             or ($1 = 'te' and $3 is not null and $5 and d.team_id = $3 and ($4 is null or d.state_code = $4))
@@ -256,7 +261,7 @@ begin
           'public.flowproperties'::text as matched_entity_table
         from public.flowproperties d
         where (
-            ((($1 = 'tg' AND d.state_code = 100) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
+            (((($1 = 'tg' AND d.state_code = 100) OR api.sample_library_row_matches_v1($1, d.state_code, d.user_id, d.id, d.version, $9, false)) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
             or ($1 = 'co' and d.state_code = 200 and ($3 is null or d.team_id = $3))
             or ($1 = 'my' and $2 is not null and d.user_id = $2 and ($4 is null or d.state_code = $4))
             or ($1 = 'te' and $3 is not null and $5 and d.team_id = $3 and ($4 is null or d.state_code = $4))
@@ -298,14 +303,14 @@ begin
 
   return query execute v_sql
     using normalized_data_source, effective_user_id, p_team_id_filter, p_state_code_filter,
-          can_read_team_filter, uuid_pattern, normalized_limit, per_entity_limit;
+          can_read_team_filter, uuid_pattern, normalized_limit, per_entity_limit, sample_filter;
 end;
 $_$;
 
-ALTER FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer) OWNER TO "postgres";
+ALTER FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer, "p_sample_origin_filter" "text", "p_sample_publication_status_filter" "text") OWNER TO "postgres";
 
-REVOKE ALL ON FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer, "p_sample_origin_filter" "text", "p_sample_publication_status_filter" "text") FROM PUBLIC;
 
-GRANT ALL ON FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer) TO "service_role";
+GRANT ALL ON FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer, "p_sample_origin_filter" "text", "p_sample_publication_status_filter" "text") TO "service_role";
 
-GRANT ALL ON FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer) TO "api_internal_executor";
+GRANT ALL ON FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer, "p_sample_origin_filter" "text", "p_sample_publication_status_filter" "text") TO "api_internal_executor";

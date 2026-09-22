@@ -742,6 +742,8 @@ export type Database = {
           data_source?: string
           page_current?: number
           page_size?: number
+          sample_origin_filter?: string
+          sample_publication_status_filter?: string
           sort_by?: string
           sort_direction?: string
           state_code_filter?: number
@@ -763,6 +765,8 @@ export type Database = {
           filter_condition?: Json
           page_current?: number
           page_size?: number
+          sample_origin_filter?: string
+          sample_publication_status_filter?: string
           sort_by?: string
           sort_direction?: string
           state_code_filter?: number
@@ -783,6 +787,8 @@ export type Database = {
           data_source?: string
           page_current?: number
           page_size?: number
+          sample_origin_filter?: string
+          sample_publication_status_filter?: string
           sort_by?: string
           sort_direction?: string
           state_code_filter?: number
@@ -803,6 +809,8 @@ export type Database = {
           data_source?: string
           page_current?: number
           page_size?: number
+          sample_origin_filter?: string
+          sample_publication_status_filter?: string
           sort_by?: string
           sort_direction?: string
           state_code_filter?: number
@@ -823,6 +831,8 @@ export type Database = {
           data_source?: string
           page_current?: number
           page_size?: number
+          sample_origin_filter?: string
+          sample_publication_status_filter?: string
           sort_by?: string
           sort_direction?: string
           state_code_filter?: number
@@ -846,6 +856,8 @@ export type Database = {
           data_source?: string
           page_current?: number
           page_size?: number
+          sample_origin_filter?: string
+          sample_publication_status_filter?: string
           sort_by?: string
           sort_direction?: string
           state_code_filter?: number
@@ -866,6 +878,8 @@ export type Database = {
           data_source?: string
           page_current?: number
           page_size?: number
+          sample_origin_filter?: string
+          sample_publication_status_filter?: string
           sort_by?: string
           sort_direction?: string
           state_code_filter?: number
@@ -2375,14 +2389,8 @@ export type Database = {
           target_table: string
         }[]
       }
-      qry_sample_library_datasets_v1: {
-        Args: {
-          p_dataset_type: string
-          p_origin?: string
-          p_page_current?: number
-          p_page_size?: number
-          p_publication_status?: string
-        }
+      qry_sample_library_process_publications_v1: {
+        Args: { p_items: Json }
         Returns: Json
       }
       qry_system_find_member_candidate_by_email: {
@@ -2465,6 +2473,18 @@ export type Database = {
           total_count: number
         }[]
       }
+      sample_library_row_matches_v1: {
+        Args: {
+          p_data_source: string
+          p_filter: Json
+          p_id: string
+          p_is_process?: boolean
+          p_state_code: number
+          p_user_id: string
+          p_version: string
+        }
+        Returns: boolean
+      }
       search_contacts: {
         Args: {
           data_source?: string
@@ -2511,6 +2531,8 @@ export type Database = {
         Args: {
           p_data_source?: string
           p_limit?: number
+          p_sample_origin_filter?: string
+          p_sample_publication_status_filter?: string
           p_source_entity_kinds?: string[]
           p_state_code_filter?: number
           p_team_id_filter?: string

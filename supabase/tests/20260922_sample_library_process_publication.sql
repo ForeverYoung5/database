@@ -81,7 +81,7 @@ select ok(
 );
 select ok(
   has_function_privilege('authenticated',
-    'api.qry_sample_library_datasets_v1(text,text,text,integer,integer)','execute')
+    'api.qry_sample_library_process_publications_v1(jsonb)','execute')
   and has_function_privilege('authenticated',
     'api.cmd_sample_library_publish_processes_v1(jsonb)','execute')
   and not has_function_privilege('anon',
@@ -91,7 +91,7 @@ select ok(
 select ok(
   exists (
     select 1 from private.api_capability_grants
-    where routine_identity = 'api.qry_sample_library_datasets_v1(text, text, text, integer, integer)'
+    where routine_identity = 'api.qry_sample_library_process_publications_v1(jsonb)'
       and capability_id = 'NX-CORE-02' and allow_authenticated
       and not allow_anon and not allow_service_role
   ) and exists (
@@ -107,8 +107,9 @@ set local role authenticated;
 select set_config('request.jwt.claim.role','authenticated',true);
 select set_config('request.jwt.claim.sub','68400000-0000-4000-8000-000000000002',true);
 select is(
-  api.qry_sample_library_datasets_v1('processes') ->> 'code',
-  'not_data_product_manager',
+  (select count(*)::text from api.get_latest_process_versions(
+    data_source => 'sl', sample_origin_filter => 'all')),
+  '0',
   'an ordinary authenticated owner cannot read the manager sample library'
 );
 select is(
@@ -125,65 +126,61 @@ select set_config('request.jwt.claim.role','authenticated',true);
 select set_config('request.jwt.claim.sub','68400000-0000-4000-8000-000000000001',true);
 
 select is(
-  api.qry_sample_library_datasets_v1('processes') #>> '{data,total}',
+  (select count(*)::text from api.get_latest_process_versions(
+    data_source => 'sl', sample_origin_filter => 'all')),
   '3',
   'the Process catalog returns only latest state-100 identities'
 );
 select is(
-  api.qry_sample_library_datasets_v1('processes','literature') #>> '{data,total}',
+  (select count(*)::text from api.get_latest_process_versions(
+    data_source => 'sl', sample_origin_filter => 'literature')),
   '2',
   'the literature origin filter selects rows without user_id'
 );
 select is(
-  api.qry_sample_library_datasets_v1('processes','enterprise') #>> '{data,total}',
+  (select count(*)::text from api.get_latest_process_versions(
+    data_source => 'sl', sample_origin_filter => 'enterprise')),
   '1',
   'the enterprise origin filter selects rows with user_id'
 );
 select is(
-  (select item ->> 'version'
-   from jsonb_array_elements(
-     api.qry_sample_library_datasets_v1('processes','all','all',100,1) #> '{data,items}'
-   ) as item
-   where item ->> 'id' = '68400000-0000-4000-8000-000000000010'),
+  (select version::text from api.get_latest_process_versions(
+    page_size => 100, data_source => 'sl', sample_origin_filter => 'all')
+   where id = '68400000-0000-4000-8000-000000000010'),
   '02.00.000',
   'the catalog exposes the latest eligible version for a Process identity'
 );
 select is(
-  api.qry_sample_library_datasets_v1('processes','all','published') #>> '{data,total}',
+  (select count(*)::text from api.get_latest_process_versions(
+    data_source => 'sl', sample_publication_status_filter => 'published')),
   '0',
   'no Process is initially published'
 );
 
 select is(
-  api.qry_sample_library_datasets_v1('contacts') #>> '{data,total}', '1',
+  (select count(*)::text from api.get_latest_contact_versions(data_source => 'sl')), '1',
   'Contacts are exposed through the shared state-100 contract'
 );
 select is(
-  api.qry_sample_library_datasets_v1('sources') #>> '{data,total}', '1',
+  (select count(*)::text from api.get_latest_source_versions(data_source => 'sl')), '1',
   'Sources are exposed through the shared state-100 contract'
 );
 select is(
-  api.qry_sample_library_datasets_v1('unitgroups') #>> '{data,total}', '1',
+  (select count(*)::text from api.get_latest_unitgroup_versions(data_source => 'sl')), '1',
   'Unit Groups are exposed through the shared state-100 contract'
 );
 select is(
-  api.qry_sample_library_datasets_v1('flowproperties') #>> '{data,total}', '1',
+  (select count(*)::text from api.get_latest_flowproperty_versions(data_source => 'sl')), '1',
   'Flow Properties are exposed through the shared state-100 contract'
 );
 select is(
-  api.qry_sample_library_datasets_v1('flows') #>> '{data,total}', '1',
+  (select count(*)::text from api.get_latest_flow_versions(data_source => 'sl')), '1',
   'Flows are exposed through the shared state-100 contract'
 );
 select is(
-  api.qry_sample_library_datasets_v1('lifecyclemodels') #>> '{data,total}', '1',
+  (select count(*)::text from api.get_latest_lifecyclemodel_versions(data_source => 'sl')), '1',
   'Lifecycle Models are exposed through the shared state-100 contract'
 );
-select is(
-  api.qry_sample_library_datasets_v1('contacts','all','published') ->> 'code',
-  'publication_status_not_supported',
-  'publication status cannot be applied to a non-Process type'
-);
-
 -- A mixed valid/invalid batch fails before writing any publication rows.
 select is(
   api.cmd_sample_library_publish_processes_v1(jsonb_build_array(
@@ -213,12 +210,14 @@ select is((select response #>> '{data,requestedCount}' from first_publish), '2',
 select is((select response #>> '{data,publishedCount}' from first_publish), '2',
   'the command publishes both selected Process versions');
 select is(
-  api.qry_sample_library_datasets_v1('processes','all','published') #>> '{data,total}',
+  (select count(*)::text from api.get_latest_process_versions(
+    data_source => 'sl', sample_publication_status_filter => 'published')),
   '2',
   'the published filter reflects the exact-version publication relation'
 );
 select is(
-  api.qry_sample_library_datasets_v1('processes','all','unpublished') #>> '{data,total}',
+  (select count(*)::text from api.get_latest_process_versions(
+    data_source => 'sl', sample_publication_status_filter => 'unpublished')),
   '1',
   'the unpublished filter retains the remaining eligible Process'
 );

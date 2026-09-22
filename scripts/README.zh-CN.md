@@ -21,7 +21,7 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-22
-lastReviewedCommit: 5cb9130912a4dc68b418309d580c17b975bfdd72
+lastReviewedCommit: 226b612b42abd13d8451d04a07db91d952c90c08
 lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the generated five-schema workspace and Data API types gain the guarded owner-draft before-content save facade; refresh behavior and stable-versus-generated boundaries are unchanged.Reviewed for Database #677 (Foundry #60) with workspace #1432: the protected-alias PostgREST routing probe joins the script inventory (real-HTTP OAuth denial/repair proof plus the explicit api content profile of the one-shot callback); refresh behavior and stable-versus-generated boundaries are unchanged.再次复核 Database #674（Foundry #186）：工作流契约辅助脚本新增一个封闭 Length*time 档案的套件固定标记；受支持的迁移生成流程与脚本用法未变。 Reviewed for Database #680 with workspace #1432: the workflow contract now pins the focused Time-alias v2 current-closure suite in the local contract selection; refresh behavior and stable-versus-generated boundaries are unchanged. 再次复核 Database #686（工作区 #1432）：随 Time 与 Length*time 批量执行器及新鲜读取的全局出现闭包改为候选驱动，生成工作区已在 CI 固定版本 Supabase CLI 2.117.0 的干净迁移构建栈上重新生成，二次生成结果一致且 database.types.ts 未变；刷新行为与稳定/生成边界未变。 Reviewed for Database #689 with workspace #1432: the generated schema workspace is regenerated against a clean migration-built stack on the CI-pinned Supabase CLI 2.117.0 after the dispatch-body pre-filter migration, a second regeneration is diff-clean, and database.types.ts is byte-identical to a fresh generation."
 related:
   - ../AGENTS.md

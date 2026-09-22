@@ -52,6 +52,8 @@ begin
 
   if normalized_data_source = 'tg' then
     visibility_clause := 'd.state_code = 100 and ($5::uuid is null or d.team_id = $5)';
+  elsif normalized_data_source = 'sl' then
+    visibility_clause := 'api.sample_library_row_matches_v1($3, d.state_code, d.user_id, d.id, d.version, ''{}''::jsonb, false)';
   elsif normalized_data_source = 'ex' then
     if auth.uid() is null then return; end if;
     visibility_clause := 'd.state_code = -1 and ($5::uuid is null or d.team_id = $5)';
@@ -72,8 +74,8 @@ begin
   end if;
 
   json_filter_clause := case
-    when filter_condition_jsonb = '{}'::jsonb then ''
-    else 'and d.json @> $2'
+    when private.sample_library_business_filter_v1(filter_condition_jsonb) = '{}'::jsonb then ''
+    else 'and d.json @> private.sample_library_business_filter_v1($2)'
   end;
   text_match_clause := case
     when cardinality(escaped_query_terms) = 0 then 'false'
@@ -155,6 +157,15 @@ begin
       counted_rows as (
         select latest_rows.*, count(*) over()::bigint as total_count
         from latest_rows
+        where $3 <> 'sl' or exists (
+          select 1 from %1$s sample_scope_row
+          where sample_scope_row.id = latest_rows.id
+            and sample_scope_row.version = latest_rows.version
+            and api.sample_library_row_matches_v1(
+              $3, sample_scope_row.state_code, sample_scope_row.user_id,
+              sample_scope_row.id, sample_scope_row.version, $2, false
+            )
+        )
       )
       select
         counted_rows.id,
