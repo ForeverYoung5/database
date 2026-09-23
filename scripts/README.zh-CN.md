@@ -20,9 +20,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: "2026-09-22"
-lastReviewedCommit: "444b0976b48b2f7c9861e092cd3ee6189b786f5d"
-lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the generated five-schema workspace and Data API types gain the guarded owner-draft before-content save facade; refresh behavior and stable-versus-generated boundaries are unchanged.Reviewed for Database #677 (Foundry #60) with workspace #1432: the protected-alias PostgREST routing probe joins the script inventory (real-HTTP OAuth denial/repair proof plus the explicit api content profile of the one-shot callback); refresh behavior and stable-versus-generated boundaries are unchanged.再次复核 Database #674（Foundry #186）：工作流契约辅助脚本新增一个封闭 Length*time 档案的套件固定标记；受支持的迁移生成流程与脚本用法未变。 Reviewed for Database #680 with workspace #1432: the workflow contract now pins the focused Time-alias v2 current-closure suite in the local contract selection; refresh behavior and stable-versus-generated boundaries are unchanged. 再次复核 Database #686（工作区 #1432）：随 Time 与 Length*time 批量执行器及新鲜读取的全局出现闭包改为候选驱动，生成工作区已在 CI 固定版本 Supabase CLI 2.117.0 的干净迁移构建栈上重新生成，二次生成结果一致且 database.types.ts 未变；刷新行为与稳定/生成边界未变。 Reviewed for Database #689 with workspace #1432: the generated schema workspace is regenerated against a clean migration-built stack on the CI-pinned Supabase CLI 2.117.0 after the dispatch-body pre-filter migration, a second regeneration is diff-clean, and database.types.ts is byte-identical to a fresh generation.Reviewed for Database #694 with workspace #1432: the canonical JS object-key sort key gains a pure-ASCII fast path written under the explicit C collation, with the published per-character loop kept verbatim as the fallback for every non-ASCII value and for the empty key, so the array-index branch, the UTF-16 and surrogate arithmetic, the two sort-key prefixes, the declared volatility, the pinned search_path and the ACLs are unchanged; the guarded Time v2 batch executor stops recomputing two payload digests for its row audit and its replay proof and instead reuses the producer's before_sha256 and desired_sha256, which the untouched structural parity guard has already proved equal to the server canonical digests of the claimed before payload and of the server-derived payload that is committed, the two verified digests riding only in the internal prepared envelope, which is never hashed, never returned and never shape-validated. 生成 schema workspace 已在仅含 main 历史的 #694 干净迁移构建上用 CI 钉定的 Supabase CLI 2.117.0 重新生成，二次生成无差异，database.types.ts 逐字节相同。"
+lastReviewedAt: 2026-09-23
+lastReviewedCommit: b73b143b9631763a6a4c871b89877393fe0cb08f
+lastReviewedNote: "Reviewed for Database #703: ready derivative scheduling keeps the default five visits, caps actual visits at 25 and external transitions at five, and preserves all data fences and terminal proofs. The schema migration leaves cron unchanged; the separately reviewed REPEATABLE READ activation, one-attempt transport, regression matrix and rollback procedure are documented. Generated ownership, hosted deployment, hotfix/backmerge and workspace integration boundaries remain unchanged."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml
@@ -46,6 +46,62 @@ related:
 本地迁移输出和审计 JSONL 文件应写入 `_artifacts/`，该目录已被 Git 忽略。
 
 ## 脚本列表
+
+### `configure_derivative_scheduler.py`
+
+在 #703 migration 部署后，仅切换派生 cron 的每轮请求访问数（5／25）。
+一分钟频率、active、owner 与其他字段必须保持完整快照一致；每轮合计最多
+5 次外部转换仍由 coordinator 独立限制。该工具不安装 schema，也不修改业务数据。
+
+使用仓库固定版本且已登录的 Supabase CLI。`SCHEDULER_PROJECT_REF` 是目标项目；
+`SCHEDULER_COORDINATOR_SHA256`、`SCHEDULER_SELECTOR_SHA256` 来自独立验收的
+干净 migration 构建，不能直接信任任意远端定义。`SCHEDULER_EVIDENCE` 指向新的
+证据目录，父目录需已存在。
+
+```bash
+python3 scripts/configure_derivative_scheduler.py plan \
+  --project-ref "$SCHEDULER_PROJECT_REF" --operation enable25 \
+  --expected-coordinator-sha256 "$SCHEDULER_COORDINATOR_SHA256" \
+  --expected-selector-sha256 "$SCHEDULER_SELECTOR_SHA256" \
+  --out-dir "$SCHEDULER_EVIDENCE"
+```
+
+审核 `plan.json`、完整 before job 和 `review.sql`，把返回的 `approve_sha256`
+作为 `SCHEDULER_PLAN_SHA256`。默认准确 migration head 是 `20260923053141`；
+较新已验收部署需通过 `--expected-migration-version` 指定准确 head。
+
+```bash
+python3 scripts/configure_derivative_scheduler.py apply \
+  --project-ref "$SCHEDULER_PROJECT_REF" \
+  --plan "$SCHEDULER_EVIDENCE/plan.json" \
+  --approve-sha256 "$SCHEDULER_PLAN_SHA256"
+```
+
+SQL 模板在 REPEATABLE READ 中使用 `cron.alter_job`，原子检查 source、project、
+schema 与完整 before/after。并发管理员修改会拒绝或报 40001；绝不自动重试。
+发送前以 create-only + fsync 保存 attempt；已有 attempt 或移到其他目录的 plan
+均不能再次执行。凭据和原始错误正文不会打印，私有证据需保留到交付结束。
+各命令均支持 `--supabase-cli /path/to/supabase`。
+
+超时或结果不确定时，只用新的 readback 目录核验：
+
+```bash
+python3 scripts/configure_derivative_scheduler.py verify \
+  --project-ref "$SCHEDULER_PROJECT_REF" \
+  --plan "$SCHEDULER_EVIDENCE/plan.json" \
+  --out-dir "$SCHEDULER_READBACK"
+```
+
+`desired`／`before`／`changed` 只证明当前状态，不证明不确定操作由谁提交。
+不能靠重放或替换 plan 强制写入。回滚须先基于当前 25 次 job 生成新的 `rollback5`
+plan，再审核并执行一次；恢复默认 `()` 命令（5 次访问，即使原来写的是 `(5)`），
+且必须先于 schema/code 回退。准确 Preview 上先完成启用／回滚／再启用，生产
+启用后使用新的原生测试账号请求，验收真实 worker 完成证明。
+
+离线故障测试：`python3 scripts/test_configure_derivative_scheduler.py`。
+专用本地并发及有数据升级测试在
+`supabase/tests/regression/20260923_derivative_scheduler_*.py`；不能放宽其固定
+隔离容器与黑洞 endpoint 守卫去操作共享或托管数据。保留证据后清理任务资源。
 
 ### `benchmark_hybrid_versions.mjs`
 

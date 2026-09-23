@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "private"."pick_dataset_derivative_rebuild_request"("p_seen" "uuid"[], "p_lane" "text", "p_allow_external" boolean, "p_now" timestamp with time zone) IS 'Owner-only narrow-metadata selector. Fair actor/batch progress and oldest-row audits; acquires at most one actual request lock after SKIP LOCKED, with no pre-lock lane quota.';

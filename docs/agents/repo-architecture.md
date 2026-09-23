@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-23
-lastReviewedCommit: 3d0cbd2f2e3c6afe394fd404d1202261cbe1e214
-lastReviewedNote: "Current main branch repository structure, SQL ownership, and generated-workspace boundaries reviewed."
+lastReviewedCommit: b73b143b9631763a6a4c871b89877393fe0cb08f
+lastReviewedNote: "Reviewed for Database #703: ready derivative scheduling keeps the default five visits, caps actual visits at 25 and external transitions at five, and preserves all data fences and terminal proofs. The schema migration leaves cron unchanged; the separately reviewed REPEATABLE READ activation, one-attempt transport, regression matrix and rollback procedure are documented. Generated ownership, hosted deployment, hotfix/backmerge and workspace integration boundaries remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -77,6 +77,28 @@ and admitted caller roles; migrations first remove inherited grants and then
 rebuild the external ACL from this closed manifest. New or overloaded RPCs are
 therefore denied until their exact signature is deliberately classified.
 
+## Protected Derivative Scheduling
+
+The coordinator keeps its public signature and default five request visits.
+The internal picker separates ready transitions from at most five waiting or
+overflow audits, while the coordinator caps all visits at 25 and dispatch-capable
+Markdown/embedding transitions at five combined. The one-minute cron cadence
+and downstream embedding policies are independent bounds and stay unchanged.
+`util.dataset_derivative_rebuild_requests.scheduler_selected_at` is a nullable
+internal service clock for actor/batch fairness; admission, public read JSON,
+plan hashes and historical completed rows do not acquire it. The owner-only
+picker uses narrow metadata, the existing advisory mutex and one actual
+`FOR UPDATE SKIP LOCKED` row per pick. It does not materialize all primary JSON.
+
+Migration installation leaves cron configuration unchanged. The separate
+versioned activation in `scripts/configure_derivative_scheduler.py` binds the
+qualified source and complete current job before switching to 25 visits. Its
+rollback restores the default five-visit command before any code rollback.
+The existing primary/ownership/hash checks, 420-second worker drain, staging,
+one-dispatch, paired proposal commit and causal terminal proofs remain intact.
+History contributes to the fairness aggregation; measured local timings are
+not a constant-time guarantee or hosted throughput promise.
+
 ## Review Queue Full-Text Search
 
 The v4 Admin/Member queue RPCs add `p_query` while preserving the v3 DTO,
@@ -102,7 +124,7 @@ the service-only configuration façade after Supabase Auth registration; they
 are never hardcoded in a generic migration.
 
 The official Production CLI is an environment-specific registered client. Its
-exact capability class is `CLI-RPC-01`, `DB-CORE-READ-01`,
+exact capability class is `CLI-ALIAS-02`, `CLI-RPC-01`, `DB-CORE-READ-01`,
 `DB-CORE-WRITE-01`, `NX-CORE-02`, and `EDGE-BUNDLE-01`. The grant must change
 through `api.svc_oauth_client_configure`, after locking and verifying the exact
 current client and route-manifest state, with verification of both the result
@@ -112,8 +134,6 @@ it must no-op on zero matches, fail on ambiguity, and never embed an
 environment client ID. A consumer repository may own the public client
 identifier and live use case, but it does not own this database grant.
 
-<<<<<<< HEAD
-=======
 The five protected Time-alias v2 routes are gated by `CLI-ALIAS-02`. The four
 actor-facing routes are authenticated-only, and the service-only executor
 callback keeps no anon/authenticated reach, so adding the capability can never
@@ -132,7 +152,6 @@ the live occurrences of the changed Flows across all owners and states. A suppor
 after the run makes `live_closure_proof` false and the public read reports the failure instead of
 `passed`/`applied`; unrelated canonical consumers stay outside the plan.
 
->>>>>>> 2abf583 (fix+test: prove the current support and global closure in the Time-v2 fresh read (Foundry #60 / #680))
 Direct MCP hosts use one public manual OAuth client per host and environment,
 with exact loopback callbacks and Dynamic Client Registration disabled. Each
 MCP client receives only `DB-CORE-READ-01`, `DB-CORE-WRITE-01`, and
