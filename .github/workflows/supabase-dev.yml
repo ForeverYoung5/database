@@ -34,6 +34,7 @@ jobs:
       - name: Verify deployment workflow contract
         run: |
           python scripts/test_resolve_migration_head.py
+          python3 scripts/test_configure_derivative_scheduler.py
           python scripts/test_supabase_dev_workflow_contract.py
           python scripts/check_portal_projection_manifest.py
           python3 scripts/check_portal_card_schema_parity.py
@@ -69,6 +70,13 @@ jobs:
           supabase test db supabase/tests/20260919_portal_catalog_summary_bounded.sql
           supabase test db supabase/tests/20260910_example_dataset_scope.sql
           supabase test db supabase/tests/20260921_guarded_dataset_save_draft.sql
+          supabase test db supabase/tests/20260714_guarded_dataset_derivative_rebuild.sql
+          supabase test db supabase/tests/20260715_guarded_dataset_derivative_rebuild_batch.sql
+          supabase test db supabase/tests/20260525_embedding_backpressure_and_deferred_queue.sql
+          supabase test db supabase/tests/20260728_embedding_queue_selector_plan_governance.sql
+          supabase test db supabase/tests/20260923_derivative_scheduler_budget.sql
+          supabase test db supabase/tests/20260923_derivative_scheduler_benchmark.sql
+          supabase test db supabase/tests/20260923_derivative_scheduler_history_profile.sql
           supabase test db supabase/tests/20260921_foundry60_time_alias_v2_math.sql
           supabase test db supabase/tests/20260921_foundry60_time_alias_v2_vectors.sql
           supabase test db supabase/tests/20260921_foundry60_time_alias_v2.sql

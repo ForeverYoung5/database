@@ -4,6 +4,17 @@ CREATE OR REPLACE FUNCTION "util"."process_dataset_derivative_rebuilds"("p_limit
     AS $$
 declare
   v_request util.dataset_derivative_rebuild_requests%rowtype;
+  v_candidate record;
+  v_seen uuid[] := array[]::uuid[];
+  v_visit_limit integer;
+  v_ready_slots integer;
+  v_slot integer;
+  v_lane text;
+  v_ready_exhausted boolean := false;
+  v_audit_only boolean;
+  v_audited integer := 0;
+  v_external_visits integer := 0;
+  v_external_transition boolean;
   v_json_ordered jsonb;
   v_response net._http_response%rowtype;
   v_snapshot jsonb;
@@ -35,17 +46,68 @@ begin
     return 0;
   end if;
 
-  for v_request in
-    select request.*
-    from util.dataset_derivative_rebuild_requests as request
-    where request.status not in ('completed', 'stale', 'failed')
-    order by request.updated_at, request.admitted_at, request.id
-    for update skip locked
-    limit least(greatest(p_limit, 1), 25)
-  loop
+  v_visit_limit := least(greatest(p_limit, 1), 25);
+  v_ready_slots := case when v_visit_limit = 1 then 1
+    else v_visit_limit - least(5, greatest(1, v_visit_limit / 5)) end;
+  for v_slot in 1..v_visit_limit loop
+    v_lane := case when v_visit_limit = 1 then 'any'
+      when v_slot <= v_ready_slots and not v_ready_exhausted then 'ready'
+      else 'audit' end;
+    if v_lane = 'audit' and v_audited >= 5 then
+      exit;
+    end if;
+    select candidate.* into v_candidate
+    from private.pick_dataset_derivative_rebuild_request(
+      v_seen, v_lane, v_external_visits < 5, pg_catalog.clock_timestamp()
+    ) candidate;
+    if v_candidate.request_id is null and v_lane = 'ready' then
+      v_ready_exhausted := true;
+      v_lane := 'audit';
+      if v_audited >= 5 then exit; end if;
+      select candidate.* into v_candidate
+      from private.pick_dataset_derivative_rebuild_request(
+        v_seen, v_lane, false, pg_catalog.clock_timestamp()
+      ) candidate;
+    end if;
+    if v_candidate.request_id is null then
+      exit;
+    end if;
+    v_seen := array_append(v_seen, v_candidate.request_id);
+    select request.* into v_request
+    from util.dataset_derivative_rebuild_requests request
+    where request.id = v_candidate.request_id;
     v_processed := v_processed + 1;
     v_now := pg_catalog.clock_timestamp();
+    -- Recheck the actual locked phase as well as the earlier readiness snapshot.
+    -- A state change between metadata selection and locking cannot bypass the
+    -- external budget. Over-reserving for an invalid response remains conservative.
+    v_external_transition := v_candidate.dispatch_capable
+      or v_request.status = 'markdown_pending'
+      or (v_request.status = 'dispatching' and v_request.phase = 'quarantining'
+        and v_request.drain_not_before <= v_now);
+    -- Ready work in the oldest-row lane receives a real progress slot if capacity
+    -- remains. It is then stamped/counted as progress, never as a waiting audit.
+    v_audit_only := not v_candidate.is_ready
+      or (v_external_transition and v_external_visits >= 5);
+    if v_audit_only then
+      v_audited := v_audited + 1;
+    else
+      if v_external_transition then
+        v_external_visits := v_external_visits + 1;
+      end if;
+      -- Outside the request-scoped exception block: a poisoned selected request
+      -- still consumed a service opportunity, while audits never count as progress.
+      update util.dataset_derivative_rebuild_requests
+      set scheduler_selected_at = v_now where id = v_request.id;
+    end if;
     begin
+
+    if v_audit_only and v_request.status = 'dispatching'
+      and v_request.phase = 'failure_draining' then
+      update util.dataset_derivative_rebuild_requests
+      set updated_at = v_now where id = v_request.id;
+      continue;
+    end if;
 
     if v_request.status = 'dispatching'
       and v_request.phase = 'failure_draining' then
@@ -110,6 +172,12 @@ begin
         'Frozen dataset primary fingerprint is no longer present',
         '{}'::jsonb
       );
+      continue;
+    end if;
+
+    if v_audit_only then
+      update util.dataset_derivative_rebuild_requests
+      set updated_at = v_now where id = v_request.id;
       continue;
     end if;
 
