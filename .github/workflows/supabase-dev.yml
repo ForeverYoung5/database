@@ -34,6 +34,7 @@ jobs:
       - name: Verify deployment workflow contract
         run: |
           python scripts/test_resolve_migration_head.py
+          python3 scripts/test_configure_derivative_scheduler.py
           python scripts/test_supabase_dev_workflow_contract.py
           python scripts/check_portal_projection_manifest.py
           python3 scripts/check_portal_card_schema_parity.py
@@ -69,6 +70,12 @@ jobs:
           supabase test db supabase/tests/20260919_portal_catalog_summary_bounded.sql
           supabase test db supabase/tests/20260910_example_dataset_scope.sql
           supabase test db supabase/tests/20260921_guarded_dataset_save_draft.sql
+          supabase test db supabase/tests/20260714_guarded_dataset_derivative_rebuild.sql
+          supabase test db supabase/tests/20260715_guarded_dataset_derivative_rebuild_batch.sql
+          supabase test db supabase/tests/20260525_embedding_backpressure_and_deferred_queue.sql
+          supabase test db supabase/tests/20260728_embedding_queue_selector_plan_governance.sql
+          supabase test db supabase/tests/20260923_derivative_scheduler_budget.sql
+          supabase test db supabase/tests/20260923_retired_sample_library_contract.sql
           supabase test db supabase/tests/20260921_foundry60_time_alias_v2_math.sql
           supabase test db supabase/tests/20260921_foundry60_time_alias_v2_vectors.sql
           supabase test db supabase/tests/20260921_foundry60_time_alias_v2.sql
@@ -112,10 +119,42 @@ jobs:
         if: always()
         run: supabase stop --no-backup
 
+  scheduler-profile:
+    name: Profile derivative scheduling on ARM64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v2
+        with:
+          version: 2.117.0
+
+      - name: Rebuild migration history
+        run: supabase start && supabase db reset --no-seed
+
+      - name: Profile production-shape derivative cohorts
+        run: |
+          supabase test db supabase/tests/20260923_derivative_scheduler_benchmark.sql
+          # Isolate the 843-row history fixture from rollback-created heap and index pages.
+          supabase db reset --no-seed
+          supabase test db supabase/tests/20260923_derivative_scheduler_history_profile.sql
+
+      - name: Stop local Supabase
+        if: always()
+        run: supabase stop --no-backup
+
   deploy-and-verify:
     name: Deploy and verify persistent Dev
     if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
-    needs: local-contract
+    needs: [local-contract, scheduler-profile]
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

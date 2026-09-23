@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-23
-lastReviewedCommit: 481c327c1c5144a2afc32754d0289888379999e1
-lastReviewedNote: "Main agent-contract hotfix backmerged through Database #705 against current dev; current dev repository structure and generated-workspace boundaries remain authoritative."
+lastReviewedCommit: a4bc3a5f2c121b6b425a39e57f3a607a62f450e9
+lastReviewedNote: "Reviewed Database #710 main-to-Dev backmerge: production #703 ready derivative scheduling and guarded activation are retained with Dev #705 agent contract and #707 sample-library retirement. Five dispatch transitions, 25 visited requests, existing data fences, and branch/deployment ownership remain."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -76,6 +76,28 @@ in `private.api_capability_grants`. That table records the owning capability ID
 and admitted caller roles; migrations first remove inherited grants and then
 rebuild the external ACL from this closed manifest. New or overloaded RPCs are
 therefore denied until their exact signature is deliberately classified.
+
+## Protected Derivative Scheduling
+
+The coordinator keeps its public signature and default five request visits.
+The internal picker separates ready transitions from at most five waiting or
+overflow audits, while the coordinator caps all visits at 25 and dispatch-capable
+Markdown/embedding transitions at five combined. The one-minute cron cadence
+and downstream embedding policies are independent bounds and stay unchanged.
+`util.dataset_derivative_rebuild_requests.scheduler_selected_at` is a nullable
+internal service clock for actor/batch fairness; admission, public read JSON,
+plan hashes and historical completed rows do not acquire it. The owner-only
+picker uses narrow metadata, the existing advisory mutex and one actual
+`FOR UPDATE SKIP LOCKED` row per pick. It does not materialize all primary JSON.
+
+Migration installation leaves cron configuration unchanged. The separate
+versioned activation in `scripts/configure_derivative_scheduler.py` binds the
+qualified source and complete current job before switching to 25 visits. Its
+rollback restores the default five-visit command before any code rollback.
+The existing primary/ownership/hash checks, 420-second worker drain, staging,
+one-dispatch, paired proposal commit and causal terminal proofs remain intact.
+History contributes to the fairness aggregation; measured local timings are
+not a constant-time guarantee or hosted throughput promise.
 
 ## Review Queue Full-Text Search
 

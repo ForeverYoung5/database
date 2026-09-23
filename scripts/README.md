@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-23
-lastReviewedCommit: 481c327c1c5144a2afc32754d0289888379999e1
-lastReviewedNote: "Reviewed for Database #670 with workspace #1432: the generated five-schema workspace and Data API types gain the guarded owner-draft before-content save facade; refresh behavior and stable-versus-generated boundaries are unchanged.Reviewed for Database #677 (Foundry #60) with workspace #1432: the protected-alias PostgREST routing probe joins the script inventory (real-HTTP OAuth denial/repair proof plus the explicit api content profile of the one-shot callback); refresh behavior and stable-versus-generated boundaries are unchanged.Reviewed again for Database #674 (Foundry #186): the workflow-contract helper gains one pinned suite token for the closed Length*time profile; the supported migration-generation flows and helper usage are unchanged. Reviewed for Database #680 with workspace #1432: the workflow contract now pins the focused Time-alias v2 current-closure suite in the local contract selection; refresh behavior and stable-versus-generated boundaries are unchanged. Reviewed for Database #686 with workspace #1432: the generated schema workspace was regenerated against a clean migration-built stack on the CI-pinned Supabase CLI 2.117.0 after the fresh-run occurrence closure became candidate-driven in the Time and Length*time batch executors and fresh reads, and a second regeneration is diff-clean with database.types.ts unchanged; refresh behavior and the stable-versus-generated boundaries are unchanged. Reviewed for Database #689 with workspace #1432: the generated schema workspace is regenerated against a clean migration-built stack on the CI-pinned Supabase CLI 2.117.0 after the dispatch-body pre-filter migration, a second regeneration is diff-clean, and database.types.ts is byte-identical to a fresh generation.Reviewed for Database #694 with workspace #1432: the canonical JS object-key sort key gains a pure-ASCII fast path written under the explicit C collation, with the published per-character loop kept verbatim as the fallback for every non-ASCII value and for the empty key, so the array-index branch, the UTF-16 and surrogate arithmetic, the two sort-key prefixes, the declared volatility, the pinned search_path and the ACLs are unchanged; the guarded Time v2 batch executor stops recomputing two payload digests for its row audit and its replay proof and instead reuses the producer's before_sha256 and desired_sha256, which the untouched structural parity guard has already proved equal to the server canonical digests of the claimed before payload and of the server-derived payload that is committed, the two verified digests riding only in the internal prepared envelope, which is never hashed, never returned and never shape-validated. The generated schema workspace was regenerated against a clean migration build of the main-only #694 history on the CI-pinned Supabase CLI 2.117.0, a second regeneration is diff-clean, and database.types.ts is byte-identical."
+lastReviewedCommit: a4bc3a5f2c121b6b425a39e57f3a607a62f450e9
+lastReviewedNote: "Reviewed Database #710 main-to-Dev backmerge: production #703 ready derivative scheduling and guarded activation are retained with Dev #705 agent contract and #707 sample-library retirement. Five dispatch transitions, 25 visited requests, existing data fences, and branch/deployment ownership remain."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml
@@ -46,6 +46,71 @@ Those runners should keep their own `README.md` with dry-run, apply, and validat
 Local migration outputs and audit JSONL files should be written under `_artifacts/`, which is intentionally ignored by Git.
 
 ## Script List
+
+### `configure_derivative_scheduler.py`
+
+Installs no schema and writes no dataset. It changes only the protected derivative
+cron command between five and 25 request visits after the #703 migration has
+been deployed. The one-minute cadence, active flag, owner and all other job
+fields must match the reviewed snapshot and remain identical. Five combined
+external transitions remain the coordinator's independent upper bound.
+
+Use the repository-pinned, already authenticated Supabase CLI. Set
+`SCHEDULER_PROJECT_REF`, `SCHEDULER_COORDINATOR_SHA256` and
+`SCHEDULER_SELECTOR_SHA256` from the intended project and the independently
+qualified clean migration build, not by accepting arbitrary remote definitions.
+`SCHEDULER_EVIDENCE` must name a new directory whose parent already exists.
+
+```bash
+python3 scripts/configure_derivative_scheduler.py plan \
+  --project-ref "$SCHEDULER_PROJECT_REF" --operation enable25 \
+  --expected-coordinator-sha256 "$SCHEDULER_COORDINATOR_SHA256" \
+  --expected-selector-sha256 "$SCHEDULER_SELECTOR_SHA256" \
+  --out-dir "$SCHEDULER_EVIDENCE"
+```
+
+Review `plan.json`, the complete before job and `review.sql`; store the returned
+`approve_sha256` as `SCHEDULER_PLAN_SHA256`. The default exact migration head is
+`20260923053141`; a later qualified deployment must supply its exact head using
+`--expected-migration-version`.
+
+```bash
+python3 scripts/configure_derivative_scheduler.py apply \
+  --project-ref "$SCHEDULER_PROJECT_REF" \
+  --plan "$SCHEDULER_EVIDENCE/plan.json" \
+  --approve-sha256 "$SCHEDULER_PLAN_SHA256"
+```
+
+The SQL template uses REPEATABLE READ and `cron.alter_job`, with complete source,
+project, schema and before/after checks. Concurrent admin edits cause refusal or
+SQLSTATE 40001, never a retry. A create-only, fsynced attempt file is recorded
+before dispatch; a copied plan or an existing attempt cannot be used again.
+Credentials and raw command failures are not printed. Keep the private evidence
+directory through closeout. Every command accepts `--supabase-cli /path/to/supabase`.
+
+After a timeout or uncertain response, use a NEW readback directory:
+
+```bash
+python3 scripts/configure_derivative_scheduler.py verify \
+  --project-ref "$SCHEDULER_PROJECT_REF" \
+  --plan "$SCHEDULER_EVIDENCE/plan.json" \
+  --out-dir "$SCHEDULER_READBACK"
+```
+
+This reports current `desired`, `before` or `changed` state, not attribution of
+an uncertain commit. Do not replay or replace the uncertain plan to force a
+write. For rollback, first create and review a fresh `rollback5` plan against
+the current 25-visit job, then apply it once. Rollback restores the default `()`
+command (five visits), including when the old source used explicit `(5)`, and
+must precede any schema/code rollback. Qualify enable/rollback/enable on the
+exact Preview, then activate production and use a new native test-account
+request with actual worker completion proof.
+
+Offline transport tests: `python3 scripts/test_configure_derivative_scheduler.py`.
+The dedicated local concurrency and populated-upgrade harnesses live under
+`supabase/tests/regression/20260923_derivative_scheduler_*.py`; their hardcoded
+isolated container and black-hole endpoint guards must not be relaxed to target
+shared or hosted data. Release the task-owned stack after preserving evidence.
 
 ### `benchmark_hybrid_versions.mjs`
 
