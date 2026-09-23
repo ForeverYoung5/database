@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-23
-lastReviewedCommit: d47be7d88e852134cf17232c8b69ee3e178b6f06
-lastReviewedNote: "Main agent-contract cleanup backmerged through Database #705; current dev repository structure and generated-workspace boundaries remain authoritative."
+lastReviewedCommit: 35ef79ccbcdfb7dd6ca8fb90981ee6e3f42c2bf9
+lastReviewedNote: "Main agent-contract hotfix backmerged through Database #705 against current dev; current dev repository structure and generated-workspace boundaries remain authoritative."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
