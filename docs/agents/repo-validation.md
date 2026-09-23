@@ -33,8 +33,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-23
-lastReviewedCommit: 15afe29391b0ec3b44602a64bc769b8851583c1f
-lastReviewedNote: "Current Database SQL, generated-type, CI, and promotion validation gates are reviewed."
+lastReviewedCommit: d47be7d88e852134cf17232c8b69ee3e178b6f06
+lastReviewedNote: "Reviewed for Database #699: the rollback replays through migration 20260922210000 and retains the existing SQL, generated-type, CI, and promotion proof gates."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

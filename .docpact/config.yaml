@@ -1,8 +1,8 @@
 version: 1
 layout: repo
 lastReviewedAt: "2026-09-23"
-lastReviewedCommit: "15afe29391b0ec3b44602a64bc769b8851583c1f"
-lastReviewedNote: "Current Database documentation routing, coverage, and capability ownership are reviewed."
+lastReviewedCommit: "d47be7d88e852134cf17232c8b69ee3e178b6f06"
+lastReviewedNote: "Reviewed for Database #699: removing the failed sl search migration restores the prior API scope; routing, coverage, and capability ownership remain unchanged."
 
 # Keep deterministic governance facts here.
 # AGENTS.md remains the repo contract entrypoint.
