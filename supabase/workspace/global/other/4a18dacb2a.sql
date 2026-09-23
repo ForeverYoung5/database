@@ -1,0 +1,1 @@
+COMMENT ON COLUMN "util"."dataset_derivative_rebuild_requests"."scheduler_selected_at" IS 'Internal progress-slot service clock for actor/batch fairness; NULL until selected. Waiting/overflow audits never update it. Not part of public read or plan hashes.';

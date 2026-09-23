@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-23
-lastReviewedCommit: 80fb735da2a9dffbb0be36157b50c87fd4e765aa
-lastReviewedNote: "Reviewed the Open Data catalog and independent process-publication relation added for Database #712; repository structure and generated-workspace boundaries remain authoritative."
+lastReviewedCommit: 154224632d79368ae3aa4cecf84aaf385db9b502
+lastReviewedNote: "Reviewed Database #712 Open Data catalog and independent publication relation alongside the latest Dev scheduler and sample-library retirement changes; repository structure and generated-workspace boundaries remain authoritative."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -82,6 +82,28 @@ in `private.api_capability_grants`. That table records the owning capability ID
 and admitted caller roles; migrations first remove inherited grants and then
 rebuild the external ACL from this closed manifest. New or overloaded RPCs are
 therefore denied until their exact signature is deliberately classified.
+
+## Protected Derivative Scheduling
+
+The coordinator keeps its public signature and default five request visits.
+The internal picker separates ready transitions from at most five waiting or
+overflow audits, while the coordinator caps all visits at 25 and dispatch-capable
+Markdown/embedding transitions at five combined. The one-minute cron cadence
+and downstream embedding policies are independent bounds and stay unchanged.
+`util.dataset_derivative_rebuild_requests.scheduler_selected_at` is a nullable
+internal service clock for actor/batch fairness; admission, public read JSON,
+plan hashes and historical completed rows do not acquire it. The owner-only
+picker uses narrow metadata, the existing advisory mutex and one actual
+`FOR UPDATE SKIP LOCKED` row per pick. It does not materialize all primary JSON.
+
+Migration installation leaves cron configuration unchanged. The separate
+versioned activation in `scripts/configure_derivative_scheduler.py` binds the
+qualified source and complete current job before switching to 25 visits. Its
+rollback restores the default five-visit command before any code rollback.
+The existing primary/ownership/hash checks, 420-second worker drain, staging,
+one-dispatch, paired proposal commit and causal terminal proofs remain intact.
+History contributes to the fairness aggregation; measured local timings are
+not a constant-time guarantee or hosted throughput promise.
 
 ## Review Queue Full-Text Search
 

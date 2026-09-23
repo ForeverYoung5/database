@@ -649,10 +649,6 @@ export type Database = {
         }
         Returns: Json
       }
-      cmd_sample_library_publish_processes_v1: {
-        Args: { p_items: Json }
-        Returns: Json
-      }
       cmd_simple_review_submit_decision: {
         Args: {
           p_audit?: Json
@@ -2374,16 +2370,6 @@ export type Database = {
           submitted_revision_checksum: string
           target_table: string
         }[]
-      }
-      qry_sample_library_datasets_v1: {
-        Args: {
-          p_dataset_type: string
-          p_origin?: string
-          p_page_current?: number
-          p_page_size?: number
-          p_publication_status?: string
-        }
-        Returns: Json
       }
       qry_system_find_member_candidate_by_email: {
         Args: { p_email: string }
