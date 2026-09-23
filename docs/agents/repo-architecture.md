@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-23
-lastReviewedCommit: a4bc3a5f2c121b6b425a39e57f3a607a62f450e9
-lastReviewedNote: "Reviewed Database #710 main-to-Dev backmerge: production #703 ready derivative scheduling and guarded activation are retained with Dev #705 agent contract and #707 sample-library retirement. Five dispatch transitions, 25 visited requests, existing data fences, and branch/deployment ownership remain."
+lastReviewedCommit: 3eec377804ed7af65c6925d780568a004a5322f7
+lastReviewedNote: "Reviewed Database #712 Open Data catalog, independent publication relation, and regenerated schema workspace after exact migration replay; repository structure and generated-workspace boundaries remain authoritative."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -45,6 +45,12 @@ related:
 This repo is organized around one checked-in Supabase project plus a generated schema-inspection workspace.
 
 ## Schema Boundaries
+
+Open Data catalog publication is represented independently in
+`private.open_data_process_publications`, keyed by the exact Process `id` and
+`version`. Publication is append-only, does not mutate the Process
+`state_code`, and deliberately does not depend on the temporary
+`private.sample_library_process_publications` relation.
 
 For LifecycleModel review and bundle operations, authoritative composition comes from ILCD `processInstance` references and the Process ownership pair `public.processes.model_id` plus `coalesce(public.processes.model_version, public.processes.version)`. The nullable `model_version` is an additive correction to the original same-version bundle assumption: new writers persist the exact owning LifecycleModel version, while historical rows with `model_version is null` retain the legacy Process-version fallback. Readers must never substitute the latest LifecycleModel version. `lifecyclemodels.json_tg` is persisted for frontend reconstruction only and must not define review closure, approval targets, publication admission, or deletion membership.
 
