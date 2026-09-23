@@ -17011,123 +17011,6 @@ COMMENT ON FUNCTION "api"."cmd_reviewer_submit_decision"("p_review_id" "uuid", "
 
 
 
-CREATE OR REPLACE FUNCTION "api"."cmd_sample_library_publish_processes_v1"("p_items" "jsonb") RETURNS "jsonb"
-    LANGUAGE "plpgsql" SECURITY DEFINER
-    SET "search_path" TO ''
-    AS $_$
-declare
-  v_actor uuid := auth.uid();
-  v_requested integer;
-  v_matched integer;
-  v_existing integer;
-  v_inserted integer;
-begin
-  if v_actor is null then
-    return jsonb_build_object('ok', false, 'code', 'auth_required', 'status', 401,
-      'message', 'Authentication required');
-  end if;
-  if not private.lca_release_is_manager() then
-    return jsonb_build_object('ok', false, 'code', 'not_data_product_manager',
-      'status', 403, 'message', 'Data product manager role is required');
-  end if;
-  if jsonb_typeof(p_items) is distinct from 'array' then
-    return jsonb_build_object('ok', false, 'code', 'invalid_items', 'status', 400,
-      'message', 'items must be a JSON array');
-  end if;
-
-  v_requested := jsonb_array_length(p_items);
-  if v_requested < 1 or v_requested > 500 then
-    return jsonb_build_object('ok', false, 'code', 'invalid_item_count', 'status', 400,
-      'message', 'items must contain between 1 and 500 Process versions');
-  end if;
-
-  if exists (
-    select 1
-    from jsonb_array_elements(p_items) as item(value)
-    where jsonb_typeof(item.value) is distinct from 'object'
-       or jsonb_typeof(item.value->'id') is distinct from 'string'
-       or jsonb_typeof(item.value->'version') is distinct from 'string'
-       or item.value->>'id' !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
-       or item.value->>'version' !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
-       or exists (
-         select 1 from jsonb_object_keys(item.value) as key(name)
-         where key.name not in ('id', 'version')
-       )
-  ) then
-    return jsonb_build_object('ok', false, 'code', 'invalid_item', 'status', 400,
-      'message', 'Each item must contain only a valid id and version');
-  end if;
-
-  if (
-    select count(*)
-    from (
-      select distinct item.value->>'id' as id, item.value->>'version' as version
-      from jsonb_array_elements(p_items) as item(value)
-    ) as distinct_items
-  ) <> v_requested then
-    return jsonb_build_object('ok', false, 'code', 'duplicate_item', 'status', 400,
-      'message', 'Duplicate Process versions are not allowed');
-  end if;
-
-  -- Lock every requested source row before the eligibility check so state_code cannot drift
-  -- between validation and receipt insertion.
-  perform 1
-  from public.processes as process
-  join (
-    select (item.value->>'id')::uuid as id,
-      (item.value->>'version')::character(9) as version
-    from jsonb_array_elements(p_items) as item(value)
-  ) as requested using (id, version)
-  order by process.id, process.version
-  for update of process;
-
-  select count(*) into v_matched
-  from public.processes as process
-  join (
-    select (item.value->>'id')::uuid as id,
-      (item.value->>'version')::character(9) as version
-    from jsonb_array_elements(p_items) as item(value)
-  ) as requested using (id, version)
-  where process.state_code = 100;
-
-  if v_matched <> v_requested then
-    return jsonb_build_object('ok', false, 'code', 'process_not_publishable', 'status', 409,
-      'message', 'Every selected Process version must exist with state_code 100');
-  end if;
-
-  insert into private.sample_library_process_publications (
-    process_id, process_version, published_by
-  )
-  select process.id, process.version, v_actor
-  from public.processes as process
-  join (
-    select (item.value->>'id')::uuid as id,
-      (item.value->>'version')::character(9) as version
-    from jsonb_array_elements(p_items) as item(value)
-  ) as requested using (id, version)
-  order by process.id, process.version
-  on conflict (process_id, process_version) do nothing;
-
-  get diagnostics v_inserted = row_count;
-  -- Derive the replay count after ON CONFLICT so concurrent identical publications
-  -- still return a complete, internally consistent receipt.
-  v_existing := v_requested - v_inserted;
-
-  return jsonb_build_object(
-    'ok', true,
-    'data', jsonb_build_object(
-      'requestedCount', v_requested,
-      'publishedCount', v_inserted,
-      'alreadyPublishedCount', v_existing
-    )
-  );
-end;
-$_$;
-
-
-ALTER FUNCTION "api"."cmd_sample_library_publish_processes_v1"("p_items" "jsonb") OWNER TO "postgres";
-
-
 CREATE OR REPLACE FUNCTION "api"."cmd_simple_review_submit_decision"("p_review_id" "uuid", "p_decision" "text", "p_reason" "text" DEFAULT NULL::"text", "p_audit" "jsonb" DEFAULT '{}'::"jsonb") RETURNS "jsonb"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -27146,129 +27029,6 @@ ALTER FUNCTION "api"."qry_root_review_reference_progress_v2"("p_root_review_id" 
 
 COMMENT ON FUNCTION "api"."qry_root_review_reference_progress_v2"("p_root_review_id" "uuid") IS 'Current Reference Review child rows for Review Management; intentionally excludes relation paths and aggregate overview fields.';
 
-
-
-CREATE OR REPLACE FUNCTION "api"."qry_sample_library_datasets_v1"("p_dataset_type" "text", "p_origin" "text" DEFAULT 'all'::"text", "p_publication_status" "text" DEFAULT 'all'::"text", "p_page_size" integer DEFAULT 20, "p_page_current" integer DEFAULT 1) RETURNS "jsonb"
-    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
-    SET "search_path" TO ''
-    AS $_$
-declare
-  v_actor uuid := auth.uid();
-  v_dataset_type text := lower(coalesce(p_dataset_type, ''));
-  v_origin text := lower(coalesce(p_origin, 'all'));
-  v_publication_status text := lower(coalesce(p_publication_status, 'all'));
-  v_table_name text;
-  v_page_size integer := least(greatest(coalesce(p_page_size, 20), 1), 100);
-  v_page_current integer := greatest(coalesce(p_page_current, 1), 1);
-  v_result jsonb;
-begin
-  if v_actor is null then
-    return jsonb_build_object('ok', false, 'code', 'auth_required', 'status', 401,
-      'message', 'Authentication required');
-  end if;
-  if not private.lca_release_is_manager() then
-    return jsonb_build_object('ok', false, 'code', 'not_data_product_manager',
-      'status', 403, 'message', 'Data product manager role is required');
-  end if;
-
-  v_table_name := case v_dataset_type
-    when 'lifecyclemodels' then 'lifecyclemodels'
-    when 'processes' then 'processes'
-    when 'flows' then 'flows'
-    when 'flowproperties' then 'flowproperties'
-    when 'unitgroups' then 'unitgroups'
-    when 'sources' then 'sources'
-    when 'contacts' then 'contacts'
-    else null
-  end;
-
-  if v_table_name is null then
-    return jsonb_build_object('ok', false, 'code', 'invalid_dataset_type', 'status', 400,
-      'message', 'Unsupported sample-library dataset type');
-  end if;
-  if v_origin not in ('all', 'literature', 'enterprise') then
-    return jsonb_build_object('ok', false, 'code', 'invalid_origin', 'status', 400,
-      'message', 'origin must be all, literature, or enterprise');
-  end if;
-  if v_publication_status not in ('all', 'published', 'unpublished') then
-    return jsonb_build_object('ok', false, 'code', 'invalid_publication_status', 'status', 400,
-      'message', 'publication status must be all, published, or unpublished');
-  end if;
-  if v_dataset_type <> 'processes' and v_publication_status <> 'all' then
-    return jsonb_build_object('ok', false, 'code', 'publication_status_not_supported',
-      'status', 400, 'message', 'Publication status applies only to Processes');
-  end if;
-
-  execute format($sql$
-    with latest as (
-      select distinct on (source.id)
-        source.id,
-        source.version,
-        source.user_id,
-        coalesce(source.json, source.json_ordered::jsonb) as content,
-        source.modified_at
-      from public.%I as source
-      where source.state_code = 100
-      order by source.id, source.version desc, source.modified_at desc nulls last
-    ), filtered as (
-      select
-        latest.id,
-        latest.version,
-        latest.content,
-        latest.modified_at,
-        case when latest.user_id is null then 'literature' else 'enterprise' end as origin,
-        publication.published_at
-      from latest
-      left join private.sample_library_process_publications as publication
-        on $3 = 'processes'
-       and publication.process_id = latest.id
-       and publication.process_version = latest.version
-      where ($4 = 'all'
-        or ($4 = 'literature' and latest.user_id is null)
-        or ($4 = 'enterprise' and latest.user_id is not null))
-        and ($3 <> 'processes'
-          or $5 = 'all'
-          or ($5 = 'published' and publication.process_id is not null)
-          or ($5 = 'unpublished' and publication.process_id is null))
-    ), page as (
-      select *
-      from filtered
-      order by modified_at desc nulls last, id, version desc
-      limit $1 offset $2
-    )
-    select jsonb_build_object(
-      'ok', true,
-      'data', jsonb_build_object(
-        'datasetType', $3,
-        'page', $6,
-        'pageSize', $1,
-        'total', (select count(*) from filtered),
-        'items', coalesce((
-          select jsonb_agg(jsonb_build_object(
-            'id', page.id,
-            'version', page.version,
-            'json', page.content,
-            'modifiedAt', page.modified_at,
-            'origin', page.origin,
-            'published', case when $3 = 'processes'
-              then page.published_at is not null else null end,
-            'publishedAt', page.published_at
-          ) order by page.modified_at desc nulls last, page.id, page.version desc)
-          from page
-        ), '[]'::jsonb)
-      )
-    )
-  $sql$, v_table_name)
-  into v_result
-  using v_page_size, (v_page_current - 1) * v_page_size,
-    v_dataset_type, v_origin, v_publication_status, v_page_current;
-
-  return v_result;
-end;
-$_$;
-
-
-ALTER FUNCTION "api"."qry_sample_library_datasets_v1"("p_dataset_type" "text", "p_origin" "text", "p_publication_status" "text", "p_page_size" integer, "p_page_current" integer) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "api"."qry_system_find_member_candidate_by_email"("p_email" "text") RETURNS TABLE("id" "uuid", "email" "text", "display_name" "text")
@@ -61539,22 +61299,6 @@ $$;
 ALTER FUNCTION "private"."review_v2_kind_guard"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "private"."sample_library_process_publications_immutable_v1"() RETURNS "trigger"
-    LANGUAGE "plpgsql"
-    SET "search_path" TO ''
-    AS $$
-begin
-  raise exception using
-    errcode = '55000',
-    message = 'SAMPLE_LIBRARY_PUBLICATION_IMMUTABLE',
-    detail = 'A sample-library Process publication is append-only.';
-end;
-$$;
-
-
-ALTER FUNCTION "private"."sample_library_process_publications_immutable_v1"() OWNER TO "postgres";
-
-
 CREATE OR REPLACE FUNCTION "private"."save_lifecycle_model_bundle"("p_plan" "jsonb") RETURNS "jsonb"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'private', 'api', 'public', 'util', 'extensions', 'pg_temp'
@@ -82700,17 +82444,6 @@ CREATE TABLE IF NOT EXISTS "private"."roles" (
 ALTER TABLE "private"."roles" OWNER TO "postgres";
 
 
-CREATE TABLE IF NOT EXISTS "private"."sample_library_process_publications" (
-    "process_id" "uuid" NOT NULL,
-    "process_version" character(9) NOT NULL,
-    "published_by" "uuid" NOT NULL,
-    "published_at" timestamp with time zone DEFAULT "now"() NOT NULL
-);
-
-
-ALTER TABLE "private"."sample_library_process_publications" OWNER TO "postgres";
-
-
 CREATE TABLE IF NOT EXISTS "private"."teams" (
     "id" "uuid" NOT NULL,
     "json" "jsonb",
@@ -84489,11 +84222,6 @@ ALTER TABLE ONLY "private"."roles"
 
 
 
-ALTER TABLE ONLY "private"."sample_library_process_publications"
-    ADD CONSTRAINT "sample_library_process_publications_pkey" PRIMARY KEY ("process_id", "process_version");
-
-
-
 ALTER TABLE ONLY "private"."teams"
     ADD CONSTRAINT "teams_pkey" PRIMARY KEY ("id");
 
@@ -85471,10 +85199,6 @@ CREATE INDEX "roles_team_id_user_id_role_idx" ON "private"."roles" USING "btree"
 
 
 
-CREATE INDEX "sample_library_process_publications_published_at_idx" ON "private"."sample_library_process_publications" USING "btree" ("published_at" DESC, "process_id", "process_version");
-
-
-
 CREATE INDEX "worker_job_artifacts_job_created_idx" ON "private"."worker_job_artifacts" USING "btree" ("job_id", "created_at" DESC);
 
 
@@ -86315,10 +86039,6 @@ CREATE OR REPLACE TRIGGER "roles_set_modified_at_trigger" BEFORE UPDATE ON "priv
 
 
 
-CREATE OR REPLACE TRIGGER "sample_library_process_publications_immutable" BEFORE DELETE OR UPDATE ON "private"."sample_library_process_publications" FOR EACH ROW EXECUTE FUNCTION "private"."sample_library_process_publications_immutable_v1"();
-
-
-
 CREATE OR REPLACE TRIGGER "teams_set_modified_at_trigger" BEFORE UPDATE ON "private"."teams" FOR EACH ROW EXECUTE FUNCTION "private"."update_modified_at"();
 
 
@@ -87126,11 +86846,6 @@ ALTER TABLE ONLY "private"."roles"
 
 
 
-ALTER TABLE ONLY "private"."sample_library_process_publications"
-    ADD CONSTRAINT "sample_library_process_publications_process_fkey" FOREIGN KEY ("process_id", "process_version") REFERENCES "public"."processes"("id", "version") ON UPDATE RESTRICT ON DELETE RESTRICT;
-
-
-
 ALTER TABLE ONLY "private"."tidas_import_groups_v2"
     ADD CONSTRAINT "tidas_import_groups_v2_worker_job_id_fkey" FOREIGN KEY ("worker_job_id") REFERENCES "private"."tidas_import_plans_v2"("worker_job_id");
 
@@ -87694,9 +87409,6 @@ CREATE POLICY "reviews select by review participants" ON "private"."reviews" FOR
 
 
 ALTER TABLE "private"."roles" ENABLE ROW LEVEL SECURITY;
-
-
-ALTER TABLE "private"."sample_library_process_publications" ENABLE ROW LEVEL SECURITY;
 
 
 CREATE POLICY "select by owner or public teams" ON "private"."teams" FOR SELECT TO "authenticated" USING (("is_public" OR ("rank" > 0) OR (EXISTS ( SELECT 1
@@ -88636,12 +88348,6 @@ GRANT ALL ON FUNCTION "api"."cmd_review_submit_comment"("p_review_id" "uuid", "p
 REVOKE ALL ON FUNCTION "api"."cmd_reviewer_submit_decision"("p_review_id" "uuid", "p_decision" "text", "p_reason" "text", "p_audit" "jsonb") FROM PUBLIC;
 GRANT ALL ON FUNCTION "api"."cmd_reviewer_submit_decision"("p_review_id" "uuid", "p_decision" "text", "p_reason" "text", "p_audit" "jsonb") TO "api_internal_executor";
 GRANT ALL ON FUNCTION "api"."cmd_reviewer_submit_decision"("p_review_id" "uuid", "p_decision" "text", "p_reason" "text", "p_audit" "jsonb") TO "authenticated";
-
-
-
-REVOKE ALL ON FUNCTION "api"."cmd_sample_library_publish_processes_v1"("p_items" "jsonb") FROM PUBLIC;
-GRANT ALL ON FUNCTION "api"."cmd_sample_library_publish_processes_v1"("p_items" "jsonb") TO "api_internal_executor";
-GRANT ALL ON FUNCTION "api"."cmd_sample_library_publish_processes_v1"("p_items" "jsonb") TO "authenticated";
 
 
 
@@ -89600,12 +89306,6 @@ GRANT ALL ON FUNCTION "api"."qry_root_review_reference_progress"("p_root_review_
 REVOKE ALL ON FUNCTION "api"."qry_root_review_reference_progress_v2"("p_root_review_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "api"."qry_root_review_reference_progress_v2"("p_root_review_id" "uuid") TO "api_internal_executor";
 GRANT ALL ON FUNCTION "api"."qry_root_review_reference_progress_v2"("p_root_review_id" "uuid") TO "authenticated";
-
-
-
-REVOKE ALL ON FUNCTION "api"."qry_sample_library_datasets_v1"("p_dataset_type" "text", "p_origin" "text", "p_publication_status" "text", "p_page_size" integer, "p_page_current" integer) FROM PUBLIC;
-GRANT ALL ON FUNCTION "api"."qry_sample_library_datasets_v1"("p_dataset_type" "text", "p_origin" "text", "p_publication_status" "text", "p_page_size" integer, "p_page_current" integer) TO "api_internal_executor";
-GRANT ALL ON FUNCTION "api"."qry_sample_library_datasets_v1"("p_dataset_type" "text", "p_origin" "text", "p_publication_status" "text", "p_page_size" integer, "p_page_current" integer) TO "authenticated";
 
 
 
@@ -91524,10 +91224,6 @@ GRANT ALL ON FUNCTION "private"."review_v2_kind_guard"() TO "api_internal_execut
 
 
 
-REVOKE ALL ON FUNCTION "private"."sample_library_process_publications_immutable_v1"() FROM PUBLIC;
-
-
-
 REVOKE ALL ON FUNCTION "private"."save_lifecycle_model_bundle"("p_plan" "jsonb") FROM PUBLIC;
 GRANT ALL ON FUNCTION "private"."save_lifecycle_model_bundle"("p_plan" "jsonb") TO "service_role";
 GRANT ALL ON FUNCTION "private"."save_lifecycle_model_bundle"("p_plan" "jsonb") TO "api_internal_executor";
@@ -93134,10 +92830,6 @@ GRANT SELECT("contract_version") ON TABLE "private"."portal_sitemap_rows_v1" TO 
 GRANT ALL ON TABLE "private"."roles" TO "service_role";
 GRANT SELECT ON TABLE "private"."roles" TO "api_internal_executor";
 GRANT SELECT ON TABLE "private"."roles" TO "authenticated";
-
-
-
-GRANT SELECT ON TABLE "private"."sample_library_process_publications" TO "api_internal_executor";
 
 
 
