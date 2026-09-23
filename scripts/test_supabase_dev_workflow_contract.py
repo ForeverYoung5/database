@@ -60,9 +60,9 @@ def main() -> int:
     supabase_cli_versions = re.findall(
         r"uses: supabase/setup-cli@v2\s+with:\s+version:\s*([^\s#]+)", text
     )
-    if supabase_cli_versions != ["2.117.0"] * 3:
+    if supabase_cli_versions != ["2.117.0"] * 4:
         failures.append(
-            "all three local, persistent-Dev, and Preview Supabase CLI pins "
+            "all four local, ARM profile, persistent-Dev, and Preview Supabase CLI pins "
             f"must be 2.117.0, found {supabase_cli_versions or 'none'}"
         )
 
@@ -83,16 +83,54 @@ def main() -> int:
         )
 
     jobs = job_sections(text)
+    local_workflow = jobs.get("local-contract", "")
+    profile_workflow = jobs.get("scheduler-profile", "")
     hosted_workflow = jobs.get("deploy-and-verify", "")
     preview_workflow = jobs.get("preview-runtime-contract", "")
+    if not local_workflow:
+        failures.append("x64 local contract job is missing")
+    if not profile_workflow:
+        failures.append("ARM64 scheduler profile job is missing")
     if not hosted_workflow:
         failures.append("persistent-Dev job is missing")
     if not preview_workflow:
         failures.append("Preview runtime job is missing")
 
+    profile_required = (
+        "runs-on: ubuntu-24.04-arm",
+        "timeout-minutes: 25",
+        "uses: actions/checkout@v7",
+        "uses: supabase/setup-cli@v2",
+        "run: supabase start && supabase db reset --no-seed",
+        "supabase test db supabase/tests/20260923_derivative_scheduler_benchmark.sql",
+        "supabase test db supabase/tests/20260923_derivative_scheduler_history_profile.sql",
+        "if: always()",
+        "run: supabase stop --no-backup",
+    )
+    failures.extend(
+        f"ARM64 scheduler profile missing {token}"
+        for token in profile_required
+        if token not in profile_workflow
+    )
+    benchmark = "supabase test db supabase/tests/20260923_derivative_scheduler_benchmark.sql"
+    history = "supabase test db supabase/tests/20260923_derivative_scheduler_history_profile.sql"
+    if profile_workflow.count("supabase db reset --no-seed") != 2 or not (
+        0 <= profile_workflow.find(benchmark)
+        < profile_workflow.find("          supabase db reset --no-seed\n", profile_workflow.find(benchmark))
+        < profile_workflow.find(history)
+    ):
+        failures.append("ARM64 profiles must run in order with an isolated database reset")
+    if benchmark in local_workflow or history in local_workflow:
+        failures.append("production-shape profiles must run only in the separate ARM64 job")
+    if any(token in profile_workflow for token in (
+        "SUPABASE_ACCESS_TOKEN", "SUPABASE_DB_PASSWORD", "supabase link", "supabase db push",
+        "--request PATCH", "--linked",
+    )):
+        failures.append("ARM64 profile job must not receive hosted authority or mutate hosted projects")
+
     hosted_required = (
         "uses: actions/checkout@v7",
-        "needs: local-contract",
+        "needs: [local-contract, scheduler-profile]",
         "SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DEV_DB_PASSWORD }}",
         'supabase link --project-ref "$SUPABASE_PROJECT_ID"',
         "supabase db push --include-all",

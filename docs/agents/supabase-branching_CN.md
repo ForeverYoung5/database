@@ -23,7 +23,7 @@ checkPaths:
   - .env.supabase.dev.local.example
   - .env.supabase.main.local.example
 lastReviewedAt: 2026-09-23
-lastReviewedCommit: 9178fb640582140c63fb718304e04548579652a0
+lastReviewedCommit: b73b143b9631763a6a4c871b89877393fe0cb08f
 lastReviewedNote: "Reviewed for Database #703: ready derivative scheduling keeps the default five visits, caps actual visits at 25 and external transitions at five, and preserves all data fences and terminal proofs. The schema migration leaves cron unchanged; the separately reviewed REPEATABLE READ activation, one-attempt transport, regression matrix and rollback procedure are documented. Generated ownership, hosted deployment, hotfix/backmerge and workspace integration boundaries remain unchanged."
 related:
   - ../../AGENTS.md
@@ -84,6 +84,7 @@ canonical-base-to-head upgrade；追加的 Preview repair 本身不能证明首�
 - 不要为不同 Git 分支复制多套 `supabase/` 目录。
 - pull-request-only Preview 运行态 job 必须与部署隔离。fork PR 在授权前跳过。同仓 PR 先 checkout 准确 head 并验证事件 base/head commit，只比较可部署 Preview 输入：`supabase/config.toml`、`supabase/migrations/`、`supabase/seed.sql`、`supabase/seeds/` 与 `supabase/functions/`。生成 workspace、tests、Auth templates 与仓库文档不是部署输入。该集合无 diff 时，job 无需 secret、branch 解析或 hosted mutation 即成功，并接受官方 App 的 `skipped`。任一可部署输入变化仍要求完整官方 check、BranchResponse、PostgREST、public key、Hybrid 与 sitemap 证据，缺少 authority 时 fail closed。
 - 把 `.github/workflows/supabase-dev.yml` 作为持久化 `dev` 的唯一 migration 部署者；它可以执行 `supabase link`、准确一次 `supabase db push --include-all`，以及一次仅包含 `db_schema`、`db_extra_search_path`、`max_rows` 的 Management API PATCH，让运行中的 PostgREST 与 checked-in 合同一致；但不得部署/删除 Edge Functions、执行 `supabase config push` 或修改其他项目设置。
+- 独立的 ARM64 `scheduler-profile` 作业只重建本地数据库，运行两组完整的合成性能样本并在两组之间重置。x64 `local-contract` 继续运行功能和安全测试；持久化 Dev 部署须等待两个作业。性能作业没有托管凭据或部署权限。
 - 数据库 workflow 成功后，通过 `tiangong-lca-edge-functions` 部署并验证持久化 Dev 所需的 Functions。Function 源码、函数选择、部署命令和运行时验证仍由 Edge 仓负责。
 - 不要为 Git `main` 增加 checked-in 的 GitHub Actions 生产部署流程；生产项目由绑定到本仓的 Supabase GitHub integration 自动迁移。
 - 不要先手改远端数据库再回头补 migration。

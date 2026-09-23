@@ -23,7 +23,7 @@ checkPaths:
   - .env.supabase.dev.local.example
   - .env.supabase.main.local.example
 lastReviewedAt: 2026-09-23
-lastReviewedCommit: 9178fb640582140c63fb718304e04548579652a0
+lastReviewedCommit: b73b143b9631763a6a4c871b89877393fe0cb08f
 lastReviewedNote: "Reviewed for Database #703: ready derivative scheduling keeps the default five visits, caps actual visits at 25 and external transitions at five, and preserves all data fences and terminal proofs. The schema migration leaves cron unchanged; the separately reviewed REPEATABLE READ activation, one-attempt transport, regression matrix and rollback procedure are documented. Generated ownership, hosted deployment, hotfix/backmerge and workspace integration boundaries remain unchanged."
 related:
   - ../../AGENTS.md
@@ -82,6 +82,7 @@ When review changes an already-applied PR migration, add a later migration that 
 - Do not create a separate `supabase/` directory per Git branch.
 - Keep the pull-request-only Preview runtime job isolated from deployment. Fork PRs skip before authority. A same-repository PR first checks out the exact event head and verifies both event commits. It compares only deployable Preview inputs: `supabase/config.toml`, `supabase/migrations/`, `supabase/seed.sql`, `supabase/seeds/`, and `supabase/functions/`. Generated workspace, tests, Auth templates, and repository documentation are not deployment inputs. If that set has no diff, the job succeeds without secrets, branch resolution, or hosted mutation and accepts the official App's `skipped` result. Any deployable change retains the exact official-check, BranchResponse, PostgREST, key, Hybrid, and sitemap proof and fails closed when authority is missing.
 - Keep `.github/workflows/supabase-dev.yml` as the sole persistent-`dev` migration deployer. It may run `supabase link`, exactly one `supabase db push --include-all`, and one Management API PATCH limited to `db_schema`, `db_extra_search_path`, and `max_rows` so the running PostgREST instance matches the checked-in contract; it must not deploy/delete Edge Functions, run `supabase config push`, or mutate any other project setting.
+- The separate ARM64 scheduler-profile job rebuilds only a local database and runs both full synthetic performance cohorts, resetting between them. The x64 local-contract job retains the functional and security suites; persistent Dev deployment waits for both jobs. The profile job has no hosted credentials or deployment authority.
 - After the database workflow succeeds, deploy and validate the intended persistent-Dev Functions through `tiangong-lca-edge-functions`. Function source, function selection, deployment commands, and runtime validation remain owned by that repository.
 - Do not add a checked-in GitHub Actions production deploy for Git `main`; the production project is migrated by the Supabase GitHub integration bound to this repository.
 - Do not author normal schema changes by editing the remote database first and reconstructing migrations later.
