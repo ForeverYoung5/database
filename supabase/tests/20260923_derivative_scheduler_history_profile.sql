@@ -12,6 +12,18 @@
 \endif
 
 begin;
+-- Match the qualified production profile (Database #703 read-only receipt):
+-- hosted PostgreSQL has jit=off. Keep this transaction-local; availability
+-- alone is not provider proof because pg_jit_available() also checks jit=on.
+do $profile$
+begin
+  perform set_config('scheduler703.original_jit_profile', jsonb_build_object(
+    'jit', current_setting('jit'), 'available_at_capture', pg_jit_available()
+  )::text, true);
+end;
+$profile$;
+set local jit = off;
+set local statement_timeout = '10min';
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth;
 select set_config('scheduler703.invocation_limit', :'invocation_limit', true);
@@ -188,7 +200,7 @@ select ok((select count(*) = 843 and count(distinct request_id) = 843 from pg_te
     group by target.request_id having count(audit.id) <> 1),
   'no duplicate terminal request/audit is manufactured during history construction or active profiling');
 
-select diag(jsonb_build_object('evidence', 'isolated-synthetic; real SQL history and ideal external workers; not hosted p95',
+select diag(jsonb_build_object('original_jit_profile', current_setting('scheduler703.original_jit_profile')::jsonb, 'jit', current_setting('jit'), 'evidence', 'isolated-synthetic; real SQL history and ideal external workers; not hosted p95',
   'history_rows', 456, 'active_rows', 387, 'active_flows', 113, 'active_processes', 274,
   'physical_requests', 843, 'phase', phase, 'ticks', max(tick), 'visits', sum(visits),
   'coordinator_call_ms_p50', percentile_cont(0.50) within group (order by coordinator_call_ms),

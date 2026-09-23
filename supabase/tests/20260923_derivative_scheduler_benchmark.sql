@@ -16,6 +16,18 @@
 \endif
 
 begin;
+-- Match the qualified production profile (Database #703 read-only receipt):
+-- hosted PostgreSQL has jit=off. Keep this transaction-local; availability
+-- alone is not provider proof because pg_jit_available() also checks jit=on.
+do $profile$
+begin
+  perform set_config('scheduler703.original_jit_profile', jsonb_build_object(
+    'jit', current_setting('jit'), 'available_at_capture', pg_jit_available()
+  )::text, true);
+end;
+$profile$;
+set local jit = off;
+set local statement_timeout = '10min';
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth;
 select set_config('scheduler703.invocation_limit', :'invocation_limit', true);
@@ -157,7 +169,7 @@ select ok((select count(*) = 774 and bool_and(proposal.status = 'committed')
   join pg_temp.scheduler703_targets target on target.request_id = proposal.request_id),
   'exactly one Markdown and embedding proposal pair per target commits through the real permits');
 
-select diag(jsonb_build_object('evidence', 'isolated-synthetic ideal-worker scheduling; not hosted latency',
+select diag(jsonb_build_object('original_jit_profile', current_setting('scheduler703.original_jit_profile')::jsonb, 'jit', current_setting('jit'), 'evidence', 'isolated-synthetic ideal-worker scheduling; not hosted latency',
   'coordinator_sha256', util.dataset_derivative_rebuild_sha256(pg_get_functiondef('util.process_dataset_derivative_rebuilds(integer)'::regprocedure)),
   'invocation_limit', current_setting('scheduler703.invocation_limit')::integer,
   'actors', current_setting('scheduler703.fixture_actors')::integer,
