@@ -76,6 +76,7 @@ jobs:
           supabase test db supabase/tests/20260728_embedding_queue_selector_plan_governance.sql
           supabase test db supabase/tests/20260923_derivative_scheduler_budget.sql
           supabase test db supabase/tests/20260923_retired_sample_library_contract.sql
+          supabase test db supabase/tests/20260923_open_data_catalog_publications.sql
           supabase test db supabase/tests/20260921_foundry60_time_alias_v2_math.sql
           supabase test db supabase/tests/20260921_foundry60_time_alias_v2_vectors.sql
           supabase test db supabase/tests/20260921_foundry60_time_alias_v2.sql
