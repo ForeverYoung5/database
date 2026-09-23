@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "api"."cmd_open_data_process_publish_batch"("p_items" "jsonb") IS 'Idempotently publishes 1-100 exact state-100 Process versions for Open Data. Does not change Process lifecycle state.';

@@ -33,8 +33,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-23
-lastReviewedCommit: 154224632d79368ae3aa4cecf84aaf385db9b502
-lastReviewedNote: "Reviewed Database #712 migration, Open Data RPC contracts, and pgTAP proof after incorporating the latest Dev scheduler and sample-library retirement changes; current validation and Supabase branch gates remain authoritative."
+lastReviewedCommit: 3eec377804ed7af65c6925d780568a004a5322f7
+lastReviewedNote: "Reviewed Database #712 migration, Open Data RPC contracts, pgTAP proof, exact migration-head assertion, and generated workspace verification; current validation and Supabase branch gates remain authoritative."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-23
-lastReviewedCommit: 154224632d79368ae3aa4cecf84aaf385db9b502
-lastReviewedNote: "Reviewed Database #712 Open Data catalog and independent publication relation alongside the latest Dev scheduler and sample-library retirement changes; repository structure and generated-workspace boundaries remain authoritative."
+lastReviewedCommit: 3eec377804ed7af65c6925d780568a004a5322f7
+lastReviewedNote: "Reviewed Database #712 Open Data catalog, independent publication relation, and regenerated schema workspace after exact migration replay; repository structure and generated-workspace boundaries remain authoritative."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

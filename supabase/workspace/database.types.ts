@@ -427,6 +427,10 @@ export type Database = {
         }
         Returns: Json
       }
+      cmd_open_data_process_publish_batch: {
+        Args: { p_items: Json }
+        Returns: Json
+      }
       cmd_portal_lcia_projection_finalize_publication_v1: {
         Args: {
           p_audit?: Json
@@ -1169,6 +1173,35 @@ export type Database = {
         Returns: {
           id: string
           json: Json
+          modified_at: string
+          team_id: string
+          total_count: number
+          version: string
+        }[]
+      }
+      hybrid_search_open_data_catalog: {
+        Args: {
+          filter_condition?: Json
+          lexical_weight?: number
+          match_count?: number
+          match_threshold?: number
+          p_dataset_kind: string
+          page_current?: number
+          page_size?: number
+          publication_filter?: string
+          query_embedding: string
+          query_terms?: string[]
+          query_text: string
+          rrf_k?: number
+          semantic_weight?: number
+          source_filter?: string
+        }
+        Returns: {
+          id: string
+          is_published: boolean
+          json: Json
+          model_id: string
+          model_version: string
           modified_at: string
           team_id: string
           total_count: number
@@ -2648,6 +2681,32 @@ export type Database = {
           version: string
         }[]
       }
+      search_open_data_catalog: {
+        Args: {
+          p_dataset_kind: string
+          p_filter_condition?: Json
+          p_page_current?: number
+          p_page_size?: number
+          p_publication_filter?: string
+          p_query_terms?: string[]
+          p_query_text?: string
+          p_search_mode?: string
+          p_sort_by?: string
+          p_sort_direction?: string
+          p_source_filter?: string
+        }
+        Returns: {
+          id: string
+          is_published: boolean
+          json: Json
+          model_id: string
+          model_version: string
+          modified_at: string
+          team_id: string
+          total_count: number
+          version: string
+        }[]
+      }
       search_processes: {
         Args: {
           data_source?: string
@@ -3754,12 +3813,12 @@ export type Tables<
   DefaultSchemaTableNameOrOptions extends
     | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends (DefaultSchemaTableNameOrOptions extends {
+  TableName extends DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never) = never,
+    : never = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -3783,11 +3842,11 @@ export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends (DefaultSchemaTableNameOrOptions extends {
+  TableName extends DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never) = never,
+    : never = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -3808,11 +3867,11 @@ export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends (DefaultSchemaTableNameOrOptions extends {
+  TableName extends DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never) = never,
+    : never = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -3833,11 +3892,11 @@ export type Enums<
   DefaultSchemaEnumNameOrOptions extends
     | keyof DefaultSchema["Enums"]
     | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends (DefaultSchemaEnumNameOrOptions extends {
+  EnumName extends DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-    : never) = never,
+    : never = never,
 > = DefaultSchemaEnumNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -3850,11 +3909,11 @@ export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
     | keyof DefaultSchema["CompositeTypes"]
     | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
+  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never) = never,
+    : never = never,
 > = PublicCompositeTypeNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
