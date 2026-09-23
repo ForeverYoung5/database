@@ -26,8 +26,8 @@ begin
   end;
   filter_condition_jsonb := coalesce(filter_condition, '{}'::jsonb);
   json_filter_clause := case
-    when filter_condition_jsonb = '{}'::jsonb then ''
-    else 'and d.json @> $8'
+    when private.sample_library_business_filter_v1(filter_condition_jsonb) = '{}'::jsonb then ''
+    else 'and d.json @> private.sample_library_business_filter_v1($8)'
   end;
 
   if exact_query_id is not null then
@@ -37,7 +37,7 @@ begin
         from %1$s d
         where d.id = $1
           and (
-            ((($4 = 'tg' AND d.state_code = 100) OR ($4 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($6 is null or d.team_id = $6))
+            (((($4 = 'tg' AND d.state_code = 100) OR api.sample_library_row_matches_v1($4, d.state_code, d.user_id, d.id, d.version, '{}'::jsonb, false)) OR ($4 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($6 is null or d.team_id = $6))
             or ($4 = 'co' and d.state_code = 200 and ($6 is null or d.team_id = $6))
             or ($4 = 'my' and $5 is not null and d.user_id = $5 and ($7 is null or d.state_code = $7))
             or ($4 = 'te' and $6 is not null and d.team_id = $6 and ($7 is null or d.state_code = $7))
@@ -53,7 +53,7 @@ begin
           from %1$s d2
           where d2.id = matched_ids.id
             and (
-              ((($4 = 'tg' AND d2.state_code = 100) OR ($4 = 'ex' AND d2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($6 is null or d2.team_id = $6))
+              (((($4 = 'tg' AND d2.state_code = 100) OR api.sample_library_row_matches_v1($4, d2.state_code, d2.user_id, d2.id, d2.version, $8, false)) OR ($4 = 'ex' AND d2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($6 is null or d2.team_id = $6))
               or ($4 = 'co' and d2.state_code = 200 and ($6 is null or d2.team_id = $6))
               or ($4 = 'my' and $5 is not null and d2.user_id = $5 and ($7 is null or d2.state_code = $7))
               or ($4 = 'te' and $6 is not null and d2.team_id = $6 and ($7 is null or d2.state_code = $7))
@@ -81,8 +81,8 @@ begin
   end if;
 
   json_filter_clause := case
-    when filter_condition_jsonb = '{}'::jsonb then ''
-    else 'and d.json @> $2'
+    when private.sample_library_business_filter_v1(filter_condition_jsonb) = '{}'::jsonb then ''
+    else 'and d.json @> private.sample_library_business_filter_v1($2)'
   end;
 
   v_sql := format($sql$
@@ -92,6 +92,7 @@ begin
              d.state_code,
              d.team_id,
              d.user_id,
+             d.version,
              pgroonga_score(d.tableoid, d.ctid) as search_score
       from %1$s d
       where d.search_text &@~ $1
@@ -100,7 +101,7 @@ begin
       select d.id, max(d.search_score) as search_score
       from text_matches d
       where (
-          ((($5 = 'tg' AND d.state_code = 100) OR ($5 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or d.team_id = $7))
+          (((($5 = 'tg' AND d.state_code = 100) OR api.sample_library_row_matches_v1($5, d.state_code, d.user_id, d.id, d.version, '{}'::jsonb, false)) OR ($5 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or d.team_id = $7))
           or ($5 = 'co' and d.state_code = 200 and ($7 is null or d.team_id = $7))
           or ($5 = 'my' and $6 is not null and d.user_id = $6 and ($8 is null or d.state_code = $8))
           or ($5 = 'te' and $7 is not null and d.team_id = $7 and ($8 is null or d.state_code = $8))
@@ -116,7 +117,7 @@ begin
         from %1$s d2
         where d2.id = matched_ids.id
           and (
-            ((($5 = 'tg' AND d2.state_code = 100) OR ($5 = 'ex' AND d2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or d2.team_id = $7))
+            (((($5 = 'tg' AND d2.state_code = 100) OR api.sample_library_row_matches_v1($5, d2.state_code, d2.user_id, d2.id, d2.version, $2, false)) OR ($5 = 'ex' AND d2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or d2.team_id = $7))
             or ($5 = 'co' and d2.state_code = 200 and ($7 is null or d2.team_id = $7))
             or ($5 = 'my' and $6 is not null and d2.user_id = $6 and ($8 is null or d2.state_code = $8))
             or ($5 = 'te' and $7 is not null and d2.team_id = $7 and ($8 is null or d2.state_code = $8))

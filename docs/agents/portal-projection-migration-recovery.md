@@ -1,7 +1,7 @@
 ---
-lastReviewedAt: 2026-09-10
-lastReviewedCommit: 413ef65fcb66991304db9013cc8fc642d7e89f4d
-lastReviewedNote: 'Reviewed for Database #636: raw Hybrid example-scope fingerprint refresh does not alter the immutable Portal helper closure, projection storage, rollout or recovery procedure; the isolated candidate-first regression passes all 83 assertions.'
+lastReviewedAt: 2026-09-22
+lastReviewedCommit: a29d82d1fc63c3242234caa635a6cbecb3467865
+lastReviewedNote: 'Reviewed for Database #690 / workspace #1464: the role-gated Sample Library extends the shared raw Hybrid search helpers and refreshes their exact fingerprints without changing the immutable Portal projection helper closure, storage, writer, rollout, or recovery procedure; the Portal Hybrid and candidate-first suites pass 64/64 and 83/83 assertions.'
 title: Portal Projection Migration Recovery
 docType: runbook
 scope: repo

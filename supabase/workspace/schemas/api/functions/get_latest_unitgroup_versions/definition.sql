@@ -1,4 +1,4 @@
-CREATE OR REPLACE FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "sort_by" "text" DEFAULT 'modified_at'::"text", "sort_direction" "text" DEFAULT 'desc'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
+CREATE OR REPLACE FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "sort_by" "text" DEFAULT 'modified_at'::"text", "sort_direction" "text" DEFAULT 'desc'::"text", "sample_origin_filter" "text" DEFAULT 'all'::"text", "sample_publication_status_filter" "text" DEFAULT 'all'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
     LANGUAGE "plpgsql"
     SET "search_path" TO 'api', 'private', 'public', 'util', 'extensions', 'extensions', 'pg_temp'
     AS $_$
@@ -23,7 +23,7 @@ BEGIN
     WITH visible_keys AS (
       SELECT u.id, u.version, u.created_at, u.modified_at, u.team_id
       FROM public.unitgroups u
-      WHERE ((data_source = 'tg' AND u.state_code = 100) OR (data_source = 'ex' AND u.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
+      WHERE ((((data_source = 'tg' AND u.state_code = 100)) OR api.sample_library_row_matches_v1(data_source, u.state_code, u.user_id, u.id, u.version, '{}'::jsonb, false)) OR (data_source = 'ex' AND u.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
         AND (team_id_filter IS NULL OR u.team_id = team_id_filter)
       UNION ALL
       SELECT u.id, u.version, u.created_at, u.modified_at, u.team_id
@@ -59,6 +59,18 @@ BEGIN
     counted_keys AS (
       SELECT latest_keys.*, count(*) OVER()::bigint AS total_count
       FROM latest_keys
+      WHERE data_source <> 'sl' OR EXISTS (
+        SELECT 1 FROM public.unitgroups sample_scope_row
+        WHERE sample_scope_row.id = latest_keys.id
+          AND sample_scope_row.version = latest_keys.version
+          AND api.sample_library_row_matches_v1(
+            data_source, sample_scope_row.state_code, sample_scope_row.user_id,
+            sample_scope_row.id, sample_scope_row.version, jsonb_build_object(
+              '__sampleLibraryOrigin', coalesce(sample_origin_filter, 'all'),
+              '__sampleLibraryPublicationStatus', coalesce(sample_publication_status_filter, 'all')
+            ), false
+          )
+      )
     ),
     paged_keys AS (
       SELECT counted_keys.*
@@ -120,12 +132,12 @@ BEGIN
 END;
 $_$;
 
-ALTER FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") OWNER TO "postgres";
+ALTER FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") OWNER TO "postgres";
 
-REVOKE ALL ON FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") FROM PUBLIC;
+REVOKE ALL ON FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") FROM PUBLIC;
 
-GRANT ALL ON FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") TO "api_internal_executor";
+GRANT ALL ON FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "api_internal_executor";
 
-GRANT ALL ON FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") TO "anon";
+GRANT ALL ON FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "anon";
 
-GRANT ALL ON FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "authenticated";
