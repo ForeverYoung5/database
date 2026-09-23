@@ -1,1 +1,0 @@
-CREATE OR REPLACE TRIGGER "sample_library_process_publications_immutable" BEFORE DELETE OR UPDATE ON "private"."sample_library_process_publications" FOR EACH ROW EXECUTE FUNCTION "private"."sample_library_process_publications_immutable_v1"();
