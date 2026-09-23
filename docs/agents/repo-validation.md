@@ -33,8 +33,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-23
-lastReviewedCommit: 35ef79ccbcdfb7dd6ca8fb90981ee6e3f42c2bf9
-lastReviewedNote: "Main agent-contract hotfix backmerged through Database #705 against current dev; current dev validation and Supabase branch gates remain authoritative."
+lastReviewedCommit: 80fb735da2a9dffbb0be36157b50c87fd4e765aa
+lastReviewedNote: "Reviewed Database #712 migration, Open Data query/RPC contracts, and pgTAP proof; current validation and Supabase branch gates remain authoritative."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -58,6 +58,11 @@ supabase start
 supabase db reset
 supabase migration list
 ```
+
+Open Data catalog or publication changes must additionally run the focused
+`supabase/tests/20260923_open_data_catalog_publications.sql` pgTAP suite and
+record any pre-existing local migration-history drift separately from failures
+in the new migration.
 
 There is no checked-in monolithic database-contract runner. Run the relevant
 pgTAP files explicitly after a clean reset, and run the change-specific shell
