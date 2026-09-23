@@ -1,4 +1,4 @@
--- Open Data catalog source filters and exact-version Process publication markers.
+-- Open Data catalog filters and exact-version Process publication markers.
 
 create table private.open_data_process_publications (
   process_id uuid not null,
