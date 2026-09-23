@@ -52679,6 +52679,88 @@ $$;
 ALTER FUNCTION "private"."pgroonga_escape_query_terms"("query_terms" "text"[]) OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "private"."pick_dataset_derivative_rebuild_request"("p_seen" "uuid"[], "p_lane" "text", "p_allow_external" boolean, "p_now" timestamp with time zone) RETURNS TABLE("request_id" "uuid", "is_ready" boolean, "dispatch_capable" boolean)
+    LANGUAGE "sql"
+    SET "search_path" TO ''
+    AS $$
+  with active as materialized (
+    select r.id, r.actor_user_id, coalesce(r.batch_id, r.id) as scheduling_batch,
+      r.status, r.phase, r.updated_at, r.admitted_at, r.drain_not_before,
+      r.failure_release_not_before, r.markdown_request_id, r.markdown_deadline_at,
+      r.embedding_queue_msg_id, r.embedding_pending_job_id, r.embedding_deadline_at
+    from util.dataset_derivative_rebuild_requests r
+    where r.status not in ('completed', 'stale', 'failed')
+      and not (r.id = any(coalesce(p_seen, array[]::uuid[])))
+  ), actors as materialized (
+    select history.actor_user_id,
+      coalesce(max(history.scheduler_selected_at), min(history.admitted_at)) as last_served
+    from util.dataset_derivative_rebuild_requests history
+    where history.actor_user_id in (select active.actor_user_id from active)
+    group by history.actor_user_id
+  ), batches as materialized (
+    select history.actor_user_id, coalesce(history.batch_id, history.id) as scheduling_batch,
+      coalesce(max(history.scheduler_selected_at), min(history.admitted_at)) as last_served
+    from util.dataset_derivative_rebuild_requests history
+    where (history.actor_user_id, coalesce(history.batch_id, history.id)) in
+      (select active.actor_user_id, active.scheduling_batch from active)
+    group by history.actor_user_id, coalesce(history.batch_id, history.id)
+  ), readiness as materialized (
+    select active.*,
+      coalesce(case
+        when active.status = 'queued' then true
+        when active.status = 'dispatching' and active.phase = 'quarantining'
+          then active.drain_not_before <= p_now
+        when active.status = 'dispatching' and active.phase = 'failure_draining'
+          then active.failure_release_not_before <= p_now
+        when active.status = 'markdown_pending' then
+          exists (select 1 from net._http_response response where response.id = active.markdown_request_id)
+          or active.markdown_deadline_at <= p_now
+        when active.status = 'embedding_pending' then
+          case
+            when active.embedding_queue_msg_id is not null then
+              not exists (select 1 from pgmq.q_embedding_jobs job where job.msg_id = active.embedding_queue_msg_id)
+              or active.embedding_deadline_at <= p_now
+            when active.embedding_pending_job_id is null then true
+            when pending.status = 'pending' then active.embedding_deadline_at <= p_now
+            else true -- bridge, lost or malformed proof: let the unchanged body decide
+          end
+        else false
+      end, false) as ready
+    from active
+    left join util.pending_embedding_jobs pending on pending.id = active.embedding_pending_job_id
+  ), classified as (
+    select readiness.*,
+      ready and (status = 'markdown_pending'
+        or (status = 'dispatching' and phase = 'quarantining')) as external
+    from readiness
+  )
+  select locked.id, classified.ready, classified.external
+  from classified
+  join util.dataset_derivative_rebuild_requests locked on locked.id = classified.id
+  join actors on actors.actor_user_id = classified.actor_user_id
+  join batches on batches.actor_user_id = classified.actor_user_id
+    and batches.scheduling_batch = classified.scheduling_batch
+  where locked.status not in ('completed', 'stale', 'failed')
+    and (p_lane in ('audit', 'any') or (p_lane = 'ready' and classified.ready))
+    and (p_lane = 'audit' or not classified.external or p_allow_external)
+  order by
+    case when p_lane in ('audit', 'any') then classified.updated_at else actors.last_served end,
+    case when p_lane in ('audit', 'any') then classified.admitted_at else batches.last_served end,
+    classified.updated_at, classified.admitted_at, classified.id
+  -- Lock/skip first, then count the actual row. Pre-limiting a ranked candidate
+  -- list would strand runnable peers behind another session's locked quota.
+  for update of locked skip locked
+  limit 1
+$$;
+
+
+ALTER FUNCTION "private"."pick_dataset_derivative_rebuild_request"("p_seen" "uuid"[], "p_lane" "text", "p_allow_external" boolean, "p_now" timestamp with time zone) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "private"."pick_dataset_derivative_rebuild_request"("p_seen" "uuid"[], "p_lane" "text", "p_allow_external" boolean, "p_now" timestamp with time zone) IS 'Owner-only narrow-metadata selector. Fair actor/batch progress and oldest-row audits; acquires at most one actual request lock after SKIP LOCKED, with no pre-lock lane quota.';
+
+
+
 CREATE OR REPLACE FUNCTION "private"."portal_access_restrictions_open_v1"("p_value" "jsonb") RETURNS boolean
     LANGUAGE "sql" IMMUTABLE PARALLEL SAFE
     SET "search_path" TO ''
@@ -73348,6 +73430,7 @@ CREATE TABLE IF NOT EXISTS "util"."dataset_derivative_rebuild_requests" (
     "batch_ordinal" smallint,
     "batch_target_count" smallint,
     "source_baseline_snapshot_sha256" "text",
+    "scheduler_selected_at" timestamp with time zone,
     CONSTRAINT "dataset_derivative_rebuild_request_batch_check" CHECK (((("batch_id" IS NULL) AND ("batch_ordinal" IS NULL) AND ("batch_target_count" IS NULL) AND ("source_baseline_snapshot_sha256" IS NULL)) OR (("batch_id" IS NOT NULL) AND (("batch_ordinal" >= 1) AND ("batch_ordinal" <= 50)) AND (("batch_target_count" >= 1) AND ("batch_target_count" <= 50)) AND ("batch_ordinal" <= "batch_target_count") AND ("source_baseline_snapshot_sha256" ~ '^[a-f0-9]{64}$'::"text")))),
     CONSTRAINT "dataset_derivative_rebuild_request_counts_check" CHECK ((("quarantined_http_requests" >= 0) AND ("quarantined_embedding_jobs" >= 0) AND ("quarantined_pending_jobs" >= 0))),
     CONSTRAINT "dataset_derivative_rebuild_request_hashes_check" CHECK ((("plan_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("expected_snapshot_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("expected_json_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("expected_json_ordered_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("plan_request_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("action_request_sha256" ~ '^[a-f0-9]{64}$'::"text") AND (("before_extracted_md_sha256" IS NULL) OR ("before_extracted_md_sha256" ~ '^[a-f0-9]{64}$'::"text")) AND (("before_embedding_ft_sha256" IS NULL) OR ("before_embedding_ft_sha256" ~ '^[a-f0-9]{64}$'::"text")))),
@@ -73362,6 +73445,10 @@ ALTER TABLE "util"."dataset_derivative_rebuild_requests" OWNER TO "postgres";
 
 
 COMMENT ON TABLE "util"."dataset_derivative_rebuild_requests" IS 'Private durable coordinator state for owner-draft flow/process derivative rebuilds. Nonterminal rows are target write fences; batch_id binds protected alias child sets.';
+
+
+
+COMMENT ON COLUMN "util"."dataset_derivative_rebuild_requests"."scheduler_selected_at" IS 'Internal progress-slot service clock for actor/batch fairness; NULL until selected. Waiting/overflow audits never update it. Not part of public read or plan hashes.';
 
 
 
@@ -76454,6 +76541,17 @@ CREATE OR REPLACE FUNCTION "util"."process_dataset_derivative_rebuilds"("p_limit
     AS $$
 declare
   v_request util.dataset_derivative_rebuild_requests%rowtype;
+  v_candidate record;
+  v_seen uuid[] := array[]::uuid[];
+  v_visit_limit integer;
+  v_ready_slots integer;
+  v_slot integer;
+  v_lane text;
+  v_ready_exhausted boolean := false;
+  v_audit_only boolean;
+  v_audited integer := 0;
+  v_external_visits integer := 0;
+  v_external_transition boolean;
   v_json_ordered jsonb;
   v_response net._http_response%rowtype;
   v_snapshot jsonb;
@@ -76485,17 +76583,68 @@ begin
     return 0;
   end if;
 
-  for v_request in
-    select request.*
-    from util.dataset_derivative_rebuild_requests as request
-    where request.status not in ('completed', 'stale', 'failed')
-    order by request.updated_at, request.admitted_at, request.id
-    for update skip locked
-    limit least(greatest(p_limit, 1), 25)
-  loop
+  v_visit_limit := least(greatest(p_limit, 1), 25);
+  v_ready_slots := case when v_visit_limit = 1 then 1
+    else v_visit_limit - least(5, greatest(1, v_visit_limit / 5)) end;
+  for v_slot in 1..v_visit_limit loop
+    v_lane := case when v_visit_limit = 1 then 'any'
+      when v_slot <= v_ready_slots and not v_ready_exhausted then 'ready'
+      else 'audit' end;
+    if v_lane = 'audit' and v_audited >= 5 then
+      exit;
+    end if;
+    select candidate.* into v_candidate
+    from private.pick_dataset_derivative_rebuild_request(
+      v_seen, v_lane, v_external_visits < 5, pg_catalog.clock_timestamp()
+    ) candidate;
+    if v_candidate.request_id is null and v_lane = 'ready' then
+      v_ready_exhausted := true;
+      v_lane := 'audit';
+      if v_audited >= 5 then exit; end if;
+      select candidate.* into v_candidate
+      from private.pick_dataset_derivative_rebuild_request(
+        v_seen, v_lane, false, pg_catalog.clock_timestamp()
+      ) candidate;
+    end if;
+    if v_candidate.request_id is null then
+      exit;
+    end if;
+    v_seen := array_append(v_seen, v_candidate.request_id);
+    select request.* into v_request
+    from util.dataset_derivative_rebuild_requests request
+    where request.id = v_candidate.request_id;
     v_processed := v_processed + 1;
     v_now := pg_catalog.clock_timestamp();
+    -- Recheck the actual locked phase as well as the earlier readiness snapshot.
+    -- A state change between metadata selection and locking cannot bypass the
+    -- external budget. Over-reserving for an invalid response remains conservative.
+    v_external_transition := v_candidate.dispatch_capable
+      or v_request.status = 'markdown_pending'
+      or (v_request.status = 'dispatching' and v_request.phase = 'quarantining'
+        and v_request.drain_not_before <= v_now);
+    -- Ready work in the oldest-row lane receives a real progress slot if capacity
+    -- remains. It is then stamped/counted as progress, never as a waiting audit.
+    v_audit_only := not v_candidate.is_ready
+      or (v_external_transition and v_external_visits >= 5);
+    if v_audit_only then
+      v_audited := v_audited + 1;
+    else
+      if v_external_transition then
+        v_external_visits := v_external_visits + 1;
+      end if;
+      -- Outside the request-scoped exception block: a poisoned selected request
+      -- still consumed a service opportunity, while audits never count as progress.
+      update util.dataset_derivative_rebuild_requests
+      set scheduler_selected_at = v_now where id = v_request.id;
+    end if;
     begin
+
+    if v_audit_only and v_request.status = 'dispatching'
+      and v_request.phase = 'failure_draining' then
+      update util.dataset_derivative_rebuild_requests
+      set updated_at = v_now where id = v_request.id;
+      continue;
+    end if;
 
     if v_request.status = 'dispatching'
       and v_request.phase = 'failure_draining' then
@@ -76560,6 +76709,12 @@ begin
         'Frozen dataset primary fingerprint is no longer present',
         '{}'::jsonb
       );
+      continue;
+    end if;
+
+    if v_audit_only then
+      update util.dataset_derivative_rebuild_requests
+      set updated_at = v_now where id = v_request.id;
       continue;
     end if;
 
@@ -90624,6 +90779,10 @@ REVOKE ALL ON FUNCTION "private"."pgroonga_escape_query_terms"("query_terms" "te
 GRANT ALL ON FUNCTION "private"."pgroonga_escape_query_terms"("query_terms" "text"[]) TO "service_role";
 GRANT ALL ON FUNCTION "private"."pgroonga_escape_query_terms"("query_terms" "text"[]) TO "api_internal_executor";
 GRANT ALL ON FUNCTION "private"."pgroonga_escape_query_terms"("query_terms" "text"[]) TO "next_public_search_executor";
+
+
+
+REVOKE ALL ON FUNCTION "private"."pick_dataset_derivative_rebuild_request"("p_seen" "uuid"[], "p_lane" "text", "p_allow_external" boolean, "p_now" timestamp with time zone) FROM PUBLIC;
 
 
 

@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS "util"."dataset_derivative_rebuild_requests" (
     "batch_ordinal" smallint,
     "batch_target_count" smallint,
     "source_baseline_snapshot_sha256" "text",
+    "scheduler_selected_at" timestamp with time zone,
     CONSTRAINT "dataset_derivative_rebuild_request_batch_check" CHECK (((("batch_id" IS NULL) AND ("batch_ordinal" IS NULL) AND ("batch_target_count" IS NULL) AND ("source_baseline_snapshot_sha256" IS NULL)) OR (("batch_id" IS NOT NULL) AND (("batch_ordinal" >= 1) AND ("batch_ordinal" <= 50)) AND (("batch_target_count" >= 1) AND ("batch_target_count" <= 50)) AND ("batch_ordinal" <= "batch_target_count") AND ("source_baseline_snapshot_sha256" ~ '^[a-f0-9]{64}$'::"text")))),
     CONSTRAINT "dataset_derivative_rebuild_request_counts_check" CHECK ((("quarantined_http_requests" >= 0) AND ("quarantined_embedding_jobs" >= 0) AND ("quarantined_pending_jobs" >= 0))),
     CONSTRAINT "dataset_derivative_rebuild_request_hashes_check" CHECK ((("plan_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("expected_snapshot_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("expected_json_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("expected_json_ordered_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("plan_request_sha256" ~ '^[a-f0-9]{64}$'::"text") AND ("action_request_sha256" ~ '^[a-f0-9]{64}$'::"text") AND (("before_extracted_md_sha256" IS NULL) OR ("before_extracted_md_sha256" ~ '^[a-f0-9]{64}$'::"text")) AND (("before_embedding_ft_sha256" IS NULL) OR ("before_embedding_ft_sha256" ~ '^[a-f0-9]{64}$'::"text")))),
