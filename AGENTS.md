@@ -38,8 +38,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-23
-lastReviewedCommit: 35ef79ccbcdfb7dd6ca8fb90981ee6e3f42c2bf9
-lastReviewedNote: "Main agent-contract hotfix backmerged through Database #705 against current dev; dev SQL ownership, safety, branch policy, and validation entrypoints remain authoritative."
+lastReviewedCommit: 5819c16b
+lastReviewedNote: "Reviewed Database #712 and its Docpact updates; SQL ownership, safety, branch policy, and validation entrypoints remain authoritative."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md
