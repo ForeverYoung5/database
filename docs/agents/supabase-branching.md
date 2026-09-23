@@ -23,8 +23,8 @@ checkPaths:
   - .env.supabase.dev.local.example
   - .env.supabase.main.local.example
 lastReviewedAt: 2026-09-23
-lastReviewedCommit: b73b143b9631763a6a4c871b89877393fe0cb08f
-lastReviewedNote: "Reviewed for Database #703: ready derivative scheduling keeps the default five visits, caps actual visits at 25 and external transitions at five, and preserves all data fences and terminal proofs. The schema migration leaves cron unchanged; the separately reviewed REPEATABLE READ activation, one-attempt transport, regression matrix and rollback procedure are documented. Generated ownership, hosted deployment, hotfix/backmerge and workspace integration boundaries remain unchanged."
+lastReviewedCommit: 72e1c5b565da7471957a1cf07454f8a2fa854cc4
+lastReviewedNote: "Reviewed Database #712 workflow update: the Open Data pgTAP joins the existing schema/capability gate while branch, hosted deployment, and integration ownership remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
