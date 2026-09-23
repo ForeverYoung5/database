@@ -100,8 +100,8 @@ begin
   end;
   filter_condition_jsonb := coalesce(filter_condition, '{}'::jsonb);
   json_filter_clause := case
-    when private.sample_library_business_filter_v1(filter_condition_jsonb) = '{}'::jsonb then ''
-    else 'and d.json @> private.sample_library_business_filter_v1($8)'
+    when filter_condition_jsonb = '{}'::jsonb then ''
+    else 'and d.json @> $8'
   end;
 
   if exact_query_id is not null then
@@ -111,7 +111,7 @@ begin
         from %1$s d
         where d.id = $1
           and (
-            (((($4 = 'tg' AND d.state_code = 100) OR api.sample_library_row_matches_v1($4, d.state_code, d.user_id, d.id, d.version, '{}'::jsonb, false)) OR ($4 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($6 is null or d.team_id = $6))
+            ((($4 = 'tg' AND d.state_code = 100) OR ($4 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($6 is null or d.team_id = $6))
             or ($4 = 'co' and d.state_code = 200 and ($6 is null or d.team_id = $6))
             or ($4 = 'my' and $5 is not null and d.user_id = $5 and ($7 is null or d.state_code = $7))
             or ($4 = 'te' and $6 is not null and d.team_id = $6 and ($7 is null or d.state_code = $7))
@@ -127,7 +127,7 @@ begin
           from %1$s d2
           where d2.id = matched_ids.id
             and (
-              (((($4 = 'tg' AND d2.state_code = 100) OR api.sample_library_row_matches_v1($4, d2.state_code, d2.user_id, d2.id, d2.version, $8, false)) OR ($4 = 'ex' AND d2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($6 is null or d2.team_id = $6))
+              ((($4 = 'tg' AND d2.state_code = 100) OR ($4 = 'ex' AND d2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($6 is null or d2.team_id = $6))
               or ($4 = 'co' and d2.state_code = 200 and ($6 is null or d2.team_id = $6))
               or ($4 = 'my' and $5 is not null and d2.user_id = $5 and ($7 is null or d2.state_code = $7))
               or ($4 = 'te' and $6 is not null and d2.team_id = $6 and ($7 is null or d2.state_code = $7))
@@ -155,8 +155,8 @@ begin
   end if;
 
   json_filter_clause := case
-    when private.sample_library_business_filter_v1(filter_condition_jsonb) = '{}'::jsonb then ''
-    else 'and d.json @> private.sample_library_business_filter_v1($2)'
+    when filter_condition_jsonb = '{}'::jsonb then ''
+    else 'and d.json @> $2'
   end;
 
   v_sql := format($sql$
@@ -166,7 +166,6 @@ begin
              d.state_code,
              d.team_id,
              d.user_id,
-             d.version,
              pgroonga_score(d.tableoid, d.ctid) as search_score
       from %1$s d
       where d.search_text &@~ $1
@@ -175,7 +174,7 @@ begin
       select d.id, max(d.search_score) as search_score
       from text_matches d
       where (
-          (((($5 = 'tg' AND d.state_code = 100) OR api.sample_library_row_matches_v1($5, d.state_code, d.user_id, d.id, d.version, '{}'::jsonb, false)) OR ($5 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or d.team_id = $7))
+          ((($5 = 'tg' AND d.state_code = 100) OR ($5 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or d.team_id = $7))
           or ($5 = 'co' and d.state_code = 200 and ($7 is null or d.team_id = $7))
           or ($5 = 'my' and $6 is not null and d.user_id = $6 and ($8 is null or d.state_code = $8))
           or ($5 = 'te' and $7 is not null and d.team_id = $7 and ($8 is null or d.state_code = $8))
@@ -191,7 +190,7 @@ begin
         from %1$s d2
         where d2.id = matched_ids.id
           and (
-            (((($5 = 'tg' AND d2.state_code = 100) OR api.sample_library_row_matches_v1($5, d2.state_code, d2.user_id, d2.id, d2.version, $2, false)) OR ($5 = 'ex' AND d2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or d2.team_id = $7))
+            ((($5 = 'tg' AND d2.state_code = 100) OR ($5 = 'ex' AND d2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or d2.team_id = $7))
             or ($5 = 'co' and d2.state_code = 200 and ($7 is null or d2.team_id = $7))
             or ($5 = 'my' and $6 is not null and d2.user_id = $6 and ($8 is null or d2.state_code = $8))
             or ($5 = 'te' and $7 is not null and d2.team_id = $7 and ($8 is null or d2.state_code = $8))
@@ -18453,7 +18452,7 @@ $_$;
 ALTER FUNCTION "api"."get_current_lca_release_process"("p_process_uuid" "uuid", "p_process_version" "text") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "api"."get_latest_contact_versions"("page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "sort_by" "text" DEFAULT 'modified_at'::"text", "sort_direction" "text" DEFAULT 'desc'::"text", "sample_origin_filter" "text" DEFAULT 'all'::"text", "sample_publication_status_filter" "text" DEFAULT 'all'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
+CREATE OR REPLACE FUNCTION "api"."get_latest_contact_versions"("page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "sort_by" "text" DEFAULT 'modified_at'::"text", "sort_direction" "text" DEFAULT 'desc'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
     LANGUAGE "plpgsql"
     SET "search_path" TO 'api', 'private', 'public', 'util', 'extensions', 'extensions', 'pg_temp'
     AS $_$
@@ -18478,7 +18477,7 @@ BEGIN
     WITH visible_keys AS (
       SELECT c.id, c.version, c.created_at, c.modified_at, c.team_id
       FROM public.contacts c
-      WHERE ((((data_source = 'tg' AND c.state_code = 100)) OR api.sample_library_row_matches_v1(data_source, c.state_code, c.user_id, c.id, c.version, '{}'::jsonb, false)) OR (data_source = 'ex' AND c.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
+      WHERE ((data_source = 'tg' AND c.state_code = 100) OR (data_source = 'ex' AND c.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
         AND (team_id_filter IS NULL OR c.team_id = team_id_filter)
       UNION ALL
       SELECT c.id, c.version, c.created_at, c.modified_at, c.team_id
@@ -18514,18 +18513,6 @@ BEGIN
     counted_keys AS (
       SELECT latest_keys.*, count(*) OVER()::bigint AS total_count
       FROM latest_keys
-      WHERE data_source <> 'sl' OR EXISTS (
-        SELECT 1 FROM public.contacts sample_scope_row
-        WHERE sample_scope_row.id = latest_keys.id
-          AND sample_scope_row.version = latest_keys.version
-          AND api.sample_library_row_matches_v1(
-            data_source, sample_scope_row.state_code, sample_scope_row.user_id,
-            sample_scope_row.id, sample_scope_row.version, jsonb_build_object(
-              '__sampleLibraryOrigin', coalesce(sample_origin_filter, 'all'),
-              '__sampleLibraryPublicationStatus', coalesce(sample_publication_status_filter, 'all')
-            ), false
-          )
-      )
     ),
     paged_keys AS (
       SELECT counted_keys.*
@@ -18588,10 +18575,10 @@ END;
 $_$;
 
 
-ALTER FUNCTION "api"."get_latest_contact_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") OWNER TO "postgres";
+ALTER FUNCTION "api"."get_latest_contact_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "api"."get_latest_flow_versions"("page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "filter_condition" "jsonb" DEFAULT '{}'::"jsonb", "sort_by" "text" DEFAULT 'modified_at'::"text", "sort_direction" "text" DEFAULT 'desc'::"text", "sample_origin_filter" "text" DEFAULT 'all'::"text", "sample_publication_status_filter" "text" DEFAULT 'all'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
+CREATE OR REPLACE FUNCTION "api"."get_latest_flow_versions"("page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "filter_condition" "jsonb" DEFAULT '{}'::"jsonb", "sort_by" "text" DEFAULT 'modified_at'::"text", "sort_direction" "text" DEFAULT 'desc'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
     LANGUAGE "plpgsql"
     SET "search_path" TO 'api', 'private', 'public', 'util', 'extensions', 'extensions', 'pg_temp'
     SET "statement_timeout" TO '60s'
@@ -18650,7 +18637,7 @@ BEGIN
       WITH visible_keys AS (
         SELECT f.id, f.version, f.created_at, f.modified_at, f.team_id
         FROM public.flows f
-        WHERE ((((data_source = 'tg' AND f.state_code = 100)) OR api.sample_library_row_matches_v1(data_source, f.state_code, f.user_id, f.id, f.version, '{}'::jsonb, false)) OR (data_source = 'ex' AND f.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
+        WHERE ((data_source = 'tg' AND f.state_code = 100) OR (data_source = 'ex' AND f.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
           AND (team_id_filter IS NULL OR f.team_id = team_id_filter)
         UNION ALL
         SELECT f.id, f.version, f.created_at, f.modified_at, f.team_id
@@ -18686,18 +18673,6 @@ BEGIN
       counted_keys AS (
         SELECT latest_keys.*, count(*) OVER()::bigint AS total_count
         FROM latest_keys
-      WHERE data_source <> 'sl' OR EXISTS (
-        SELECT 1 FROM public.flows sample_scope_row
-        WHERE sample_scope_row.id = latest_keys.id
-          AND sample_scope_row.version = latest_keys.version
-          AND api.sample_library_row_matches_v1(
-            data_source, sample_scope_row.state_code, sample_scope_row.user_id,
-            sample_scope_row.id, sample_scope_row.version, jsonb_build_object(
-              '__sampleLibraryOrigin', coalesce(sample_origin_filter, 'all'),
-              '__sampleLibraryPublicationStatus', coalesce(sample_publication_status_filter, 'all')
-            ), false
-          )
-      )
       ),
       paged_keys AS (
         SELECT counted_keys.*
@@ -18763,7 +18738,7 @@ BEGIN
     WITH visible_rows AS (
       SELECT f.*
       FROM public.flows f
-      WHERE ((((data_source = 'tg' AND f.state_code = 100)) OR api.sample_library_row_matches_v1(data_source, f.state_code, f.user_id, f.id, f.version, '{}'::jsonb, false)) OR (data_source = 'ex' AND f.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
+      WHERE ((data_source = 'tg' AND f.state_code = 100) OR (data_source = 'ex' AND f.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
         AND (team_id_filter IS NULL OR f.team_id = team_id_filter)
       UNION ALL
       SELECT f.*
@@ -18853,18 +18828,6 @@ BEGIN
     counted_rows AS (
       SELECT latest_rows.*, count(*) OVER()::bigint AS total_count
       FROM latest_rows
-      WHERE data_source <> 'sl' OR EXISTS (
-        SELECT 1 FROM public.flows sample_scope_row
-        WHERE sample_scope_row.id = latest_rows.id
-          AND sample_scope_row.version = latest_rows.version
-          AND api.sample_library_row_matches_v1(
-            data_source, sample_scope_row.state_code, sample_scope_row.user_id,
-            sample_scope_row.id, sample_scope_row.version, jsonb_build_object(
-              '__sampleLibraryOrigin', coalesce(sample_origin_filter, 'all'),
-              '__sampleLibraryPublicationStatus', coalesce(sample_publication_status_filter, 'all')
-            ), false
-          )
-      )
     )
     SELECT
       counted_rows.id,
@@ -18900,10 +18863,10 @@ END;
 $_$;
 
 
-ALTER FUNCTION "api"."get_latest_flow_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "filter_condition" "jsonb", "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") OWNER TO "postgres";
+ALTER FUNCTION "api"."get_latest_flow_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "filter_condition" "jsonb", "sort_by" "text", "sort_direction" "text") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "api"."get_latest_flowproperty_versions"("page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "sort_by" "text" DEFAULT 'modified_at'::"text", "sort_direction" "text" DEFAULT 'desc'::"text", "sample_origin_filter" "text" DEFAULT 'all'::"text", "sample_publication_status_filter" "text" DEFAULT 'all'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
+CREATE OR REPLACE FUNCTION "api"."get_latest_flowproperty_versions"("page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "sort_by" "text" DEFAULT 'modified_at'::"text", "sort_direction" "text" DEFAULT 'desc'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
     LANGUAGE "plpgsql"
     SET "search_path" TO 'api', 'private', 'public', 'util', 'extensions', 'extensions', 'pg_temp'
     AS $_$
@@ -18928,7 +18891,7 @@ BEGIN
     WITH visible_keys AS (
       SELECT f.id, f.version, f.created_at, f.modified_at, f.team_id
       FROM public.flowproperties f
-      WHERE ((((data_source = 'tg' AND f.state_code = 100)) OR api.sample_library_row_matches_v1(data_source, f.state_code, f.user_id, f.id, f.version, '{}'::jsonb, false)) OR (data_source = 'ex' AND f.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
+      WHERE ((data_source = 'tg' AND f.state_code = 100) OR (data_source = 'ex' AND f.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
         AND (team_id_filter IS NULL OR f.team_id = team_id_filter)
       UNION ALL
       SELECT f.id, f.version, f.created_at, f.modified_at, f.team_id
@@ -18964,18 +18927,6 @@ BEGIN
     counted_keys AS (
       SELECT latest_keys.*, count(*) OVER()::bigint AS total_count
       FROM latest_keys
-      WHERE data_source <> 'sl' OR EXISTS (
-        SELECT 1 FROM public.flowproperties sample_scope_row
-        WHERE sample_scope_row.id = latest_keys.id
-          AND sample_scope_row.version = latest_keys.version
-          AND api.sample_library_row_matches_v1(
-            data_source, sample_scope_row.state_code, sample_scope_row.user_id,
-            sample_scope_row.id, sample_scope_row.version, jsonb_build_object(
-              '__sampleLibraryOrigin', coalesce(sample_origin_filter, 'all'),
-              '__sampleLibraryPublicationStatus', coalesce(sample_publication_status_filter, 'all')
-            ), false
-          )
-      )
     ),
     paged_keys AS (
       SELECT counted_keys.*
@@ -19038,10 +18989,10 @@ END;
 $_$;
 
 
-ALTER FUNCTION "api"."get_latest_flowproperty_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") OWNER TO "postgres";
+ALTER FUNCTION "api"."get_latest_flowproperty_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "api"."get_latest_lifecyclemodel_versions"("page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "sort_by" "text" DEFAULT 'modified_at'::"text", "sort_direction" "text" DEFAULT 'desc'::"text", "sample_origin_filter" "text" DEFAULT 'all'::"text", "sample_publication_status_filter" "text" DEFAULT 'all'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
+CREATE OR REPLACE FUNCTION "api"."get_latest_lifecyclemodel_versions"("page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "sort_by" "text" DEFAULT 'modified_at'::"text", "sort_direction" "text" DEFAULT 'desc'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
     LANGUAGE "plpgsql"
     SET "search_path" TO 'api', 'private', 'public', 'util', 'extensions', 'extensions', 'pg_temp'
     SET "statement_timeout" TO '60s'
@@ -19067,7 +19018,7 @@ BEGIN
     WITH visible_rows AS (
       SELECT l.*
       FROM public.lifecyclemodels l
-      WHERE ((((data_source = 'tg' AND l.state_code = 100)) OR api.sample_library_row_matches_v1(data_source, l.state_code, l.user_id, l.id, l.version, '{}'::jsonb, false)) OR (data_source = 'ex' AND l.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
+      WHERE ((data_source = 'tg' AND l.state_code = 100) OR (data_source = 'ex' AND l.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
         AND (team_id_filter IS NULL OR l.team_id = team_id_filter)
       UNION ALL
       SELECT l.*
@@ -19104,18 +19055,6 @@ BEGIN
     counted_rows AS (
       SELECT latest_rows.*, count(*) OVER()::bigint AS total_count
       FROM latest_rows
-      WHERE data_source <> 'sl' OR EXISTS (
-        SELECT 1 FROM public.lifecyclemodels sample_scope_row
-        WHERE sample_scope_row.id = latest_rows.id
-          AND sample_scope_row.version = latest_rows.version
-          AND api.sample_library_row_matches_v1(
-            data_source, sample_scope_row.state_code, sample_scope_row.user_id,
-            sample_scope_row.id, sample_scope_row.version, jsonb_build_object(
-              '__sampleLibraryOrigin', coalesce(sample_origin_filter, 'all'),
-              '__sampleLibraryPublicationStatus', coalesce(sample_publication_status_filter, 'all')
-            ), false
-          )
-      )
     )
     SELECT
       counted_rows.id,
@@ -19151,10 +19090,10 @@ END;
 $_$;
 
 
-ALTER FUNCTION "api"."get_latest_lifecyclemodel_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") OWNER TO "postgres";
+ALTER FUNCTION "api"."get_latest_lifecyclemodel_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "api"."get_latest_process_versions"("page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "type_of_data_set_filter" "text" DEFAULT 'all'::"text", "sort_by" "text" DEFAULT 'modified_at'::"text", "sort_direction" "text" DEFAULT 'desc'::"text", "sample_origin_filter" "text" DEFAULT 'all'::"text", "sample_publication_status_filter" "text" DEFAULT 'all'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "model_id" "uuid", "model_version" character, "total_count" bigint)
+CREATE OR REPLACE FUNCTION "api"."get_latest_process_versions"("page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "type_of_data_set_filter" "text" DEFAULT 'all'::"text", "sort_by" "text" DEFAULT 'modified_at'::"text", "sort_direction" "text" DEFAULT 'desc'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "model_id" "uuid", "model_version" character, "total_count" bigint)
     LANGUAGE "plpgsql"
     SET "search_path" TO 'api', 'private', 'public', 'util', 'extensions', 'extensions', 'pg_temp'
     SET "statement_timeout" TO '60s'
@@ -19180,7 +19119,7 @@ BEGIN
     WITH visible_rows AS (
       SELECT p.*
       FROM public.processes p
-      WHERE ((((data_source = 'tg' AND p.state_code = 100)) OR api.sample_library_row_matches_v1(data_source, p.state_code, p.user_id, p.id, p.version, '{}'::jsonb, true)) OR (data_source = 'ex' AND p.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
+      WHERE ((data_source = 'tg' AND p.state_code = 100) OR (data_source = 'ex' AND p.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
         AND (team_id_filter IS NULL OR p.team_id = team_id_filter)
       UNION ALL
       SELECT p.*
@@ -19227,18 +19166,6 @@ BEGIN
     counted_rows AS (
       SELECT latest_rows.*, count(*) OVER()::bigint AS total_count
       FROM latest_rows
-      WHERE data_source <> 'sl' OR EXISTS (
-        SELECT 1 FROM public.processes sample_scope_row
-        WHERE sample_scope_row.id = latest_rows.id
-          AND sample_scope_row.version = latest_rows.version
-          AND api.sample_library_row_matches_v1(
-            data_source, sample_scope_row.state_code, sample_scope_row.user_id,
-            sample_scope_row.id, sample_scope_row.version, jsonb_build_object(
-              '__sampleLibraryOrigin', coalesce(sample_origin_filter, 'all'),
-              '__sampleLibraryPublicationStatus', coalesce(sample_publication_status_filter, 'all')
-            ), true
-          )
-      )
     )
     SELECT
       counted_rows.id,
@@ -19276,10 +19203,10 @@ END;
 $_$;
 
 
-ALTER FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") OWNER TO "postgres";
+ALTER FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "api"."get_latest_source_versions"("page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "sort_by" "text" DEFAULT 'modified_at'::"text", "sort_direction" "text" DEFAULT 'desc'::"text", "sample_origin_filter" "text" DEFAULT 'all'::"text", "sample_publication_status_filter" "text" DEFAULT 'all'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
+CREATE OR REPLACE FUNCTION "api"."get_latest_source_versions"("page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "sort_by" "text" DEFAULT 'modified_at'::"text", "sort_direction" "text" DEFAULT 'desc'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
     LANGUAGE "plpgsql"
     SET "search_path" TO 'api', 'private', 'public', 'util', 'extensions', 'extensions', 'pg_temp'
     AS $_$
@@ -19304,7 +19231,7 @@ BEGIN
     WITH visible_keys AS (
       SELECT f.id, f.version, f.created_at, f.modified_at, f.team_id
       FROM public.sources f
-      WHERE ((((data_source = 'tg' AND f.state_code = 100)) OR api.sample_library_row_matches_v1(data_source, f.state_code, f.user_id, f.id, f.version, '{}'::jsonb, false)) OR (data_source = 'ex' AND f.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
+      WHERE ((data_source = 'tg' AND f.state_code = 100) OR (data_source = 'ex' AND f.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
         AND (team_id_filter IS NULL OR f.team_id = team_id_filter)
       UNION ALL
       SELECT f.id, f.version, f.created_at, f.modified_at, f.team_id
@@ -19340,18 +19267,6 @@ BEGIN
     counted_keys AS (
       SELECT latest_keys.*, count(*) OVER()::bigint AS total_count
       FROM latest_keys
-      WHERE data_source <> 'sl' OR EXISTS (
-        SELECT 1 FROM public.sources sample_scope_row
-        WHERE sample_scope_row.id = latest_keys.id
-          AND sample_scope_row.version = latest_keys.version
-          AND api.sample_library_row_matches_v1(
-            data_source, sample_scope_row.state_code, sample_scope_row.user_id,
-            sample_scope_row.id, sample_scope_row.version, jsonb_build_object(
-              '__sampleLibraryOrigin', coalesce(sample_origin_filter, 'all'),
-              '__sampleLibraryPublicationStatus', coalesce(sample_publication_status_filter, 'all')
-            ), false
-          )
-      )
     ),
     paged_keys AS (
       SELECT counted_keys.*
@@ -19414,10 +19329,10 @@ END;
 $_$;
 
 
-ALTER FUNCTION "api"."get_latest_source_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") OWNER TO "postgres";
+ALTER FUNCTION "api"."get_latest_source_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "sort_by" "text" DEFAULT 'modified_at'::"text", "sort_direction" "text" DEFAULT 'desc'::"text", "sample_origin_filter" "text" DEFAULT 'all'::"text", "sample_publication_status_filter" "text" DEFAULT 'all'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
+CREATE OR REPLACE FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "sort_by" "text" DEFAULT 'modified_at'::"text", "sort_direction" "text" DEFAULT 'desc'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
     LANGUAGE "plpgsql"
     SET "search_path" TO 'api', 'private', 'public', 'util', 'extensions', 'extensions', 'pg_temp'
     AS $_$
@@ -19442,7 +19357,7 @@ BEGIN
     WITH visible_keys AS (
       SELECT u.id, u.version, u.created_at, u.modified_at, u.team_id
       FROM public.unitgroups u
-      WHERE ((((data_source = 'tg' AND u.state_code = 100)) OR api.sample_library_row_matches_v1(data_source, u.state_code, u.user_id, u.id, u.version, '{}'::jsonb, false)) OR (data_source = 'ex' AND u.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
+      WHERE ((data_source = 'tg' AND u.state_code = 100) OR (data_source = 'ex' AND u.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
         AND (team_id_filter IS NULL OR u.team_id = team_id_filter)
       UNION ALL
       SELECT u.id, u.version, u.created_at, u.modified_at, u.team_id
@@ -19478,18 +19393,6 @@ BEGIN
     counted_keys AS (
       SELECT latest_keys.*, count(*) OVER()::bigint AS total_count
       FROM latest_keys
-      WHERE data_source <> 'sl' OR EXISTS (
-        SELECT 1 FROM public.unitgroups sample_scope_row
-        WHERE sample_scope_row.id = latest_keys.id
-          AND sample_scope_row.version = latest_keys.version
-          AND api.sample_library_row_matches_v1(
-            data_source, sample_scope_row.state_code, sample_scope_row.user_id,
-            sample_scope_row.id, sample_scope_row.version, jsonb_build_object(
-              '__sampleLibraryOrigin', coalesce(sample_origin_filter, 'all'),
-              '__sampleLibraryPublicationStatus', coalesce(sample_publication_status_filter, 'all')
-            ), false
-          )
-      )
     ),
     paged_keys AS (
       SELECT counted_keys.*
@@ -19552,7 +19455,7 @@ END;
 $_$;
 
 
-ALTER FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") OWNER TO "postgres";
+ALTER FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "api"."get_lca_release_artifact_download"("p_artifact_id" "uuid") RETURNS "jsonb"
@@ -27245,14 +27148,21 @@ COMMENT ON FUNCTION "api"."qry_root_review_reference_progress_v2"("p_root_review
 
 
 
-CREATE OR REPLACE FUNCTION "api"."qry_sample_library_process_publications_v1"("p_items" "jsonb") RETURNS "jsonb"
+CREATE OR REPLACE FUNCTION "api"."qry_sample_library_datasets_v1"("p_dataset_type" "text", "p_origin" "text" DEFAULT 'all'::"text", "p_publication_status" "text" DEFAULT 'all'::"text", "p_page_size" integer DEFAULT 20, "p_page_current" integer DEFAULT 1) RETURNS "jsonb"
     LANGUAGE "plpgsql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $_$
 declare
+  v_actor uuid := auth.uid();
+  v_dataset_type text := lower(coalesce(p_dataset_type, ''));
+  v_origin text := lower(coalesce(p_origin, 'all'));
+  v_publication_status text := lower(coalesce(p_publication_status, 'all'));
+  v_table_name text;
+  v_page_size integer := least(greatest(coalesce(p_page_size, 20), 1), 100);
+  v_page_current integer := greatest(coalesce(p_page_current, 1), 1);
   v_result jsonb;
 begin
-  if auth.uid() is null then
+  if v_actor is null then
     return jsonb_build_object('ok', false, 'code', 'auth_required', 'status', 401,
       'message', 'Authentication required');
   end if;
@@ -27260,41 +27170,105 @@ begin
     return jsonb_build_object('ok', false, 'code', 'not_data_product_manager',
       'status', 403, 'message', 'Data product manager role is required');
   end if;
-  if jsonb_typeof(p_items) is distinct from 'array' or jsonb_array_length(p_items) > 100 then
-    return jsonb_build_object('ok', false, 'code', 'invalid_items', 'status', 400,
-      'message', 'items must be an array with at most 100 Process versions');
+
+  v_table_name := case v_dataset_type
+    when 'lifecyclemodels' then 'lifecyclemodels'
+    when 'processes' then 'processes'
+    when 'flows' then 'flows'
+    when 'flowproperties' then 'flowproperties'
+    when 'unitgroups' then 'unitgroups'
+    when 'sources' then 'sources'
+    when 'contacts' then 'contacts'
+    else null
+  end;
+
+  if v_table_name is null then
+    return jsonb_build_object('ok', false, 'code', 'invalid_dataset_type', 'status', 400,
+      'message', 'Unsupported sample-library dataset type');
+  end if;
+  if v_origin not in ('all', 'literature', 'enterprise') then
+    return jsonb_build_object('ok', false, 'code', 'invalid_origin', 'status', 400,
+      'message', 'origin must be all, literature, or enterprise');
+  end if;
+  if v_publication_status not in ('all', 'published', 'unpublished') then
+    return jsonb_build_object('ok', false, 'code', 'invalid_publication_status', 'status', 400,
+      'message', 'publication status must be all, published, or unpublished');
+  end if;
+  if v_dataset_type <> 'processes' and v_publication_status <> 'all' then
+    return jsonb_build_object('ok', false, 'code', 'publication_status_not_supported',
+      'status', 400, 'message', 'Publication status applies only to Processes');
   end if;
 
-  select jsonb_build_object(
-    'ok', true,
-    'data', coalesce(jsonb_agg(jsonb_build_object(
-      'id', requested.id,
-      'version', requested.version,
-      'published', publication.process_id is not null,
-      'publishedAt', publication.published_at
-    ) order by requested.ordinality), '[]'::jsonb)
-  )
+  execute format($sql$
+    with latest as (
+      select distinct on (source.id)
+        source.id,
+        source.version,
+        source.user_id,
+        coalesce(source.json, source.json_ordered::jsonb) as content,
+        source.modified_at
+      from public.%I as source
+      where source.state_code = 100
+      order by source.id, source.version desc, source.modified_at desc nulls last
+    ), filtered as (
+      select
+        latest.id,
+        latest.version,
+        latest.content,
+        latest.modified_at,
+        case when latest.user_id is null then 'literature' else 'enterprise' end as origin,
+        publication.published_at
+      from latest
+      left join private.sample_library_process_publications as publication
+        on $3 = 'processes'
+       and publication.process_id = latest.id
+       and publication.process_version = latest.version
+      where ($4 = 'all'
+        or ($4 = 'literature' and latest.user_id is null)
+        or ($4 = 'enterprise' and latest.user_id is not null))
+        and ($3 <> 'processes'
+          or $5 = 'all'
+          or ($5 = 'published' and publication.process_id is not null)
+          or ($5 = 'unpublished' and publication.process_id is null))
+    ), page as (
+      select *
+      from filtered
+      order by modified_at desc nulls last, id, version desc
+      limit $1 offset $2
+    )
+    select jsonb_build_object(
+      'ok', true,
+      'data', jsonb_build_object(
+        'datasetType', $3,
+        'page', $6,
+        'pageSize', $1,
+        'total', (select count(*) from filtered),
+        'items', coalesce((
+          select jsonb_agg(jsonb_build_object(
+            'id', page.id,
+            'version', page.version,
+            'json', page.content,
+            'modifiedAt', page.modified_at,
+            'origin', page.origin,
+            'published', case when $3 = 'processes'
+              then page.published_at is not null else null end,
+            'publishedAt', page.published_at
+          ) order by page.modified_at desc nulls last, page.id, page.version desc)
+          from page
+        ), '[]'::jsonb)
+      )
+    )
+  $sql$, v_table_name)
   into v_result
-  from (
-    select
-      (item.value->>'id')::uuid as id,
-      (item.value->>'version')::character(9) as version,
-      item.ordinality
-    from jsonb_array_elements(p_items) with ordinality as item(value, ordinality)
-    where jsonb_typeof(item.value) = 'object'
-      and item.value->>'id' ~* '^[0-9a-f-]{36}$'
-      and item.value->>'version' ~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'
-  ) requested
-  left join private.sample_library_process_publications publication
-    on publication.process_id = requested.id
-   and publication.process_version = requested.version;
+  using v_page_size, (v_page_current - 1) * v_page_size,
+    v_dataset_type, v_origin, v_publication_status, v_page_current;
 
   return v_result;
 end;
 $_$;
 
 
-ALTER FUNCTION "api"."qry_sample_library_process_publications_v1"("p_items" "jsonb") OWNER TO "postgres";
+ALTER FUNCTION "api"."qry_sample_library_datasets_v1"("p_dataset_type" "text", "p_origin" "text", "p_publication_status" "text", "p_page_size" integer, "p_page_current" integer) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "api"."qry_system_find_member_candidate_by_email"("p_email" "text") RETURNS TABLE("id" "uuid", "email" "text", "display_name" "text")
@@ -27806,47 +27780,6 @@ $$;
 ALTER FUNCTION "api"."qry_team_list"("p_mode" "text", "p_keyword" "text", "p_page" integer, "p_page_size" integer) OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "api"."sample_library_row_matches_v1"("p_data_source" "text", "p_state_code" integer, "p_user_id" "uuid", "p_id" "uuid", "p_version" character, "p_filter" "jsonb", "p_is_process" boolean DEFAULT false) RETURNS boolean
-    LANGUAGE "sql" STABLE SECURITY DEFINER
-    SET "search_path" TO ''
-    AS $$
-  select lower(coalesce(p_data_source, '')) = 'sl'
-    and auth.uid() is not null
-    and private.lca_release_is_manager()
-    and p_state_code = 100
-    and (
-      coalesce(p_filter->>'__sampleLibraryOrigin', 'all') = 'all'
-      or (p_filter->>'__sampleLibraryOrigin' = 'literature' and p_user_id is null)
-      or (p_filter->>'__sampleLibraryOrigin' = 'enterprise' and p_user_id is not null)
-    )
-    and (
-      not p_is_process
-      or coalesce(p_filter->>'__sampleLibraryPublicationStatus', 'all') = 'all'
-      or (
-        p_filter->>'__sampleLibraryPublicationStatus' = 'published'
-        and exists (
-          select 1
-          from private.sample_library_process_publications publication
-          where publication.process_id = p_id
-            and publication.process_version = p_version
-        )
-      )
-      or (
-        p_filter->>'__sampleLibraryPublicationStatus' = 'unpublished'
-        and not exists (
-          select 1
-          from private.sample_library_process_publications publication
-          where publication.process_id = p_id
-            and publication.process_version = p_version
-        )
-      )
-    );
-$$;
-
-
-ALTER FUNCTION "api"."sample_library_row_matches_v1"("p_data_source" "text", "p_state_code" integer, "p_user_id" "uuid", "p_id" "uuid", "p_version" character, "p_filter" "jsonb", "p_is_process" boolean) OWNER TO "postgres";
-
-
 CREATE OR REPLACE FUNCTION "api"."search_contacts"("query_text" "text", "filter_condition" "jsonb" DEFAULT '{}'::"jsonb", "page_size" integer DEFAULT 10, "page_current" integer DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer) RETURNS TABLE("rank" bigint, "id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -27903,7 +27836,7 @@ $$;
 ALTER FUNCTION "api"."search_contacts_latest"("query_text" "text", "filter_condition" "jsonb", "page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer) OWNER TO "api_internal_executor";
 
 
-CREATE OR REPLACE FUNCTION "api"."search_dataset_json_uuid_mentions"("p_uuid" "uuid", "p_source_entity_kinds" "text"[] DEFAULT NULL::"text"[], "p_data_source" "text" DEFAULT 'tg'::"text", "p_this_user_id" "text" DEFAULT ''::"text", "p_team_id_filter" "uuid" DEFAULT NULL::"uuid", "p_state_code_filter" integer DEFAULT NULL::integer, "p_limit" integer DEFAULT 20, "p_sample_origin_filter" "text" DEFAULT 'all'::"text", "p_sample_publication_status_filter" "text" DEFAULT 'all'::"text") RETURNS TABLE("rank" bigint, "source_entity_kind" "text", "source_id" "uuid", "source_version" character, "source_name" "text", "source_modified_at" timestamp with time zone, "source_team_id" "uuid", "source_json" "jsonb", "matched_by" "text", "matched_entity_table" "text")
+CREATE OR REPLACE FUNCTION "api"."search_dataset_json_uuid_mentions"("p_uuid" "uuid", "p_source_entity_kinds" "text"[] DEFAULT NULL::"text"[], "p_data_source" "text" DEFAULT 'tg'::"text", "p_this_user_id" "text" DEFAULT ''::"text", "p_team_id_filter" "uuid" DEFAULT NULL::"uuid", "p_state_code_filter" integer DEFAULT NULL::integer, "p_limit" integer DEFAULT 20) RETURNS TABLE("rank" bigint, "source_entity_kind" "text", "source_id" "uuid", "source_version" character, "source_name" "text", "source_modified_at" timestamp with time zone, "source_team_id" "uuid", "source_json" "jsonb", "matched_by" "text", "matched_entity_table" "text")
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'api', 'private', 'public', 'util', 'extensions', 'extensions', 'pg_temp'
     SET "statement_timeout" TO '20s'
@@ -27918,15 +27851,13 @@ begin
       p_this_user_id,
       p_team_id_filter,
       p_state_code_filter,
-      p_limit,
-      p_sample_origin_filter,
-      p_sample_publication_status_filter
+      p_limit
     );
 end;
 $$;
 
 
-ALTER FUNCTION "api"."search_dataset_json_uuid_mentions"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer, "p_sample_origin_filter" "text", "p_sample_publication_status_filter" "text") OWNER TO "api_internal_executor";
+ALTER FUNCTION "api"."search_dataset_json_uuid_mentions"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer) OWNER TO "api_internal_executor";
 
 
 CREATE OR REPLACE FUNCTION "api"."search_flowproperties"("query_text" "text", "filter_condition" "jsonb" DEFAULT '{}'::"jsonb", "page_size" integer DEFAULT 10, "page_current" integer DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer) RETURNS TABLE("rank" bigint, "id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
@@ -49179,7 +49110,7 @@ begin
       from public.flows f
       join fused on fused.id = f.id
       where (
-        ((((data_source = 'tg' AND f.state_code = 100) OR api.sample_library_row_matches_v1(data_source, f.state_code, f.user_id, f.id, f.version, '{}'::jsonb, false)) OR (data_source = 'ex' AND f.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)))
+        (((data_source = 'tg' AND f.state_code = 100) OR (data_source = 'ex' AND f.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)))
         or (data_source = 'co' and f.state_code = 200)
         or (data_source = 'my' and f.user_id = auth.uid())
         or (
@@ -49209,16 +49140,6 @@ begin
     counted_rows as (
       select latest_rows.*, count(*) over()::bigint as total_count
       from latest_rows
-    where data_source <> 'sl' or exists (
-      select 1 from public.flows sample_scope_row
-      where sample_scope_row.id = latest_rows.id
-        and sample_scope_row.version = latest_rows.version
-        and api.sample_library_row_matches_v1(
-          data_source, sample_scope_row.state_code, sample_scope_row.user_id,
-          sample_scope_row.id, sample_scope_row.version, filter_condition_jsonb,
-          false
-        )
-    )
     )
     select
       counted_rows.id,
@@ -49303,7 +49224,7 @@ begin
       from public.lifecyclemodels l
       join fused on fused.id = l.id
       where (
-        ((((data_source = 'tg' AND l.state_code = 100) OR api.sample_library_row_matches_v1(data_source, l.state_code, l.user_id, l.id, l.version, '{}'::jsonb, false)) OR (data_source = 'ex' AND l.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)))
+        (((data_source = 'tg' AND l.state_code = 100) OR (data_source = 'ex' AND l.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)))
         or (data_source = 'co' and l.state_code = 200)
         or (data_source = 'my' and l.user_id = auth.uid())
         or (
@@ -49333,16 +49254,6 @@ begin
     counted_rows as (
       select latest_rows.*, count(*) over()::bigint as total_count
       from latest_rows
-    where data_source <> 'sl' or exists (
-      select 1 from public.lifecyclemodels sample_scope_row
-      where sample_scope_row.id = latest_rows.id
-        and sample_scope_row.version = latest_rows.version
-        and api.sample_library_row_matches_v1(
-          data_source, sample_scope_row.state_code, sample_scope_row.user_id,
-          sample_scope_row.id, sample_scope_row.version, filter_condition_jsonb,
-          false
-        )
-    )
     )
     select
       counted_rows.id,
@@ -49428,7 +49339,7 @@ begin
       from public.processes p
       join fused on fused.id = p.id
       where (
-        ((((data_source = 'tg' AND p.state_code = 100) OR api.sample_library_row_matches_v1(data_source, p.state_code, p.user_id, p.id, p.version, '{}'::jsonb, true)) OR (data_source = 'ex' AND p.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)))
+        (((data_source = 'tg' AND p.state_code = 100) OR (data_source = 'ex' AND p.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)))
         or (data_source = 'co' and p.state_code = 200)
         or (data_source = 'my' and p.user_id = auth.uid())
         or (
@@ -49459,16 +49370,6 @@ begin
     counted_rows as (
       select latest_rows.*, count(*) over()::bigint as total_count
       from latest_rows
-    where data_source <> 'sl' or exists (
-      select 1 from public.processes sample_scope_row
-      where sample_scope_row.id = latest_rows.id
-        and sample_scope_row.version = latest_rows.version
-        and api.sample_library_row_matches_v1(
-          data_source, sample_scope_row.state_code, sample_scope_row.user_id,
-          sample_scope_row.id, sample_scope_row.version, filter_condition_jsonb,
-          true
-        )
-    )
     )
     select
       counted_rows.id,
@@ -49547,8 +49448,6 @@ begin
 
   if normalized_data_source = 'tg' then
     visibility_clause := 'd.state_code = 100 and ($5::uuid is null or d.team_id = $5)';
-  elsif normalized_data_source = 'sl' then
-    visibility_clause := 'api.sample_library_row_matches_v1($3, d.state_code, d.user_id, d.id, d.version, ''{}''::jsonb, false)';
   elsif normalized_data_source = 'ex' then
     if auth.uid() is null then return; end if;
     visibility_clause := 'd.state_code = -1 and ($5::uuid is null or d.team_id = $5)';
@@ -49569,8 +49468,8 @@ begin
   end if;
 
   json_filter_clause := case
-    when private.sample_library_business_filter_v1(filter_condition_jsonb) = '{}'::jsonb then ''
-    else 'and d.json @> private.sample_library_business_filter_v1($2)'
+    when filter_condition_jsonb = '{}'::jsonb then ''
+    else 'and d.json @> $2'
   end;
   text_match_clause := case
     when cardinality(escaped_query_terms) = 0 then 'false'
@@ -49652,15 +49551,6 @@ begin
       counted_rows as (
         select latest_rows.*, count(*) over()::bigint as total_count
         from latest_rows
-        where $3 <> 'sl' or exists (
-          select 1 from %1$s sample_scope_row
-          where sample_scope_row.id = latest_rows.id
-            and sample_scope_row.version = latest_rows.version
-            and api.sample_library_row_matches_v1(
-              $3, sample_scope_row.state_code, sample_scope_row.user_id,
-              sample_scope_row.id, sample_scope_row.version, $2, false
-            )
-        )
       )
       select
         counted_rows.id,
@@ -61649,19 +61539,6 @@ $$;
 ALTER FUNCTION "private"."review_v2_kind_guard"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "private"."sample_library_business_filter_v1"("p_filter" "jsonb") RETURNS "jsonb"
-    LANGUAGE "sql" IMMUTABLE
-    SET "search_path" TO ''
-    AS $$
-  select coalesce(p_filter, '{}'::jsonb)
-    - '__sampleLibraryOrigin'
-    - '__sampleLibraryPublicationStatus';
-$$;
-
-
-ALTER FUNCTION "private"."sample_library_business_filter_v1"("p_filter" "jsonb") OWNER TO "postgres";
-
-
 CREATE OR REPLACE FUNCTION "private"."sample_library_process_publications_immutable_v1"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     SET "search_path" TO ''
@@ -62061,7 +61938,7 @@ $_$;
 ALTER FUNCTION "private"."save_lifecycle_model_bundle"("p_plan" "jsonb") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[] DEFAULT NULL::"text"[], "p_data_source" "text" DEFAULT 'tg'::"text", "p_this_user_id" "text" DEFAULT ''::"text", "p_team_id_filter" "uuid" DEFAULT NULL::"uuid", "p_state_code_filter" integer DEFAULT NULL::integer, "p_limit" integer DEFAULT 20, "p_sample_origin_filter" "text" DEFAULT 'all'::"text", "p_sample_publication_status_filter" "text" DEFAULT 'all'::"text") RETURNS TABLE("rank" bigint, "source_entity_kind" "text", "source_id" "uuid", "source_version" character, "source_name" "text", "source_modified_at" timestamp with time zone, "source_team_id" "uuid", "source_json" "jsonb", "matched_by" "text", "matched_entity_table" "text")
+CREATE OR REPLACE FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[] DEFAULT NULL::"text"[], "p_data_source" "text" DEFAULT 'tg'::"text", "p_this_user_id" "text" DEFAULT ''::"text", "p_team_id_filter" "uuid" DEFAULT NULL::"uuid", "p_state_code_filter" integer DEFAULT NULL::integer, "p_limit" integer DEFAULT 20) RETURNS TABLE("rank" bigint, "source_entity_kind" "text", "source_id" "uuid", "source_version" character, "source_name" "text", "source_modified_at" timestamp with time zone, "source_team_id" "uuid", "source_json" "jsonb", "matched_by" "text", "matched_entity_table" "text")
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'private', 'api', 'public', 'util', 'extensions', 'extensions', 'pg_temp'
     SET "statement_timeout" TO '20s'
@@ -62076,7 +61953,6 @@ declare
   normalized_source_entity_kinds text[];
   branches text[] := array[]::text[];
   v_sql text;
-  sample_filter jsonb;
 begin
   normalized_data_source := coalesce(nullif(lower(btrim(p_data_source)), ''), 'tg');
   effective_user_id := private.dataset_search_effective_user_id(p_this_user_id);
@@ -62084,10 +61960,6 @@ begin
   normalized_limit := least(greatest(coalesce(p_limit, 20), 1), 50);
   per_entity_limit := normalized_limit;
   uuid_pattern := '%' || p_uuid::text || '%';
-  sample_filter := jsonb_build_object(
-    '__sampleLibraryOrigin', coalesce(p_sample_origin_filter, 'all'),
-    '__sampleLibraryPublicationStatus', coalesce(p_sample_publication_status_filter, 'all')
-  );
 
   if p_source_entity_kinds is not null then
     select array_agg(distinct normalized_kind order by normalized_kind)
@@ -62138,7 +62010,7 @@ begin
           'public.processes'::text as matched_entity_table
         from public.processes d
         where (
-            (((($1 = 'tg' AND d.state_code = 100) OR api.sample_library_row_matches_v1($1, d.state_code, d.user_id, d.id, d.version, $9, true)) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
+            ((($1 = 'tg' AND d.state_code = 100) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
             or ($1 = 'co' and d.state_code = 200 and ($3 is null or d.team_id = $3))
             or ($1 = 'my' and $2 is not null and d.user_id = $2 and ($4 is null or d.state_code = $4) and d.state_code is distinct from 120)
             or ($1 = 'te' and $3 is not null and $5 and d.team_id = $3 and ($4 is null or d.state_code = $4) and d.state_code is distinct from 120)
@@ -62169,7 +62041,7 @@ begin
           'public.flows'::text as matched_entity_table
         from public.flows d
         where (
-            (((($1 = 'tg' AND d.state_code = 100) OR api.sample_library_row_matches_v1($1, d.state_code, d.user_id, d.id, d.version, $9, false)) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
+            ((($1 = 'tg' AND d.state_code = 100) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
             or ($1 = 'co' and d.state_code = 200 and ($3 is null or d.team_id = $3))
             or ($1 = 'my' and $2 is not null and d.user_id = $2 and ($4 is null or d.state_code = $4))
             or ($1 = 'te' and $3 is not null and $5 and d.team_id = $3 and ($4 is null or d.state_code = $4))
@@ -62200,7 +62072,7 @@ begin
           'public.lifecyclemodels'::text as matched_entity_table
         from public.lifecyclemodels d
         where (
-            (((($1 = 'tg' AND d.state_code = 100) OR api.sample_library_row_matches_v1($1, d.state_code, d.user_id, d.id, d.version, $9, false)) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
+            ((($1 = 'tg' AND d.state_code = 100) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
             or ($1 = 'co' and d.state_code = 200 and ($3 is null or d.team_id = $3))
             or ($1 = 'my' and $2 is not null and d.user_id = $2 and ($4 is null or d.state_code = $4))
             or ($1 = 'te' and $3 is not null and $5 and d.team_id = $3 and ($4 is null or d.state_code = $4))
@@ -62231,7 +62103,7 @@ begin
           'public.sources'::text as matched_entity_table
         from public.sources d
         where (
-            (((($1 = 'tg' AND d.state_code = 100) OR api.sample_library_row_matches_v1($1, d.state_code, d.user_id, d.id, d.version, $9, false)) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
+            ((($1 = 'tg' AND d.state_code = 100) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
             or ($1 = 'co' and d.state_code = 200 and ($3 is null or d.team_id = $3))
             or ($1 = 'my' and $2 is not null and d.user_id = $2 and ($4 is null or d.state_code = $4))
             or ($1 = 'te' and $3 is not null and $5 and d.team_id = $3 and ($4 is null or d.state_code = $4))
@@ -62262,7 +62134,7 @@ begin
           'public.contacts'::text as matched_entity_table
         from public.contacts d
         where (
-            (((($1 = 'tg' AND d.state_code = 100) OR api.sample_library_row_matches_v1($1, d.state_code, d.user_id, d.id, d.version, $9, false)) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
+            ((($1 = 'tg' AND d.state_code = 100) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
             or ($1 = 'co' and d.state_code = 200 and ($3 is null or d.team_id = $3))
             or ($1 = 'my' and $2 is not null and d.user_id = $2 and ($4 is null or d.state_code = $4))
             or ($1 = 'te' and $3 is not null and $5 and d.team_id = $3 and ($4 is null or d.state_code = $4))
@@ -62293,7 +62165,7 @@ begin
           'public.unitgroups'::text as matched_entity_table
         from public.unitgroups d
         where (
-            (((($1 = 'tg' AND d.state_code = 100) OR api.sample_library_row_matches_v1($1, d.state_code, d.user_id, d.id, d.version, $9, false)) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
+            ((($1 = 'tg' AND d.state_code = 100) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
             or ($1 = 'co' and d.state_code = 200 and ($3 is null or d.team_id = $3))
             or ($1 = 'my' and $2 is not null and d.user_id = $2 and ($4 is null or d.state_code = $4))
             or ($1 = 'te' and $3 is not null and $5 and d.team_id = $3 and ($4 is null or d.state_code = $4))
@@ -62324,7 +62196,7 @@ begin
           'public.flowproperties'::text as matched_entity_table
         from public.flowproperties d
         where (
-            (((($1 = 'tg' AND d.state_code = 100) OR api.sample_library_row_matches_v1($1, d.state_code, d.user_id, d.id, d.version, $9, false)) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
+            ((($1 = 'tg' AND d.state_code = 100) OR ($1 = 'ex' AND d.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($3 is null or d.team_id = $3))
             or ($1 = 'co' and d.state_code = 200 and ($3 is null or d.team_id = $3))
             or ($1 = 'my' and $2 is not null and d.user_id = $2 and ($4 is null or d.state_code = $4))
             or ($1 = 'te' and $3 is not null and $5 and d.team_id = $3 and ($4 is null or d.state_code = $4))
@@ -62366,12 +62238,12 @@ begin
 
   return query execute v_sql
     using normalized_data_source, effective_user_id, p_team_id_filter, p_state_code_filter,
-          can_read_team_filter, uuid_pattern, normalized_limit, per_entity_limit, sample_filter;
+          can_read_team_filter, uuid_pattern, normalized_limit, per_entity_limit;
 end;
 $_$;
 
 
-ALTER FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer, "p_sample_origin_filter" "text", "p_sample_publication_status_filter" "text") OWNER TO "postgres";
+ALTER FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "private"."search_flows_latest_impl"("query_text" "text", "filter_condition" "jsonb" DEFAULT '{}'::"jsonb", "page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "query_terms" "text"[] DEFAULT NULL::"text"[]) RETURNS TABLE("rank" bigint, "id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
@@ -62441,9 +62313,9 @@ begin
         select f.id, 1.0::double precision as search_score
         from public.flows f
         where f.id = exact_query_id
-          and f.json @> private.sample_library_business_filter_v1(filter_condition_jsonb)
+          and f.json @> filter_condition_jsonb
           and (
-            ((((normalized_data_source = 'tg' AND f.state_code = 100) OR api.sample_library_row_matches_v1(normalized_data_source, f.state_code, f.user_id, f.id, f.version, '{}'::jsonb, false)) OR (normalized_data_source = 'ex' AND f.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or f.team_id = team_id_filter))
+            (((normalized_data_source = 'tg' AND f.state_code = 100) OR (normalized_data_source = 'ex' AND f.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or f.team_id = team_id_filter))
             or (normalized_data_source = 'co' and f.state_code = 200 and (team_id_filter is null or f.team_id = team_id_filter))
             or (normalized_data_source = 'my' and effective_user_id is not null and f.user_id = effective_user_id and (state_code_filter is null or f.state_code = state_code_filter))
             or (normalized_data_source = 'te' and team_id_filter is not null and can_read_team_filter and f.team_id = team_id_filter and (state_code_filter is null or f.state_code = state_code_filter))
@@ -62505,7 +62377,7 @@ begin
           from public.flows f2
           where f2.id = matched_ids.id
             and (
-              ((((normalized_data_source = 'tg' AND f2.state_code = 100) OR api.sample_library_row_matches_v1(normalized_data_source, f2.state_code, f2.user_id, f2.id, f2.version, filter_condition_jsonb, false)) OR (normalized_data_source = 'ex' AND f2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or f2.team_id = team_id_filter))
+              (((normalized_data_source = 'tg' AND f2.state_code = 100) OR (normalized_data_source = 'ex' AND f2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or f2.team_id = team_id_filter))
               or (normalized_data_source = 'co' and f2.state_code = 200 and (team_id_filter is null or f2.team_id = team_id_filter))
               or (normalized_data_source = 'my' and effective_user_id is not null and f2.user_id = effective_user_id and (state_code_filter is null or f2.state_code = state_code_filter))
               or (normalized_data_source = 'te' and team_id_filter is not null and can_read_team_filter and f2.team_id = team_id_filter and (state_code_filter is null or f2.state_code = state_code_filter))
@@ -62527,14 +62399,13 @@ begin
   end if;
 
   json_filter_clause := case
-    when private.sample_library_business_filter_v1(filter_condition_jsonb) = '{}'::jsonb then ''
-    else 'and f.json @> private.sample_library_business_filter_v1($2)'
+    when filter_condition_jsonb = '{}'::jsonb then ''
+    else 'and f.json @> $2'
   end;
 
   v_sql := format($sql$
     with text_matches as materialized (
       select f.id,
-             f.version,
              f.json,
              f.state_code,
              f.team_id,
@@ -62547,7 +62418,7 @@ begin
       select f.id, max(f.search_score) as search_score
       from text_matches f
       where (
-          (((($5 = 'tg' AND f.state_code = 100) OR api.sample_library_row_matches_v1($5, f.state_code, f.user_id, f.id, f.version, '{}'::jsonb, false)) OR ($5 = 'ex' AND f.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or f.team_id = $7))
+          ((($5 = 'tg' AND f.state_code = 100) OR ($5 = 'ex' AND f.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or f.team_id = $7))
           or ($5 = 'co' and f.state_code = 200 and ($7 is null or f.team_id = $7))
           or ($5 = 'my' and $6 is not null and f.user_id = $6 and ($8 is null or f.state_code = $8))
           or ($5 = 'te' and $7 is not null and $9 and f.team_id = $7 and ($8 is null or f.state_code = $8))
@@ -62610,7 +62481,7 @@ begin
         from public.flows f2
         where f2.id = matched_ids.id
           and (
-            (((($5 = 'tg' AND f2.state_code = 100) OR api.sample_library_row_matches_v1($5, f2.state_code, f2.user_id, f2.id, f2.version, $2, false)) OR ($5 = 'ex' AND f2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or f2.team_id = $7))
+            ((($5 = 'tg' AND f2.state_code = 100) OR ($5 = 'ex' AND f2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or f2.team_id = $7))
             or ($5 = 'co' and f2.state_code = 200 and ($7 is null or f2.team_id = $7))
             or ($5 = 'my' and $6 is not null and f2.user_id = $6 and ($8 is null or f2.state_code = $8))
             or ($5 = 'te' and $7 is not null and $9 and f2.team_id = $7 and ($8 is null or f2.state_code = $8))
@@ -62688,9 +62559,9 @@ begin
         select l.id, 1.0::double precision as search_score
         from public.lifecyclemodels l
         where l.id = exact_query_id
-          and l.json @> private.sample_library_business_filter_v1(filter_condition_jsonb)
+          and l.json @> filter_condition_jsonb
           and (
-            ((((normalized_data_source = 'tg' AND l.state_code = 100) OR api.sample_library_row_matches_v1(normalized_data_source, l.state_code, l.user_id, l.id, l.version, '{}'::jsonb, false)) OR (normalized_data_source = 'ex' AND l.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or l.team_id = team_id_filter))
+            (((normalized_data_source = 'tg' AND l.state_code = 100) OR (normalized_data_source = 'ex' AND l.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or l.team_id = team_id_filter))
             or (normalized_data_source = 'co' and l.state_code = 200 and (team_id_filter is null or l.team_id = team_id_filter))
             or (normalized_data_source = 'my' and effective_user_id is not null and l.user_id = effective_user_id and (state_code_filter is null or l.state_code = state_code_filter))
             or (normalized_data_source = 'te' and team_id_filter is not null and can_read_team_filter and l.team_id = team_id_filter and (state_code_filter is null or l.state_code = state_code_filter))
@@ -62705,7 +62576,7 @@ begin
           from public.lifecyclemodels l2
           where l2.id = matched_ids.id
             and (
-              ((((normalized_data_source = 'tg' AND l2.state_code = 100) OR api.sample_library_row_matches_v1(normalized_data_source, l2.state_code, l2.user_id, l2.id, l2.version, filter_condition_jsonb, false)) OR (normalized_data_source = 'ex' AND l2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or l2.team_id = team_id_filter))
+              (((normalized_data_source = 'tg' AND l2.state_code = 100) OR (normalized_data_source = 'ex' AND l2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or l2.team_id = team_id_filter))
               or (normalized_data_source = 'co' and l2.state_code = 200 and (team_id_filter is null or l2.team_id = team_id_filter))
               or (normalized_data_source = 'my' and effective_user_id is not null and l2.user_id = effective_user_id and (state_code_filter is null or l2.state_code = state_code_filter))
               or (normalized_data_source = 'te' and team_id_filter is not null and can_read_team_filter and l2.team_id = team_id_filter and (state_code_filter is null or l2.state_code = state_code_filter))
@@ -62727,14 +62598,13 @@ begin
   end if;
 
   json_filter_clause := case
-    when private.sample_library_business_filter_v1(filter_condition_jsonb) = '{}'::jsonb then ''
-    else 'and l.json @> private.sample_library_business_filter_v1($2)'
+    when filter_condition_jsonb = '{}'::jsonb then ''
+    else 'and l.json @> $2'
   end;
 
   v_sql := format($sql$
     with text_matches as materialized (
       select l.id,
-             l.version,
              l.json,
              l.state_code,
              l.team_id,
@@ -62747,7 +62617,7 @@ begin
       select l.id, max(l.search_score) as search_score
       from text_matches l
       where (
-          (((($5 = 'tg' AND l.state_code = 100) OR api.sample_library_row_matches_v1($5, l.state_code, l.user_id, l.id, l.version, '{}'::jsonb, false)) OR ($5 = 'ex' AND l.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or l.team_id = $7))
+          ((($5 = 'tg' AND l.state_code = 100) OR ($5 = 'ex' AND l.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or l.team_id = $7))
           or ($5 = 'co' and l.state_code = 200 and ($7 is null or l.team_id = $7))
           or ($5 = 'my' and $6 is not null and l.user_id = $6 and ($8 is null or l.state_code = $8))
           or ($5 = 'te' and $7 is not null and $9 and l.team_id = $7 and ($8 is null or l.state_code = $8))
@@ -62763,7 +62633,7 @@ begin
         from public.lifecyclemodels l2
         where l2.id = matched_ids.id
           and (
-            (((($5 = 'tg' AND l2.state_code = 100) OR api.sample_library_row_matches_v1($5, l2.state_code, l2.user_id, l2.id, l2.version, $2, false)) OR ($5 = 'ex' AND l2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or l2.team_id = $7))
+            ((($5 = 'tg' AND l2.state_code = 100) OR ($5 = 'ex' AND l2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or l2.team_id = $7))
             or ($5 = 'co' and l2.state_code = 200 and ($7 is null or l2.team_id = $7))
             or ($5 = 'my' and $6 is not null and l2.user_id = $6 and ($8 is null or l2.state_code = $8))
             or ($5 = 'te' and $7 is not null and $9 and l2.team_id = $7 and ($8 is null or l2.state_code = $8))
@@ -63003,9 +62873,9 @@ begin
         select p.id, 1.0::double precision as search_score
         from public.processes p
         where p.id = exact_query_id
-          and p.json @> private.sample_library_business_filter_v1(filter_condition_jsonb)
+          and p.json @> filter_condition_jsonb
           and (
-            ((((normalized_data_source = 'tg' AND p.state_code = 100) OR api.sample_library_row_matches_v1(normalized_data_source, p.state_code, p.user_id, p.id, p.version, '{}'::jsonb, true)) OR (normalized_data_source = 'ex' AND p.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or p.team_id = team_id_filter))
+            (((normalized_data_source = 'tg' AND p.state_code = 100) OR (normalized_data_source = 'ex' AND p.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or p.team_id = team_id_filter))
             or (normalized_data_source = 'co' and p.state_code = 200 and (team_id_filter is null or p.team_id = team_id_filter))
             or (normalized_data_source = 'my' and effective_user_id is not null and p.user_id = effective_user_id and (state_code_filter is null or p.state_code = state_code_filter) and (not owner_draft_only or (p.state_code = 0)) and p.state_code is distinct from 120)
             or (normalized_data_source = 'te' and team_id_filter is not null and can_read_team_filter and p.team_id = team_id_filter and (state_code_filter is null or p.state_code = state_code_filter) and p.state_code is distinct from 120)
@@ -63024,7 +62894,7 @@ begin
           from public.processes p2
           where p2.id = matched_ids.id
             and (
-              ((((normalized_data_source = 'tg' AND p2.state_code = 100) OR api.sample_library_row_matches_v1(normalized_data_source, p2.state_code, p2.user_id, p2.id, p2.version, filter_condition_jsonb, true)) OR (normalized_data_source = 'ex' AND p2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or p2.team_id = team_id_filter))
+              (((normalized_data_source = 'tg' AND p2.state_code = 100) OR (normalized_data_source = 'ex' AND p2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or p2.team_id = team_id_filter))
               or (normalized_data_source = 'co' and p2.state_code = 200 and (team_id_filter is null or p2.team_id = team_id_filter))
               or (normalized_data_source = 'my' and effective_user_id is not null and p2.user_id = effective_user_id and (state_code_filter is null or p2.state_code = state_code_filter) and (not owner_draft_only or (p2.state_code = 0)) and p2.state_code is distinct from 120)
               or (normalized_data_source = 'te' and team_id_filter is not null and can_read_team_filter and p2.team_id = team_id_filter and (state_code_filter is null or p2.state_code = state_code_filter) and p2.state_code is distinct from 120)
@@ -63046,14 +62916,13 @@ begin
   end if;
 
   json_filter_clause := case
-    when private.sample_library_business_filter_v1(filter_condition_jsonb) = '{}'::jsonb then ''
-    else 'and p.json @> private.sample_library_business_filter_v1($2)'
+    when filter_condition_jsonb = '{}'::jsonb then ''
+    else 'and p.json @> $2'
   end;
 
   v_sql := format($sql$
     with text_matches as materialized (
       select p.id,
-             p.version,
              p.json,
              p.state_code,
              p.team_id,
@@ -63068,7 +62937,7 @@ begin
       select p.id, max(p.search_score) as search_score
       from text_matches p
       where (
-          (((($5 = 'tg' AND p.state_code = 100) OR api.sample_library_row_matches_v1($5, p.state_code, p.user_id, p.id, p.version, '{}'::jsonb, true)) OR ($5 = 'ex' AND p.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or p.team_id = $7))
+          ((($5 = 'tg' AND p.state_code = 100) OR ($5 = 'ex' AND p.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or p.team_id = $7))
           or ($5 = 'co' and p.state_code = 200 and ($7 is null or p.team_id = $7))
           or ($5 = 'my' and $6 is not null and p.user_id = $6 and ($8 is null or p.state_code = $8) and (not $12 or (p.state_code = 0)) and p.state_code is distinct from 120)
           or ($5 = 'te' and $7 is not null and $9 and p.team_id = $7 and ($8 is null or p.state_code = $8) and p.state_code is distinct from 120)
@@ -63088,7 +62957,7 @@ begin
         from public.processes p2
         where p2.id = matched_ids.id
           and (
-            (((($5 = 'tg' AND p2.state_code = 100) OR api.sample_library_row_matches_v1($5, p2.state_code, p2.user_id, p2.id, p2.version, $2, true)) OR ($5 = 'ex' AND p2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or p2.team_id = $7))
+            ((($5 = 'tg' AND p2.state_code = 100) OR ($5 = 'ex' AND p2.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and ($7 is null or p2.team_id = $7))
             or ($5 = 'co' and p2.state_code = 200 and ($7 is null or p2.team_id = $7))
             or ($5 = 'my' and $6 is not null and p2.user_id = $6 and ($8 is null or p2.state_code = $8) and (not $12 or (p2.state_code = 0)) and p2.state_code is distinct from 120)
             or ($5 = 'te' and $7 is not null and $9 and p2.team_id = $7 and ($8 is null or p2.state_code = $8) and p2.state_code is distinct from 120)
@@ -63237,7 +63106,7 @@ begin
   end if;
   filter_condition_jsonb := filter_condition_jsonb - 'asInput';
 
-  if normalized_data_source in ('tg', 'sl') then
+  if normalized_data_source = 'tg' then
     return query
       with candidates as materialized (
         select
@@ -63245,8 +63114,8 @@ begin
           (f.embedding_ft <=> query_embedding_vector) as candidate_distance
         from public.flows f
         where f.embedding_ft is not null
-          and ((normalized_data_source = 'tg' and f.state_code = 100) or api.sample_library_row_matches_v1(normalized_data_source, f.state_code, f.user_id, f.id, f.version, filter_condition_jsonb, false))
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> private.sample_library_business_filter_v1(filter_condition_jsonb))
+          and f.state_code = 100
+          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
           and (
             flow_type is null
             or flow_type = ''
@@ -63286,7 +63155,7 @@ begin
         from public.flows f
         where f.embedding_ft is not null
           and f.state_code = -1
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> private.sample_library_business_filter_v1(filter_condition_jsonb))
+          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
           and (
             flow_type is null
             or flow_type = ''
@@ -63326,7 +63195,7 @@ begin
         from public.flows f
         where f.embedding_ft is not null
           and f.state_code = 200
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> private.sample_library_business_filter_v1(filter_condition_jsonb))
+          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
           and (
             flow_type is null
             or flow_type = ''
@@ -63370,7 +63239,7 @@ begin
         from public.flows f
         where f.embedding_ft is not null
           and f.user_id = effective_user_id
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> private.sample_library_business_filter_v1(filter_condition_jsonb))
+          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
           and (
             flow_type is null
             or flow_type = ''
@@ -63420,7 +63289,7 @@ begin
               and r.team_id = f.team_id
               and r.role::text in ('admin', 'member', 'owner')
           )
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> private.sample_library_business_filter_v1(filter_condition_jsonb))
+          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
           and (
             flow_type is null
             or flow_type = ''
@@ -63754,7 +63623,7 @@ begin
   threshold_distance := 1 - coalesce(match_threshold, 0.5);
   effective_user_id := private.dataset_search_effective_user_id('');
 
-  if normalized_data_source in ('tg', 'sl') then
+  if normalized_data_source = 'tg' then
     return query
       with candidates as materialized (
         select
@@ -63762,8 +63631,8 @@ begin
           (l.embedding_ft <=> query_embedding_vector) as candidate_distance
         from public.lifecyclemodels l
         where l.embedding_ft is not null
-          and ((normalized_data_source = 'tg' and l.state_code = 100) or api.sample_library_row_matches_v1(normalized_data_source, l.state_code, l.user_id, l.id, l.version, filter_condition_jsonb, false))
-          and l.json @> private.sample_library_business_filter_v1(filter_condition_jsonb)
+          and l.state_code = 100
+          and l.json @> filter_condition_jsonb
         order by l.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -63791,7 +63660,7 @@ begin
         from public.lifecyclemodels l
         where l.embedding_ft is not null
           and l.state_code = -1
-          and l.json @> private.sample_library_business_filter_v1(filter_condition_jsonb)
+          and l.json @> filter_condition_jsonb
         order by l.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -63819,7 +63688,7 @@ begin
         from public.lifecyclemodels l
         where l.embedding_ft is not null
           and l.state_code = 200
-          and l.json @> private.sample_library_business_filter_v1(filter_condition_jsonb)
+          and l.json @> filter_condition_jsonb
         order by l.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -63851,7 +63720,7 @@ begin
         from public.lifecyclemodels l
         where l.embedding_ft is not null
           and l.user_id = effective_user_id
-          and l.json @> private.sample_library_business_filter_v1(filter_condition_jsonb)
+          and l.json @> filter_condition_jsonb
         order by l.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -63889,7 +63758,7 @@ begin
               and r.team_id = l.team_id
               and r.role::text in ('admin', 'member', 'owner')
           )
-          and l.json @> private.sample_library_business_filter_v1(filter_condition_jsonb)
+          and l.json @> filter_condition_jsonb
         order by l.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -63938,7 +63807,7 @@ begin
   threshold_distance := 1 - coalesce(match_threshold, 0.5);
   effective_user_id := private.dataset_search_effective_user_id('');
 
-  if normalized_data_source in ('tg', 'sl') then
+  if normalized_data_source = 'tg' then
     return query
       with candidates as materialized (
         select
@@ -63946,8 +63815,8 @@ begin
           (p.embedding_ft <=> query_embedding_vector) as candidate_distance
         from public.processes p
         where p.embedding_ft is not null
-          and ((normalized_data_source = 'tg' and p.state_code = 100) or api.sample_library_row_matches_v1(normalized_data_source, p.state_code, p.user_id, p.id, p.version, filter_condition_jsonb, true))
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> private.sample_library_business_filter_v1(filter_condition_jsonb))
+          and p.state_code = 100
+          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
         order by p.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -63975,7 +63844,7 @@ begin
         from public.processes p
         where p.embedding_ft is not null
           and p.state_code = -1
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> private.sample_library_business_filter_v1(filter_condition_jsonb))
+          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
         order by p.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -64003,7 +63872,7 @@ begin
         from public.processes p
         where p.embedding_ft is not null
           and p.state_code = 200
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> private.sample_library_business_filter_v1(filter_condition_jsonb))
+          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
         order by p.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -64035,7 +63904,7 @@ begin
         from public.processes p
         where p.embedding_ft is not null
           and p.user_id = effective_user_id
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> private.sample_library_business_filter_v1(filter_condition_jsonb))
+          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
         order by p.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -64073,7 +63942,7 @@ begin
               and r.team_id = p.team_id
               and r.role::text in ('admin', 'member', 'owner')
           )
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> private.sample_library_business_filter_v1(filter_condition_jsonb))
+          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
         order by p.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -64338,8 +64207,6 @@ begin
 
   if normalized_data_source = 'tg' then
     visibility_clause := 'd.state_code = 100 and ($7::uuid is null or d.team_id = $7)';
-  elsif normalized_data_source = 'sl' then
-    visibility_clause := 'api.sample_library_row_matches_v1($9, d.state_code, d.user_id, d.id, d.version, ''{}''::jsonb, false)';
   elsif normalized_data_source = 'ex' then
     if auth.uid() is null then return; end if;
     visibility_clause := 'd.state_code = -1 and ($7::uuid is null or d.team_id = $7)';
@@ -64360,8 +64227,8 @@ begin
   end if;
 
   json_filter_clause := case
-    when private.sample_library_business_filter_v1(filter_condition_jsonb) = '{}'::jsonb then ''
-    else 'and d.json @> private.sample_library_business_filter_v1($2)'
+    when filter_condition_jsonb = '{}'::jsonb then ''
+    else 'and d.json @> $2'
   end;
 
   candidate_sql := format(
@@ -64403,7 +64270,7 @@ begin
   return query execute candidate_sql
     using query_embedding_vector, filter_condition_jsonb, candidate_size,
           threshold_distance, effective_user_id, normalized_match_count,
-          team_id_filter, state_code_filter, normalized_data_source;
+          team_id_filter, state_code_filter;
 end;
 $_$;
 
@@ -88956,52 +88823,52 @@ GRANT ALL ON FUNCTION "api"."get_current_lca_release_process"("p_process_uuid" "
 
 
 
-REVOKE ALL ON FUNCTION "api"."get_latest_contact_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "api"."get_latest_contact_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "api_internal_executor";
-GRANT ALL ON FUNCTION "api"."get_latest_contact_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "anon";
-GRANT ALL ON FUNCTION "api"."get_latest_contact_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "authenticated";
+REVOKE ALL ON FUNCTION "api"."get_latest_contact_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."get_latest_contact_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") TO "api_internal_executor";
+GRANT ALL ON FUNCTION "api"."get_latest_contact_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") TO "anon";
+GRANT ALL ON FUNCTION "api"."get_latest_contact_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") TO "authenticated";
 
 
 
-REVOKE ALL ON FUNCTION "api"."get_latest_flow_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "filter_condition" "jsonb", "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "api"."get_latest_flow_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "filter_condition" "jsonb", "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "api_internal_executor";
-GRANT ALL ON FUNCTION "api"."get_latest_flow_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "filter_condition" "jsonb", "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "anon";
-GRANT ALL ON FUNCTION "api"."get_latest_flow_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "filter_condition" "jsonb", "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "authenticated";
+REVOKE ALL ON FUNCTION "api"."get_latest_flow_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "filter_condition" "jsonb", "sort_by" "text", "sort_direction" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."get_latest_flow_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "filter_condition" "jsonb", "sort_by" "text", "sort_direction" "text") TO "api_internal_executor";
+GRANT ALL ON FUNCTION "api"."get_latest_flow_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "filter_condition" "jsonb", "sort_by" "text", "sort_direction" "text") TO "anon";
+GRANT ALL ON FUNCTION "api"."get_latest_flow_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "filter_condition" "jsonb", "sort_by" "text", "sort_direction" "text") TO "authenticated";
 
 
 
-REVOKE ALL ON FUNCTION "api"."get_latest_flowproperty_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "api"."get_latest_flowproperty_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "api_internal_executor";
-GRANT ALL ON FUNCTION "api"."get_latest_flowproperty_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "anon";
-GRANT ALL ON FUNCTION "api"."get_latest_flowproperty_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "authenticated";
+REVOKE ALL ON FUNCTION "api"."get_latest_flowproperty_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."get_latest_flowproperty_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") TO "api_internal_executor";
+GRANT ALL ON FUNCTION "api"."get_latest_flowproperty_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") TO "anon";
+GRANT ALL ON FUNCTION "api"."get_latest_flowproperty_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") TO "authenticated";
 
 
 
-REVOKE ALL ON FUNCTION "api"."get_latest_lifecyclemodel_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "api"."get_latest_lifecyclemodel_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "api_internal_executor";
-GRANT ALL ON FUNCTION "api"."get_latest_lifecyclemodel_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "anon";
-GRANT ALL ON FUNCTION "api"."get_latest_lifecyclemodel_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "authenticated";
+REVOKE ALL ON FUNCTION "api"."get_latest_lifecyclemodel_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."get_latest_lifecyclemodel_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") TO "api_internal_executor";
+GRANT ALL ON FUNCTION "api"."get_latest_lifecyclemodel_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") TO "anon";
+GRANT ALL ON FUNCTION "api"."get_latest_lifecyclemodel_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") TO "authenticated";
 
 
 
-REVOKE ALL ON FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "api_internal_executor";
-GRANT ALL ON FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "anon";
-GRANT ALL ON FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "authenticated";
+REVOKE ALL ON FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text") TO "api_internal_executor";
+GRANT ALL ON FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text") TO "anon";
+GRANT ALL ON FUNCTION "api"."get_latest_process_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "type_of_data_set_filter" "text", "sort_by" "text", "sort_direction" "text") TO "authenticated";
 
 
 
-REVOKE ALL ON FUNCTION "api"."get_latest_source_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "api"."get_latest_source_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "api_internal_executor";
-GRANT ALL ON FUNCTION "api"."get_latest_source_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "anon";
-GRANT ALL ON FUNCTION "api"."get_latest_source_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "authenticated";
+REVOKE ALL ON FUNCTION "api"."get_latest_source_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."get_latest_source_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") TO "api_internal_executor";
+GRANT ALL ON FUNCTION "api"."get_latest_source_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") TO "anon";
+GRANT ALL ON FUNCTION "api"."get_latest_source_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") TO "authenticated";
 
 
 
-REVOKE ALL ON FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "api_internal_executor";
-GRANT ALL ON FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "anon";
-GRANT ALL ON FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text", "sample_origin_filter" "text", "sample_publication_status_filter" "text") TO "authenticated";
+REVOKE ALL ON FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") TO "api_internal_executor";
+GRANT ALL ON FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") TO "anon";
+GRANT ALL ON FUNCTION "api"."get_latest_unitgroup_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "sort_by" "text", "sort_direction" "text") TO "authenticated";
 
 
 
@@ -89736,9 +89603,9 @@ GRANT ALL ON FUNCTION "api"."qry_root_review_reference_progress_v2"("p_root_revi
 
 
 
-REVOKE ALL ON FUNCTION "api"."qry_sample_library_process_publications_v1"("p_items" "jsonb") FROM PUBLIC;
-GRANT ALL ON FUNCTION "api"."qry_sample_library_process_publications_v1"("p_items" "jsonb") TO "api_internal_executor";
-GRANT ALL ON FUNCTION "api"."qry_sample_library_process_publications_v1"("p_items" "jsonb") TO "authenticated";
+REVOKE ALL ON FUNCTION "api"."qry_sample_library_datasets_v1"("p_dataset_type" "text", "p_origin" "text", "p_publication_status" "text", "p_page_size" integer, "p_page_current" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."qry_sample_library_datasets_v1"("p_dataset_type" "text", "p_origin" "text", "p_publication_status" "text", "p_page_size" integer, "p_page_current" integer) TO "api_internal_executor";
+GRANT ALL ON FUNCTION "api"."qry_sample_library_datasets_v1"("p_dataset_type" "text", "p_origin" "text", "p_publication_status" "text", "p_page_size" integer, "p_page_current" integer) TO "authenticated";
 
 
 
@@ -89781,14 +89648,6 @@ GRANT ALL ON FUNCTION "api"."qry_team_list"("p_mode" "text", "p_keyword" "text",
 
 
 
-REVOKE ALL ON FUNCTION "api"."sample_library_row_matches_v1"("p_data_source" "text", "p_state_code" integer, "p_user_id" "uuid", "p_id" "uuid", "p_version" character, "p_filter" "jsonb", "p_is_process" boolean) FROM PUBLIC;
-GRANT ALL ON FUNCTION "api"."sample_library_row_matches_v1"("p_data_source" "text", "p_state_code" integer, "p_user_id" "uuid", "p_id" "uuid", "p_version" character, "p_filter" "jsonb", "p_is_process" boolean) TO "api_internal_executor";
-GRANT ALL ON FUNCTION "api"."sample_library_row_matches_v1"("p_data_source" "text", "p_state_code" integer, "p_user_id" "uuid", "p_id" "uuid", "p_version" character, "p_filter" "jsonb", "p_is_process" boolean) TO "anon";
-GRANT ALL ON FUNCTION "api"."sample_library_row_matches_v1"("p_data_source" "text", "p_state_code" integer, "p_user_id" "uuid", "p_id" "uuid", "p_version" character, "p_filter" "jsonb", "p_is_process" boolean) TO "authenticated";
-GRANT ALL ON FUNCTION "api"."sample_library_row_matches_v1"("p_data_source" "text", "p_state_code" integer, "p_user_id" "uuid", "p_id" "uuid", "p_version" character, "p_filter" "jsonb", "p_is_process" boolean) TO "service_role";
-
-
-
 REVOKE ALL ON FUNCTION "api"."search_contacts"("query_text" "text", "filter_condition" "jsonb", "page_size" integer, "page_current" integer, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer) FROM PUBLIC;
 GRANT ALL ON FUNCTION "api"."search_contacts"("query_text" "text", "filter_condition" "jsonb", "page_size" integer, "page_current" integer, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer) TO "anon";
 GRANT ALL ON FUNCTION "api"."search_contacts"("query_text" "text", "filter_condition" "jsonb", "page_size" integer, "page_current" integer, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer) TO "authenticated";
@@ -89801,9 +89660,9 @@ GRANT ALL ON FUNCTION "api"."search_contacts_latest"("query_text" "text", "filte
 
 
 
-REVOKE ALL ON FUNCTION "api"."search_dataset_json_uuid_mentions"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer, "p_sample_origin_filter" "text", "p_sample_publication_status_filter" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "api"."search_dataset_json_uuid_mentions"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer, "p_sample_origin_filter" "text", "p_sample_publication_status_filter" "text") TO "anon";
-GRANT ALL ON FUNCTION "api"."search_dataset_json_uuid_mentions"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer, "p_sample_origin_filter" "text", "p_sample_publication_status_filter" "text") TO "authenticated";
+REVOKE ALL ON FUNCTION "api"."search_dataset_json_uuid_mentions"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."search_dataset_json_uuid_mentions"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer) TO "anon";
+GRANT ALL ON FUNCTION "api"."search_dataset_json_uuid_mentions"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer) TO "authenticated";
 
 
 
@@ -91665,14 +91524,6 @@ GRANT ALL ON FUNCTION "private"."review_v2_kind_guard"() TO "api_internal_execut
 
 
 
-REVOKE ALL ON FUNCTION "private"."sample_library_business_filter_v1"("p_filter" "jsonb") FROM PUBLIC;
-GRANT ALL ON FUNCTION "private"."sample_library_business_filter_v1"("p_filter" "jsonb") TO "api_internal_executor";
-GRANT ALL ON FUNCTION "private"."sample_library_business_filter_v1"("p_filter" "jsonb") TO "anon";
-GRANT ALL ON FUNCTION "private"."sample_library_business_filter_v1"("p_filter" "jsonb") TO "authenticated";
-GRANT ALL ON FUNCTION "private"."sample_library_business_filter_v1"("p_filter" "jsonb") TO "service_role";
-
-
-
 REVOKE ALL ON FUNCTION "private"."sample_library_process_publications_immutable_v1"() FROM PUBLIC;
 
 
@@ -91683,9 +91534,9 @@ GRANT ALL ON FUNCTION "private"."save_lifecycle_model_bundle"("p_plan" "jsonb") 
 
 
 
-REVOKE ALL ON FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer, "p_sample_origin_filter" "text", "p_sample_publication_status_filter" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer, "p_sample_origin_filter" "text", "p_sample_publication_status_filter" "text") TO "service_role";
-GRANT ALL ON FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer, "p_sample_origin_filter" "text", "p_sample_publication_status_filter" "text") TO "api_internal_executor";
+REVOKE ALL ON FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer) TO "service_role";
+GRANT ALL ON FUNCTION "private"."search_dataset_json_uuid_mentions_impl"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer) TO "api_internal_executor";
 
 
 

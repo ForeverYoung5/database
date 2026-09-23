@@ -60,7 +60,7 @@ begin
       from public.processes p
       join fused on fused.id = p.id
       where (
-        ((((data_source = 'tg' AND p.state_code = 100) OR api.sample_library_row_matches_v1(data_source, p.state_code, p.user_id, p.id, p.version, '{}'::jsonb, true)) OR (data_source = 'ex' AND p.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)))
+        (((data_source = 'tg' AND p.state_code = 100) OR (data_source = 'ex' AND p.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)))
         or (data_source = 'co' and p.state_code = 200)
         or (data_source = 'my' and p.user_id = auth.uid())
         or (
@@ -91,16 +91,6 @@ begin
     counted_rows as (
       select latest_rows.*, count(*) over()::bigint as total_count
       from latest_rows
-    where data_source <> 'sl' or exists (
-      select 1 from public.processes sample_scope_row
-      where sample_scope_row.id = latest_rows.id
-        and sample_scope_row.version = latest_rows.version
-        and api.sample_library_row_matches_v1(
-          data_source, sample_scope_row.state_code, sample_scope_row.user_id,
-          sample_scope_row.id, sample_scope_row.version, filter_condition_jsonb,
-          true
-        )
-    )
     )
     select
       counted_rows.id,
