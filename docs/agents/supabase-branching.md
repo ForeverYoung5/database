@@ -22,9 +22,9 @@ checkPaths:
   - .github/workflows/supabase-dev.yml
   - .env.supabase.dev.local.example
   - .env.supabase.main.local.example
-lastReviewedAt: 2026-09-23
-lastReviewedCommit: 72e1c5b565da7471957a1cf07454f8a2fa854cc4
-lastReviewedNote: "Reviewed Database #712 workflow update: the Open Data pgTAP joins the existing schema/capability gate while branch, hosted deployment, and integration ownership remain unchanged."
+lastReviewedAt: 2026-09-24
+lastReviewedCommit: 59643fea
+lastReviewedNote: "Reviewed Database #717 workflow update: the reviewer Contact pgTAP joins the existing schema/capability gate while branch, hosted deployment, and integration ownership remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
