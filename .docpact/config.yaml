@@ -1,7 +1,7 @@
 version: 1
 layout: repo
 lastReviewedAt: "2026-09-24"
-lastReviewedCommit: "04473ee8"
+lastReviewedCommit: "af42a0e1"
 lastReviewedNote: "Reviewed the merged Database #712 Open Data catalog baseline and Database #717 reviewer Contact profile activation; ownership, validation, API capability, branch, and deployment routing remain authoritative."
 
 # Keep deterministic governance facts here.

@@ -33,7 +33,7 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-24
-lastReviewedCommit: 04473ee8
+lastReviewedCommit: af42a0e1
 lastReviewedNote: "Reviewed the merged Open Data migration and generated-workspace proof, then added Database #717 reviewer Contact readiness and atomic activation validation coverage; current validation and Supabase branch gates remain authoritative."
 related:
   - ../../AGENTS.md

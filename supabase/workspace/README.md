@@ -21,7 +21,7 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-24
-lastReviewedCommit: 04473ee8
+lastReviewedCommit: af42a0e1
 lastReviewedNote: "Reviewed Database #717 regenerated workspace for reviewer Contact status and activation RPCs after exact migration replay; generated-artifact rules remain unchanged."
 related:
   - ../../AGENTS.md
