@@ -38,8 +38,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-24
-lastReviewedCommit: 7bcacf217108c7f60ef1c2d01629778e86265162
-lastReviewedNote: "Reviewed Database #717 reviewer Contact profile activation; repository ownership, branch, API capability, and delivery boundaries remain unchanged."
+lastReviewedCommit: 50ddad35
+lastReviewedNote: "Reviewed the merged Database #712 Open Data publication baseline and Database #717 reviewer Contact profile activation; SQL ownership, safety, branch policy, API capability, validation, and delivery boundaries remain authoritative."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md

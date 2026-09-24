@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-24
-lastReviewedCommit: 7bcacf217108c7f60ef1c2d01629778e86265162
-lastReviewedNote: "Added the atomic Review Member Contact readiness, activation, open-publication, and optional version-rebinding boundary."
+lastReviewedCommit: 50ddad35
+lastReviewedNote: "Reviewed the merged Open Data catalog and generated schema baseline, then added the atomic Review Member Contact readiness, activation, open-publication, and optional version-rebinding boundary."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -45,6 +45,12 @@ related:
 This repo is organized around one checked-in Supabase project plus a generated schema-inspection workspace.
 
 ## Schema Boundaries
+
+Open Data catalog publication is represented independently in
+`private.open_data_process_publications`, keyed by the exact Process `id` and
+`version`. Publication is append-only, does not mutate the Process
+`state_code`, and deliberately does not depend on the temporary
+`private.sample_library_process_publications` relation.
 
 For LifecycleModel review and bundle operations, authoritative composition comes from ILCD `processInstance` references and the Process ownership pair `public.processes.model_id` plus `coalesce(public.processes.model_version, public.processes.version)`. The nullable `model_version` is an additive correction to the original same-version bundle assumption: new writers persist the exact owning LifecycleModel version, while historical rows with `model_version is null` retain the legacy Process-version fallback. Readers must never substitute the latest LifecycleModel version. `lifecyclemodels.json_tg` is persisted for frontend reconstruction only and must not define review closure, approval targets, publication admission, or deletion membership.
 

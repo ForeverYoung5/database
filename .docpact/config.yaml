@@ -1,8 +1,8 @@
 version: 1
 layout: repo
 lastReviewedAt: "2026-09-24"
-lastReviewedCommit: "7bcacf217108c7f60ef1c2d01629778e86265162"
-lastReviewedNote: "Reviewed Database #717 reviewer Contact profile activation. Existing ownership, validation, API capability, branch, and deployment routing remain authoritative."
+lastReviewedCommit: "50ddad35"
+lastReviewedNote: "Reviewed the merged Database #712 Open Data catalog baseline and Database #717 reviewer Contact profile activation; ownership, validation, API capability, branch, and deployment routing remain authoritative."
 
 # Keep deterministic governance facts here.
 # AGENTS.md remains the repo contract entrypoint.

@@ -33,8 +33,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-24
-lastReviewedCommit: 7bcacf217108c7f60ef1c2d01629778e86265162
-lastReviewedNote: "Added Database #717 reviewer Contact readiness and atomic activation validation proof."
+lastReviewedCommit: 50ddad35
+lastReviewedNote: "Reviewed the merged Open Data migration and generated-workspace proof, then added Database #717 reviewer Contact readiness and atomic activation validation coverage; current validation and Supabase branch gates remain authoritative."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -58,6 +58,11 @@ supabase start
 supabase db reset
 supabase migration list
 ```
+
+Open Data catalog or publication changes must additionally run the focused
+`supabase/tests/20260923_open_data_catalog_publications.sql` pgTAP suite and
+record any pre-existing local migration-history drift separately from failures
+in the new migration.
 
 There is no checked-in monolithic database-contract runner. Run the relevant
 pgTAP files explicitly after a clean reset, and run the change-specific shell
