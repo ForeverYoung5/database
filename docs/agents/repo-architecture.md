@@ -30,9 +30,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-23
-lastReviewedCommit: 3eec377804ed7af65c6925d780568a004a5322f7
-lastReviewedNote: "Reviewed Database #712 Open Data catalog, independent publication relation, and regenerated schema workspace after exact migration replay; repository structure and generated-workspace boundaries remain authoritative."
+lastReviewedAt: 2026-09-24
+lastReviewedCommit: 59643fea
+lastReviewedNote: "Reviewed the merged Open Data catalog and generated schema baseline, then added the atomic Review Member Contact readiness, activation, open-publication, and optional version-rebinding boundary."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -376,6 +376,14 @@ organization as a trimmed string of at most 200 characters. The database
 validates that representation on `private.users`; the existing Auth-to-private
 mirror remains its only synchronization path. This descriptive profile value
 must never be used as an authorization, role, team, or RLS input.
+
+Review Member Contact readiness is projected through
+`api.qry_review_get_my_contact_status()`. Initial creation and later version
+updates use `api.cmd_review_contact_activate(...)`, which serializes each actor,
+checks the current profile binding, forces a self-ownership reference, requires
+open external references, publishes the created Contact as state `100`, and
+updates the optional account binding in one transaction. Ordinary Contact
+commands and Review Admin membership admission do not write this binding.
 
 ## National Carbon Process Statistics
 

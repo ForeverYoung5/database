@@ -532,6 +532,19 @@ export type Database = {
           table_name: string
         }[]
       }
+      cmd_review_contact_activate: {
+        Args: {
+          p_audit?: Json
+          p_bind?: boolean
+          p_expected_contact?: Json
+          p_id: string
+          p_json_ordered: Json
+          p_mode: string
+          p_operation_id: string
+          p_source_version?: string
+        }
+        Returns: Json
+      }
       cmd_review_extract_refs: {
         Args: { p_json: Json }
         Returns: {
@@ -2354,6 +2367,7 @@ export type Database = {
           user_id: string
         }[]
       }
+      qry_review_get_my_contact_status: { Args: never; Returns: Json }
       qry_review_member_queue_items_v2: {
         Args: { p_page?: number; p_page_size?: number; p_status?: string }
         Returns: {

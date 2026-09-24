@@ -20,9 +20,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-23
-lastReviewedCommit: 3eec377804ed7af65c6925d780568a004a5322f7
-lastReviewedNote: "Reviewed Database #712 exact migration replay and schema/types generation; documented script ownership and invocation remain unchanged."
+lastReviewedAt: 2026-09-24
+lastReviewedCommit: af42a0e1
+lastReviewedNote: "Reviewed Database #717 exact migration replay and reviewer Contact schema/types generation; documented script ownership and invocation remain unchanged."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml
