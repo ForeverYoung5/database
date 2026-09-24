@@ -37,9 +37,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-23
-lastReviewedCommit: a4bc3a5f2c121b6b425a39e57f3a607a62f450e9
-lastReviewedNote: "Reviewed Database #710 main-to-Dev backmerge: production #703 ready derivative scheduling and guarded activation are retained with Dev #705 agent contract and #707 sample-library retirement. Five dispatch transitions, 25 visited requests, existing data fences, and branch/deployment ownership remain."
+lastReviewedAt: 2026-09-24
+lastReviewedCommit: 7bcacf217108c7f60ef1c2d01629778e86265162
+lastReviewedNote: "Reviewed Database #717 reviewer Contact profile activation; repository ownership, branch, API capability, and delivery boundaries remain unchanged."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md
