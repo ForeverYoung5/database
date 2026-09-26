@@ -2066,6 +2066,22 @@ export type Database = {
           total_count: number
         }[]
       }
+      qry_review_batch_eligibility_v1: {
+        Args: { p_operation: string; p_review_ids: string[] }
+        Returns: {
+          approve_opinion_count: number
+          data_version: string
+          eligible: boolean
+          ordinal: number
+          reason_code: string
+          reject_opinion_count: number
+          review_id: string
+          reviewer_count: number
+          state_code: number
+          submitted_opinion_count: number
+          target_table: string
+        }[]
+      }
       qry_review_find_member_candidate_by_email: {
         Args: { p_email: string }
         Returns: {
@@ -2146,6 +2162,39 @@ export type Database = {
           json: Json
           modified_at: string
           review_kind: string
+          reviewer_id: Json
+          root_can_read: boolean
+          root_matches_status: boolean
+          state_code: number
+          target_table: string
+          total_count: number
+        }[]
+      }
+      qry_review_get_admin_queue_items_v5: {
+        Args: {
+          p_display_mode?: string
+          p_page?: number
+          p_page_size?: number
+          p_query?: string
+          p_sort_by?: string
+          p_sort_order?: string
+          p_status?: string
+          p_target_table?: string
+        }
+        Returns: {
+          approve_opinion_count: number
+          comment_state_codes: Json
+          completed_reviewer_count: number
+          created_at: string
+          data_id: string
+          data_version: string
+          deadline: string
+          id: string
+          json: Json
+          modified_at: string
+          reject_opinion_count: number
+          review_kind: string
+          reviewer_count: number
           reviewer_id: Json
           root_can_read: boolean
           root_matches_status: boolean
@@ -2310,6 +2359,42 @@ export type Database = {
           modified_at: string
           review_kind: string
           review_state_code: number
+          reviewer_id: Json
+          root_can_read: boolean
+          root_matches_status: boolean
+          target_table: string
+          total_count: number
+        }[]
+      }
+      qry_review_get_member_queue_items_v5: {
+        Args: {
+          p_display_mode?: string
+          p_page?: number
+          p_page_size?: number
+          p_query?: string
+          p_sort_by?: string
+          p_sort_order?: string
+          p_status?: string
+          p_target_table?: string
+        }
+        Returns: {
+          approve_opinion_count: number
+          comment_created_at: string
+          comment_json: Json
+          comment_modified_at: string
+          comment_state_code: number
+          completed_reviewer_count: number
+          created_at: string
+          data_id: string
+          data_version: string
+          deadline: string
+          id: string
+          json: Json
+          modified_at: string
+          reject_opinion_count: number
+          review_kind: string
+          review_state_code: number
+          reviewer_count: number
           reviewer_id: Json
           root_can_read: boolean
           root_matches_status: boolean
@@ -3827,12 +3912,12 @@ export type Tables<
   DefaultSchemaTableNameOrOptions extends
     | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends (DefaultSchemaTableNameOrOptions extends {
+  TableName extends DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never) = never,
+    : never = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -3856,11 +3941,11 @@ export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends (DefaultSchemaTableNameOrOptions extends {
+  TableName extends DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never) = never,
+    : never = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -3881,11 +3966,11 @@ export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends (DefaultSchemaTableNameOrOptions extends {
+  TableName extends DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never) = never,
+    : never = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -3906,11 +3991,11 @@ export type Enums<
   DefaultSchemaEnumNameOrOptions extends
     | keyof DefaultSchema["Enums"]
     | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends (DefaultSchemaEnumNameOrOptions extends {
+  EnumName extends DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-    : never) = never,
+    : never = never,
 > = DefaultSchemaEnumNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -3923,11 +4008,11 @@ export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
     | keyof DefaultSchema["CompositeTypes"]
     | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
+  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never) = never,
+    : never = never,
 > = PublicCompositeTypeNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }

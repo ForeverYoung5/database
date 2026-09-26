@@ -20,8 +20,8 @@ checkPaths:
   - .githooks/pre-push
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-24
-lastReviewedCommit: af42a0e1
+lastReviewedAt: 2026-09-26
+lastReviewedCommit: 0da4d5f14656a4738db9e67b822f375282094877
 lastReviewedNote: "Reviewed Database #717 regenerated workspace for reviewer Contact status and activation RPCs after exact migration replay; generated-artifact rules remain unchanged."
 related:
   - ../../AGENTS.md
