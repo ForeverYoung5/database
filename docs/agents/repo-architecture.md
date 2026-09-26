@@ -31,7 +31,7 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-26
-lastReviewedCommit: 53f34eaf1d9ca6a9c890e6920910bcc2a39bf06a
+lastReviewedCommit: c139f66128586f42487b2e0cdc07507009c95013
 lastReviewedNote: "Reviewed the merged Open Data catalog and generated schema baseline, then added the atomic Review Member Contact readiness, activation, open-publication, and optional version-rebinding boundary."
 related:
   - ../../AGENTS.md
