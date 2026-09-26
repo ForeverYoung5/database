@@ -38,7 +38,7 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-26
-lastReviewedCommit: 0da4d5f14656a4738db9e67b822f375282094877
+lastReviewedCommit: 53f34eaf1d9ca6a9c890e6920910bcc2a39bf06a
 lastReviewedNote: "Reviewed the merged Database #712 Open Data publication baseline and Database #717 reviewer Contact profile activation; SQL ownership, safety, branch policy, API capability, validation, and delivery boundaries remain authoritative."
 related:
   - .docpact/config.yaml

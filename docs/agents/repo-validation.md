@@ -33,7 +33,7 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-26
-lastReviewedCommit: 0da4d5f14656a4738db9e67b822f375282094877
+lastReviewedCommit: 53f34eaf1d9ca6a9c890e6920910bcc2a39bf06a
 lastReviewedNote: "Added review-workspace V5 queue, batch-eligibility, and reopened-draft validation coverage while retaining the existing Root/Reference baseline."
 related:
   - ../../AGENTS.md
