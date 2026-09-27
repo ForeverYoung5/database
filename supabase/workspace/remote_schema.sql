@@ -22748,6 +22748,8 @@ CREATE OR REPLACE FUNCTION "api"."portal_catalog_summary_v1"() RETURNS "jsonb"
     AS $_$
 
 declare
+  v_diagnostic_message text;
+  v_diagnostic_state text;
   v_counts jsonb;
   v_latest_modified_at text;
   v_uuid_example jsonb;
@@ -23062,8 +23064,28 @@ begin
   return v_result;
 exception
   when query_canceled then
+    get stacked diagnostics v_diagnostic_message = MESSAGE_TEXT;
+    raise log using message = 'portal read failure diagnostic',
+      detail = pg_catalog.jsonb_build_object(
+        'schemaVersion', 'portal.read-failure.v1', 'rpc', 'portal_catalog_summary_v1',
+        'category', 'cancellation', 'reason', case v_diagnostic_message
+          when 'canceling statement due to statement timeout' then 'statement_timeout'
+          when 'canceling statement due to user request' then 'cancel_request'
+          else 'unknown'
+        end
+      )::text;
     raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
   when others then
+    get stacked diagnostics v_diagnostic_state = RETURNED_SQLSTATE;
+    raise log using message = 'portal read failure diagnostic',
+      detail = pg_catalog.jsonb_build_object(
+        'schemaVersion', 'portal.read-failure.v1', 'rpc', 'portal_catalog_summary_v1',
+        'category', 'internal', 'reason', case v_diagnostic_state
+          when '54000' then 'response_budget'
+          when '55000' then 'contract_drift'
+          else 'other'
+        end
+      )::text;
     raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
 end;
 $_$;
@@ -23256,6 +23278,8 @@ CREATE OR REPLACE FUNCTION "api"."portal_facets_v3"("p_kind" "text", "p_query" "
     SET "statement_timeout" TO '8s'
     AS $_$
 declare
+  v_diagnostic_message text;
+  v_diagnostic_state text;
   v_kind text;
   v_query text;
   v_filters jsonb;
@@ -23324,10 +23348,35 @@ begin
   );
 exception
   when sqlstate '22023' then
+    raise log using message = 'portal read failure diagnostic',
+      detail = pg_catalog.jsonb_build_object(
+        'schemaVersion', 'portal.read-failure.v1', 'rpc', 'portal_facets_v3',
+        'category', 'validation', 'reason', 'input'
+      )::text;
     raise exception using errcode = '22023', message = 'invalid portal request';
   when query_canceled then
+    get stacked diagnostics v_diagnostic_message = MESSAGE_TEXT;
+    raise log using message = 'portal read failure diagnostic',
+      detail = pg_catalog.jsonb_build_object(
+        'schemaVersion', 'portal.read-failure.v1', 'rpc', 'portal_facets_v3',
+        'category', 'cancellation', 'reason', case v_diagnostic_message
+          when 'canceling statement due to statement timeout' then 'statement_timeout'
+          when 'canceling statement due to user request' then 'cancel_request'
+          else 'unknown'
+        end
+      )::text;
     raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
   when others then
+    get stacked diagnostics v_diagnostic_state = RETURNED_SQLSTATE;
+    raise log using message = 'portal read failure diagnostic',
+      detail = pg_catalog.jsonb_build_object(
+        'schemaVersion', 'portal.read-failure.v1', 'rpc', 'portal_facets_v3',
+        'category', 'internal', 'reason', case v_diagnostic_state
+          when '54000' then 'response_budget'
+          when '55000' then 'contract_drift'
+          else 'other'
+        end
+      )::text;
     raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
 end;
 $_$;
@@ -23341,6 +23390,9 @@ CREATE OR REPLACE FUNCTION "api"."portal_get_dataset_v1"("p_kind" "text", "p_id"
     SET "search_path" TO ''
     SET "statement_timeout" TO '8s'
     AS $_$
+declare
+  v_diagnostic_message text;
+  v_diagnostic_state text;
 begin
   if p_kind not in ('process', 'flow')
      or p_id is null
@@ -23353,12 +23405,37 @@ begin
   );
 exception
   when sqlstate '22023' then
+    raise log using message = 'portal read failure diagnostic',
+      detail = pg_catalog.jsonb_build_object(
+        'schemaVersion', 'portal.read-failure.v1', 'rpc', 'portal_get_dataset_v1',
+        'category', 'validation', 'reason', 'input'
+      )::text;
     raise exception using errcode = '22023', message = 'invalid portal request';
   when query_canceled then
+    get stacked diagnostics v_diagnostic_message = MESSAGE_TEXT;
+    raise log using message = 'portal read failure diagnostic',
+      detail = pg_catalog.jsonb_build_object(
+        'schemaVersion', 'portal.read-failure.v1', 'rpc', 'portal_get_dataset_v1',
+        'category', 'cancellation', 'reason', case v_diagnostic_message
+          when 'canceling statement due to statement timeout' then 'statement_timeout'
+          when 'canceling statement due to user request' then 'cancel_request'
+          else 'unknown'
+        end
+      )::text;
     raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
   when others then
+    get stacked diagnostics v_diagnostic_state = RETURNED_SQLSTATE;
+    raise log using message = 'portal read failure diagnostic',
+      detail = pg_catalog.jsonb_build_object(
+        'schemaVersion', 'portal.read-failure.v1', 'rpc', 'portal_get_dataset_v1',
+        'category', 'internal', 'reason', case v_diagnostic_state
+          when '54000' then 'response_budget'
+          when '55000' then 'contract_drift'
+          else 'other'
+        end
+      )::text;
     raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
-end
+end;
 $_$;
 
 
@@ -24075,12 +24152,58 @@ CREATE OR REPLACE FUNCTION "api"."portal_navigation_v1"("p_kind" "text", "p_quer
     SET "statement_timeout" TO '8s'
     SET "row_security" TO 'on'
     AS $$
+declare
+  v_diagnostic_message text;
+  v_diagnostic_context text;
+  v_diagnostic_state text;
 begin
   return private.portal_navigation_v1(p_kind,p_query,p_filters,p_dimension,p_parent_node_id,p_cursor,p_limit);
 exception
-  when sqlstate '22023' then raise exception using errcode='22023',message='invalid portal request';
-  when query_canceled then raise exception using errcode='P0001',message='portal catalog unavailable';
-  when others then raise exception using errcode='P0001',message='portal catalog unavailable';
+  when sqlstate '22023' then
+    get stacked diagnostics v_diagnostic_context = PG_EXCEPTION_CONTEXT;
+    raise log using message = 'portal read failure diagnostic',
+      detail = pg_catalog.jsonb_build_object(
+        'schemaVersion', 'portal.read-failure.v1', 'rpc', 'portal_navigation_v1',
+        'category', 'validation', 'reason', case
+          when v_diagnostic_context ~ '^PL/pgSQL function private\.portal_validate_search_v1\(' then 'search_input'
+          when v_diagnostic_context ~ '^PL/pgSQL function private\.portal_validate_search_v3\(' then 'hierarchy_input'
+          when v_diagnostic_context ~ '^PL/pgSQL function private\.portal_navigation_impl_v1\(' then
+            case when p_cursor is null then 'parent' else 'parent_or_cursor_node' end
+          when v_diagnostic_context ~ '^PL/pgSQL function private\.portal_navigation_v1\(' then
+            case
+              when p_dimension is null or p_dimension not in ('classification', 'geography')
+                or coalesce(p_limit, 100) not between 1 and 500 then 'navigation_options'
+              when p_cursor is not null then 'cursor_binding'
+              else 'unknown'
+            end
+          else 'unknown'
+        end
+      )::text;
+    raise exception using errcode = '22023', message = 'invalid portal request';
+  when query_canceled then
+    get stacked diagnostics v_diagnostic_message = MESSAGE_TEXT;
+    raise log using message = 'portal read failure diagnostic',
+      detail = pg_catalog.jsonb_build_object(
+        'schemaVersion', 'portal.read-failure.v1', 'rpc', 'portal_navigation_v1',
+        'category', 'cancellation', 'reason', case v_diagnostic_message
+          when 'canceling statement due to statement timeout' then 'statement_timeout'
+          when 'canceling statement due to user request' then 'cancel_request'
+          else 'unknown'
+        end
+      )::text;
+    raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
+  when others then
+    get stacked diagnostics v_diagnostic_state = RETURNED_SQLSTATE;
+    raise log using message = 'portal read failure diagnostic',
+      detail = pg_catalog.jsonb_build_object(
+        'schemaVersion', 'portal.read-failure.v1', 'rpc', 'portal_navigation_v1',
+        'category', 'internal', 'reason', case v_diagnostic_state
+          when '54000' then 'response_budget'
+          when '55000' then 'contract_drift'
+          else 'other'
+        end
+      )::text;
+    raise exception using errcode = 'P0001', message = 'portal catalog unavailable';
 end;
 $$;
 

@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-27
-lastReviewedCommit: 2ded7cb93dbe4e13767481127ee99900afd99834
-lastReviewedNote: "Reviewed Database #733: bounded legacy V2 keys/ranking/page facts, public-reader ownership with retained internal EXECUTE and restored DDL prestate, writer/visibility/cursor proof and exact local regeneration preserve public contracts, budgets and Main-to-Dev/Root boundaries. Hosted publication remains a distinct gate."
+lastReviewedCommit: 5935527b3564fc519549766cc65375a3eca4fd61
+lastReviewedNote: "Reviewed Database #738: closed server-only facade diagnostics preserve public failure bodies, successful queries, signatures, budgets and access; temporary owner/schema/member DDL privileges restore exact prestate. Anonymous, native-cancellation and Portal/adjacent regression proof and exact local schema/type generation remain required; Preview/Main ingestion, Main-to-Dev and Root integration stay separate gates."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -226,6 +226,12 @@ Reviewed parent corrections are separate data revisions. `data/portal-navigation
 `api.portal_navigation_v1` returns one byte-bounded, paginated branch with public-version counts, direct counts and full parent counts. Static taxonomy nodes may show zero; data-derived unknown nodes are only disclosed while public members remain. Search/Facets V3 admit node/subtree/direct filters before ordering and limits, retain V2 DTOs, and use separate cursor fingerprints. V2/Hybrid remain unchanged. The independent literal derivation manifest checks source functions, constrained execution, RLS, foreign keys and exact projection triggers; seeded meanings cannot be changed by runtime writers. Reader grants name individual columns. The summary facade retains its dataset-count semantics and two-second setting while reading the correct kind-specific projection with semi-join existence checks against latest identities.
 
 The Portal executor is NOLOGIN/NOBYPASSRLS and receives only the minimum object privileges required by the façades. External wrapper ACLs are revoked from `PUBLIC` and classified by exact signature in `private.api_capability_grants`; raw core tables receive no new anon policy.
+
+Summary, navigation, dataset and V3 facets exceptions retain their generic public
+code/message with null details/hints. Their server-only failure LOG records use
+closed category/reason labels, never original messages, stacks or request values
+in diagnostic DETAIL. This adds no read-path writer or public diagnostic RPC;
+see `portal-projection-migration-recovery.md#closed-read-failure-diagnostics`.
 
 Flow semantic sparse-cardinality detection uses one narrow source-side partial
 B-tree on `state_code` for state-100/200 rows whose `embedding_ft` is non-null.
