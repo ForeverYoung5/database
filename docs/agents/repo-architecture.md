@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-27
-lastReviewedCommit: 37d8ccc54dc5f4f8fb8501b82f233a24f91299a2
-lastReviewedNote: "Reviewed Database #735 exact Main-to-Dev backmerge of #733/#734 at 5935527b3564fc519549766cc65375a3eca4fd61. The combined 390-migration history retains all three existing Dev-only migrations byte-for-byte and reaches 20260926143000. Reader definitions and public contracts retain the qualified Main bytes; seven scoped suites pass 188 assertions. Generated schema/types are regenerated from the isolated combined history. CI, official Preview and persistent Dev publication remain separate gates; Root #1570 selects Main only."
+lastReviewedCommit: "2ac2ed4093e6d14f8d583aefee747f22ef5a41bc"
+lastReviewedNote: "Reviewed Database #741 exact Main44be788b3f1d78732a380a0617f843cb17c33819 diagnostic backmerge into Dev2ac2ed4093e6d14f8d583aefee747f22ef5a41bc. All prior Dev migrations/features and successful public queries remain inputs; only closed failure diagnostics are adopted from #738/#739. Combined394-migration/head20260927053003 schema/type determinism, cold CI/Preview and persistent Dev publication remain separate gates. Root selects the eligible Main source; parent#1574 retains incident follow-through."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -232,6 +232,12 @@ Reviewed parent corrections are separate data revisions. `data/portal-navigation
 `api.portal_navigation_v1` returns one byte-bounded, paginated branch with public-version counts, direct counts and full parent counts. Static taxonomy nodes may show zero; data-derived unknown nodes are only disclosed while public members remain. Search/Facets V3 admit node/subtree/direct filters before ordering and limits, retain V2 DTOs, and use separate cursor fingerprints. V2/Hybrid remain unchanged. The independent literal derivation manifest checks source functions, constrained execution, RLS, foreign keys and exact projection triggers; seeded meanings cannot be changed by runtime writers. Reader grants name individual columns. The summary facade retains its dataset-count semantics and two-second setting while reading the correct kind-specific projection with semi-join existence checks against latest identities.
 
 The Portal executor is NOLOGIN/NOBYPASSRLS and receives only the minimum object privileges required by the façades. External wrapper ACLs are revoked from `PUBLIC` and classified by exact signature in `private.api_capability_grants`; raw core tables receive no new anon policy.
+
+Summary, navigation, dataset and V3 facets exceptions retain their generic public
+code/message with null details/hints. Their server-only failure LOG records use
+closed category/reason labels, never original messages, stacks or request values
+in diagnostic DETAIL. This adds no read-path writer or public diagnostic RPC;
+see `portal-projection-migration-recovery.md#closed-read-failure-diagnostics`.
 
 Flow semantic sparse-cardinality detection uses one narrow source-side partial
 B-tree on `state_code` for state-100/200 rows whose `embedding_ft` is non-null.
