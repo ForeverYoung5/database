@@ -1,7 +1,7 @@
 ---
-lastReviewedAt: 2026-09-10
-lastReviewedCommit: 413ef65fcb66991304db9013cc8fc642d7e89f4d
-lastReviewedNote: 'Reviewed for Database #636: raw Hybrid example-scope fingerprint refresh does not alter the immutable Portal helper closure, projection storage, rollout or recovery procedure; the isolated candidate-first regression passes all 83 assertions.'
+lastReviewedAt: 2026-09-27
+lastReviewedCommit: 5935527b3564fc519549766cc65375a3eca4fd61
+lastReviewedNote: "Reviewed Database #738: closed server-only facade diagnostics preserve public failure bodies, successful queries, signatures, budgets and access; temporary owner/schema/member DDL privileges restore exact prestate. Anonymous, native-cancellation and Portal/adjacent regression proof and exact local schema/type generation remain required; Preview/Main ingestion, Main-to-Dev and Root integration stay separate gates."
 title: Portal Projection Migration Recovery
 docType: runbook
 scope: repo
@@ -10,6 +10,7 @@ authoritative: false
 owner: database-engine
 language: en
 whenToUse:
+  - when classifying sanitized Portal read failures without exposing request data
   - when an Issue 531 Portal projection migration stops before cutover completes
   - when a concurrent Portal projection index is INVALID or exists without migration history
   - when validating retry safety for the Portal projection rollout
@@ -22,6 +23,11 @@ whenToUse:
 whenToUpdate:
   - when the Portal projection migration sequence or recovery test changes
 checkPaths:
+  - supabase/migrations/20260927053000_portal_summary_failure_diagnostics.sql
+  - supabase/migrations/20260927053001_portal_navigation_failure_diagnostics.sql
+  - supabase/migrations/20260927053002_portal_dataset_failure_diagnostics.sql
+  - supabase/migrations/20260927053003_portal_facets_failure_diagnostics.sql
+  - supabase/tests/20260927_portal_read_failure_diagnostics.sql
   - docs/agents/portal-projection-migration-recovery.md
   - scripts/test_portal_projection_upgrade_recovery.sh
   - scripts/test_portal_facet_projection_populated_upgrade.sh
@@ -1001,3 +1007,42 @@ Database #656 adds an independent navigation vocabulary, narrow version facts an
 Do not delete or rewrite existing public projections to recover this child. Inspect the exact failed migration, its source/child coverage and constraint evidence, correct the owning forward migration and resume through the supported migration workflow. Temporary local fixture rollback does not prove a hosted populated upgrade. Runtime unknown nodes must disappear from public navigation when their last public member is withdrawn; their retained private identities are not permission to disclose retired codes.
 
 The navigation shard migrations set both version-parent constraints to immediate for the backfill transaction. A withdrawal after the cursor snapshot is caught and skipped inside the per-version savepoint; the FK cannot defer that error until the whole quarter commits. `scripts/test_portal_navigation_backfill.py` proves populated replay and deterministic concurrent withdrawal/update against the exact migration text. Runtime source writers retain the original deferred constraints.
+
+## Closed read-failure diagnostics
+
+The four `20260927053000..003` forward migrations preserve the existing Summary,
+navigation, dataset and V3 facets signatures, owners, grants, execution budgets,
+successful queries and external errors. Replacements run as the current owner;
+temporary migration membership options and API schema CREATE privilege are
+restored to their exact prestate before commit. They add no table, writer,
+index, exposed RPC or persistent role/logging setting.
+
+Their exception handlers emit a server LOG with message
+`portal read failure diagnostic`. Its DETAIL is a closed JSON object with
+`schemaVersion: portal.read-failure.v1`, `rpc`, `category` and `reason`.
+Cancellation reasons recognize the exact standard English PostgreSQL timeout
+and cancel-request messages; other text or locales yield `unknown`. This does
+not identify which client issued a cancel request or which timeout setting won.
+Internal failures distinguish response-budget and contract-drift SQLSTATEs from
+`other`, while retaining the same public `P0001/portal catalog unavailable`.
+
+Navigation validation uses only the first allowlisted internal exception frame
+and already available option/cursor presence. Reasons are `search_input`,
+`hierarchy_input`, `navigation_options`, `cursor_binding`, `parent`,
+`parent_or_cursor_node` or `unknown`. A parent rejection does not establish that
+the locator was previously valid. Keep this mapping reviewed when the private
+validator or implementation changes; unrecognized frames remain unknown.
+Other validation failures use `input`. The original context, messages, query,
+filters, node identifiers and cursor are never inserted into diagnostic DETAIL.
+PostgreSQL may attach its ordinary current-call context; the original caught
+exception stack is not emitted. Client details and hints remain null.
+
+Run `supabase/tests/20260927_portal_read_failure_diagnostics.sql` on an isolated
+stack together with the existing navigation real-writer and bounded-summary
+suites. Qualify native timeout and cancel-request signals, closed server-log
+records, hostile-text non-disclosure and exact catalog/role prestate. Injected
+helper definitions and source fixtures must roll back. Generated schema comes
+from that exact local migration state, with deterministic regeneration and an
+unchanged Data API type contract. Before incident completion, bind Preview/Main
+deployment identities and classify a bounded live log window; these diagnostics
+cannot reconstruct previously erased parameters or replace traffic/plan proof.

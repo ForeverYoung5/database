@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-27
-lastReviewedCommit: 37d8ccc54dc5f4f8fb8501b82f233a24f91299a2
-lastReviewedNote: "Reviewed Database #735 exact Main-to-Dev backmerge of #733/#734 at 5935527b3564fc519549766cc65375a3eca4fd61. The combined 390-migration history retains all three existing Dev-only migrations byte-for-byte and reaches 20260926143000. Reader definitions and public contracts retain the qualified Main bytes; seven scoped suites pass 188 assertions. Generated schema/types are regenerated from the isolated combined history. CI, official Preview and persistent Dev publication remain separate gates; Root #1570 selects Main only."
+lastReviewedCommit: "2ac2ed4093e6d14f8d583aefee747f22ef5a41bc"
+lastReviewedNote: "Reviewed Database #741 exact Main44be788b3f1d78732a380a0617f843cb17c33819 diagnostic backmerge into Dev2ac2ed4093e6d14f8d583aefee747f22ef5a41bc. All prior Dev migrations/features and successful public queries remain inputs; only closed failure diagnostics are adopted from #738/#739. Combined394-migration/head20260927053003 schema/type determinism, cold CI/Preview and persistent Dev publication remain separate gates. Root selects the eligible Main source; parent#1574 retains incident follow-through."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml

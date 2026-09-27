@@ -33,8 +33,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-27
-lastReviewedCommit: 37d8ccc54dc5f4f8fb8501b82f233a24f91299a2
-lastReviewedNote: "Reviewed Database #735 exact Main-to-Dev backmerge of #733/#734 at 5935527b3564fc519549766cc65375a3eca4fd61. The combined 390-migration history retains all three existing Dev-only migrations byte-for-byte and reaches 20260926143000. Reader definitions and public contracts retain the qualified Main bytes; seven scoped suites pass 188 assertions. Generated schema/types are regenerated from the isolated combined history. CI, official Preview and persistent Dev publication remain separate gates; Root #1570 selects Main only."
+lastReviewedCommit: "2ac2ed4093e6d14f8d583aefee747f22ef5a41bc"
+lastReviewedNote: "Reviewed Database #741 exact Main44be788b3f1d78732a380a0617f843cb17c33819 diagnostic backmerge into Dev2ac2ed4093e6d14f8d583aefee747f22ef5a41bc. All prior Dev migrations/features and successful public queries remain inputs; only closed failure diagnostics are adopted from #738/#739. Combined394-migration/head20260927053003 schema/type determinism, cold CI/Preview and persistent Dev publication remain separate gates. Root selects the eligible Main source; parent#1574 retains incident follow-through."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -546,6 +546,16 @@ The example-scope migration intentionally changes four private raw Hybrid/semant
 For Database #654, run `supabase/tests/20260918_tidas_full_package_import.sql` and existing partial-import/API/full-schema suites after clean migration replay. Prove orphan/rootless and all-existing packages, per-record skips, cross-type identity, cross-chunk rollback, exact replay, missing chunks, expiry and lease loss during inserts, and receipt ACLs. Regenerate the five-schema workspace and Data API types from the qualified migration state.
 
 ## Portal hierarchical navigation and summary
+
+`20260927_portal_read_failure_diagnostics.sql` verifies anonymous public error
+code/message/details/hint stability, bounded closed diagnostic labels and
+hostile-text non-disclosure while rolling back injected helpers and grants.
+Qualify actual statement-timeout and cancel-request signals on the owned local
+stack, then compare function signatures/config/ACL, API schema ACL and all role
+membership options with migration prestate. Server diagnostic DETAIL must contain
+only its four documented fields; unrecognized messages/frames remain unknown.
+Require live Preview/Main log ingestion before treating the categories as hosted
+evidence, and keep erased historical inputs explicitly unavailable.
 
 After a blank local migration reset, run all `*portal*.sql` suites plus full-schema, API closure, adjacent matched-version Hybrid/OAuth and FK-index tests. `20260919_portal_navigation_v1.sql` retains both Process projection writers and the Flow writer in rollback-only source fixtures; it checks historical versions, duplicate paths, type disambiguation, aliases, direct/subtree and combined filtering, byte bounds, more than 100 regions, cursor scope, source updates, withdrawals and derivation drift. `20260919_portal_catalog_summary_bounded.sql` checks dataset totals, executable examples and unchanged public capabilities/timeouts.
 
