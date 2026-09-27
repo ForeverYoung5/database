@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-27
-lastReviewedCommit: 2ded7cb93dbe4e13767481127ee99900afd99834
-lastReviewedNote: "Reviewed Database #733: bounded legacy V2 keys/ranking/page facts, public-reader ownership with retained internal EXECUTE and restored DDL prestate, writer/visibility/cursor proof and exact local regeneration preserve public contracts, budgets and Main-to-Dev/Root boundaries. Hosted publication remains a distinct gate."
+lastReviewedCommit: 5935527b3564fc519549766cc65375a3eca4fd61
+lastReviewedNote: "Reviewed Database #738: closed server-only facade diagnostics preserve public failure bodies, successful queries, signatures, budgets and access; temporary owner/schema/member DDL privileges restore exact prestate. Anonymous, native-cancellation and Portal/adjacent regression proof and exact local schema/type generation remain required; Preview/Main ingestion, Main-to-Dev and Root integration stay separate gates."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml
