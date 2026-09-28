@@ -46,66 +46,78 @@ create trigger comments_sync_submitted_decision_v1
 before insert or update of state_code on private.comments
 for each row execute function private.comments_sync_submitted_decision_v1();
 
--- Simple-review JSON records the decision explicitly, so it is authoritative.
-update private.comments as comment_row
-set submitted_decision = comment_row.json::jsonb->>'decision',
-    submitted_decision_at = comment_row.modified_at
-where comment_row.json::jsonb->>'decision' in ('approve', 'reject');
+-- The retained legacy-review guard blocks ordinary writes to reviews whose
+-- review_kind is null. This migration must still preserve their historical
+-- reviewer decisions, so enable the existing transaction-local migration
+-- bypass only around these three deterministic backfills.
+do $backfill$
+begin
+  perform pg_catalog.set_config('app.review_legacy_migration', 'on', true);
 
--- Active complex-review rows can be reconstructed directly from their opinion state.
-update private.comments as comment_row
-set submitted_decision = case comment_row.state_code when 1 then 'approve' else 'reject' end,
-    submitted_decision_at = comment_row.modified_at
-where comment_row.submitted_decision is null
-  and comment_row.state_code in (1, -3);
+  -- Simple-review JSON records the decision explicitly, so it is authoritative.
+  update private.comments as comment_row
+  set submitted_decision = comment_row.json::jsonb->>'decision',
+      submitted_decision_at = comment_row.modified_at
+  where comment_row.json::jsonb->>'decision' in ('approve', 'reject');
 
--- Terminal complex-review rows have overwritten state codes. Backfill only when
--- the latest reviewer event is an unambiguous submitted opinion. A later draft
--- intentionally leaves the decision null.
-with reviewer_events as (
-  select
-    comment_row.review_id,
-    comment_row.reviewer_id,
-    log_entry.value,
-    log_entry.ordinality,
-    pg_catalog.row_number() over (
-      partition by comment_row.review_id, comment_row.reviewer_id
-      order by log_entry.ordinality desc
-    ) as event_rank
-  from private.comments as comment_row
-  join private.reviews as review_row on review_row.id = comment_row.review_id
-  cross join lateral pg_catalog.jsonb_array_elements(
-    api.cmd_review_json_array(review_row.json->'logs')
-  ) with ordinality as log_entry(value, ordinality)
+  -- Active complex-review rows can be reconstructed directly from their opinion state.
+  update private.comments as comment_row
+  set submitted_decision = case comment_row.state_code when 1 then 'approve' else 'reject' end,
+      submitted_decision_at = comment_row.modified_at
   where comment_row.submitted_decision is null
-    and log_entry.value->>'action' in (
-      'submit_comments',
-      'reviewer_rejected',
-      'simple_reviewer_approved',
-      'simple_reviewer_rejected',
-      'submit_comments_temporary'
-    )
-    and coalesce(
-      nullif(log_entry.value->>'reviewer_id', '')::uuid,
-      nullif(log_entry.value->'user'->>'id', '')::uuid
-    ) = comment_row.reviewer_id
-), latest_events as (
-  select * from reviewer_events where event_rank = 1
-)
-update private.comments as comment_row
-set submitted_decision = case
-      when latest_events.value->>'action' in ('reviewer_rejected', 'simple_reviewer_rejected')
-        then 'reject'
-      else 'approve'
-    end,
-    submitted_decision_at = coalesce(
-      nullif(latest_events.value->>'time', '')::timestamptz,
-      comment_row.modified_at
-    )
-from latest_events
-where comment_row.review_id = latest_events.review_id
-  and comment_row.reviewer_id = latest_events.reviewer_id
-  and latest_events.value->>'action' <> 'submit_comments_temporary';
+    and comment_row.state_code in (1, -3);
+
+  -- Terminal complex-review rows have overwritten state codes. Backfill only when
+  -- the latest reviewer event is an unambiguous submitted opinion. A later draft
+  -- intentionally leaves the decision null.
+  with reviewer_events as (
+    select
+      comment_row.review_id,
+      comment_row.reviewer_id,
+      log_entry.value,
+      log_entry.ordinality,
+      pg_catalog.row_number() over (
+        partition by comment_row.review_id, comment_row.reviewer_id
+        order by log_entry.ordinality desc
+      ) as event_rank
+    from private.comments as comment_row
+    join private.reviews as review_row on review_row.id = comment_row.review_id
+    cross join lateral pg_catalog.jsonb_array_elements(
+      api.cmd_review_json_array(review_row.json->'logs')
+    ) with ordinality as log_entry(value, ordinality)
+    where comment_row.submitted_decision is null
+      and log_entry.value->>'action' in (
+        'submit_comments',
+        'reviewer_rejected',
+        'simple_reviewer_approved',
+        'simple_reviewer_rejected',
+        'submit_comments_temporary'
+      )
+      and coalesce(
+        nullif(log_entry.value->>'reviewer_id', '')::uuid,
+        nullif(log_entry.value->'user'->>'id', '')::uuid
+      ) = comment_row.reviewer_id
+  ), latest_events as (
+    select * from reviewer_events where event_rank = 1
+  )
+  update private.comments as comment_row
+  set submitted_decision = case
+        when latest_events.value->>'action' in ('reviewer_rejected', 'simple_reviewer_rejected')
+          then 'reject'
+        else 'approve'
+      end,
+      submitted_decision_at = coalesce(
+        nullif(latest_events.value->>'time', '')::timestamptz,
+        comment_row.modified_at
+      )
+  from latest_events
+  where comment_row.review_id = latest_events.review_id
+    and comment_row.reviewer_id = latest_events.reviewer_id
+    and latest_events.value->>'action' <> 'submit_comments_temporary';
+
+  perform pg_catalog.set_config('app.review_legacy_migration', 'off', true);
+end;
+$backfill$;
 
 create or replace function private.review_rejection_reason_v1(p_payload jsonb)
 returns text

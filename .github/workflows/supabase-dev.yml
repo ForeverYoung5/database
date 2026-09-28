@@ -65,6 +65,7 @@ jobs:
           supabase test db supabase/tests/20260810_issue_455_mutable_export_terminal_refresh.sql
           supabase test db supabase/tests/20260910_selected_export_refresh.sql
           supabase test db supabase/tests/20260909_review_queue_full_text_search.sql
+          supabase test db supabase/tests/20260928_review_rejection_visibility.sql
           supabase test db supabase/tests/20260909_tidas_partial_import.sql
           supabase test db supabase/tests/20260918_tidas_full_package_import.sql
           supabase test db supabase/tests/20260919_portal_navigation_v1.sql
@@ -115,6 +116,10 @@ jobs:
           python3 scripts/test_protected_alias_postgrest_routing.py
           python3 scripts/test_portal_navigation_backfill.py --container supabase_db_database-engine --report /tmp/portal-navigation-backfill.json
           scripts/test_full_schema_cutover_upgrade.sh
+          supabase db reset --version 20260928125728 --no-seed
+          supabase test db supabase/tests/upgrade/20260928_review_rejection_visibility_base.sql
+          supabase migration up --local
+          supabase test db supabase/tests/upgrade/20260928_review_rejection_visibility_head.sql
 
       - name: Verify Portal JSON Schemas
         run: |
