@@ -1,7 +1,16 @@
-CREATE OR REPLACE FUNCTION "util"."invoke_edge_function"("name" "text", "body" "jsonb", "timeout_milliseconds" integer DEFAULT ((5 * 60) * 1000)) RETURNS "void"
-    LANGUAGE "plpgsql" SECURITY DEFINER
-    SET "search_path" TO ''
-    AS $$
+-- Database #746: modern secret keys are API keys, not JWT bearer tokens.
+begin;
+set local lock_timeout = '5s';
+set local statement_timeout = '30s';
+
+create or replace function util.invoke_edge_function(
+  name text,
+  body jsonb,
+  timeout_milliseconds integer default ((5 * 60) * 1000)
+) returns void
+language plpgsql security definer
+set search_path = ''
+as $$
 declare
   service_key text;
   request_headers jsonb;
@@ -30,6 +39,4 @@ begin
 end;
 $$;
 
-ALTER FUNCTION "util"."invoke_edge_function"("name" "text", "body" "jsonb", "timeout_milliseconds" integer) OWNER TO "postgres";
-
-REVOKE ALL ON FUNCTION "util"."invoke_edge_function"("name" "text", "body" "jsonb", "timeout_milliseconds" integer) FROM PUBLIC;
+commit;
