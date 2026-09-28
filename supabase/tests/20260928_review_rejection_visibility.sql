@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth;
 
-select plan(16);
+select plan(20);
 
 select ok(
   pg_catalog.to_regprocedure('api.qry_review_get_rejection_details_v1(uuid)') is not null,
@@ -84,6 +84,85 @@ values
   ('59628000-0000-0000-0000-000000000002', '19628000-0000-0000-0000-000000000002', '{"reason":"Terminal reviewer reason","decision":"reject"}', -3),
   ('59628000-0000-0000-0000-000000000002', '19628000-0000-0000-0000-000000000003', '{"decision":"approve"}', 1),
   ('59628000-0000-0000-0000-000000000003', '19628000-0000-0000-0000-000000000002', '{"comment":{"message":"Rejected before final approval"}}', -3);
+
+-- Reproduce the retained Dev shape that blocked the original migration: a
+-- legacy review has review_kind = null and its submitted decision must be
+-- backfilled only through the explicit migration context.
+select set_config('app.review_legacy_migration', 'on', true);
+
+insert into private.reviews (
+  id, data_id, data_version, state_code, reviewer_id, json,
+  review_kind, target_table, submitted_revision_checksum, target_owner_id
+)
+values (
+  '59628000-0000-0000-0000-000000000004', '49628000-0000-0000-0000-000000000004',
+  '01.00.000', 1,
+  '["19628000-0000-0000-0000-000000000002"]',
+  '{"data":{"id":"49628000-0000-0000-0000-000000000004","version":"01.00.000","table":"processes"},"logs":[]}',
+  null, 'processes', pg_catalog.repeat('4', 64), '19628000-0000-0000-0000-000000000001'
+);
+
+insert into private.comments (review_id, reviewer_id, json, state_code)
+values (
+  '59628000-0000-0000-0000-000000000004',
+  '19628000-0000-0000-0000-000000000002',
+  '{"comment":{"message":"Legacy reviewer reason"}}',
+  0
+);
+
+update private.comments
+set state_code = -3
+where review_id = '59628000-0000-0000-0000-000000000004';
+
+update private.comments
+set submitted_decision = null,
+    submitted_decision_at = null
+where review_id = '59628000-0000-0000-0000-000000000004';
+
+select set_config('app.review_legacy_migration', 'off', true);
+
+select throws_ok(
+  $test$
+    update private.comments
+    set submitted_decision = 'reject',
+        submitted_decision_at = modified_at
+    where review_id = '59628000-0000-0000-0000-000000000004'
+  $test$,
+  '55000',
+  'LEGACY_REVIEW_READ_ONLY',
+  'legacy review comments remain read-only outside migration context'
+);
+
+select set_config('app.review_legacy_migration', 'on', true);
+
+update private.comments
+set submitted_decision = 'reject',
+    submitted_decision_at = modified_at
+where review_id = '59628000-0000-0000-0000-000000000004';
+
+select set_config('app.review_legacy_migration', 'off', true);
+
+select is(
+  (select submitted_decision from private.comments where review_id = '59628000-0000-0000-0000-000000000004'),
+  'reject',
+  'migration context backfills a legacy reviewer decision'
+);
+
+select ok(
+  pg_catalog.current_setting('app.review_legacy_migration', true) is distinct from 'on',
+  'legacy migration bypass is disabled after the backfill'
+);
+
+select throws_ok(
+  $test$
+    update private.comments
+    set json = '{"comment":{"message":"Mutation must stay blocked"}}'
+    where review_id = '59628000-0000-0000-0000-000000000004'
+  $test$,
+  '55000',
+  'LEGACY_REVIEW_READ_ONLY',
+  'legacy review protection is restored after the backfill'
+);
 
 update private.comments set state_code = -1 where review_id = '59628000-0000-0000-0000-000000000002';
 update private.comments set state_code = 2 where review_id = '59628000-0000-0000-0000-000000000003';
