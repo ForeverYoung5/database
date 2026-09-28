@@ -204,6 +204,7 @@ def main() -> int:
         "github.event.pull_request.head.repo.full_name == github.repository",
         "SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}",
         "SUPABASE_MAIN_PROJECT_ID: ${{ vars.SUPABASE_MAIN_PROJECT_ID }}",
+        "PREVIEW_BASE_BRANCH: ${{ github.event.pull_request.base.ref }}",
         "PREVIEW_GIT_BRANCH: ${{ github.event.pull_request.head.ref }}",
         "PREVIEW_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
         "PREVIEW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
@@ -212,6 +213,8 @@ def main() -> int:
         "id: preview_scope",
         'git cat-file -e "$PREVIEW_BASE_SHA^{commit}"',
         'git cat-file -e "$PREVIEW_HEAD_SHA^{commit}"',
+        '[[ "$PREVIEW_BASE_BRANCH" == "main" && "$PREVIEW_GIT_BRANCH" == "dev" ]]',
+        "Exact dev-to-main promotion reuses prior disposable Preview and persistent Dev proof.",
         'git diff --quiet "$PREVIEW_BASE_SHA" "$PREVIEW_HEAD_SHA" --',
         "supabase/config.toml",
         "supabase/migrations/",
@@ -307,6 +310,29 @@ def main() -> int:
         'git diff --quiet "$PREVIEW_BASE_SHA" "$PREVIEW_HEAD_SHA" --'
     ) != 1:
         failures.append("Preview scope must use one exact base-to-head diff")
+    promotion_guard = (
+        '[[ "$PREVIEW_BASE_BRANCH" == "main" && "$PREVIEW_GIT_BRANCH" == "dev" ]]'
+    )
+    if preview_scope_step.count(promotion_guard) != 1:
+        failures.append(
+            "Preview scope must contain exactly one narrow dev-to-main promotion guard"
+        )
+    promotion_guard_position = preview_scope_step.find(promotion_guard)
+    deployable_diff_position = preview_scope_step.find(
+        'git diff --quiet "$PREVIEW_BASE_SHA" "$PREVIEW_HEAD_SHA" --'
+    )
+    if not (0 <= promotion_guard_position < deployable_diff_position):
+        failures.append(
+            "exact dev-to-main promotion classification must precede deployable Preview diff classification"
+        )
+    promotion_block = preview_scope_step.split(promotion_guard, 1)[-1].split("fi", 1)[0]
+    if (
+        promotion_block.count('echo "required=false" >> "$GITHUB_OUTPUT"') != 1
+        or "exit 0" not in promotion_block
+    ):
+        failures.append(
+            "exact dev-to-main promotion must stop before Preview authority with required=false"
+        )
     for deployable_path in (
         "supabase/config.toml",
         "supabase/migrations/",
@@ -327,8 +353,10 @@ def main() -> int:
             failures.append(
                 f"Preview scope must not treat repository-only path as deployable: {nondeployable_path}"
             )
-    if preview_workflow.count('echo "required=false" >> "$GITHUB_OUTPUT"') != 1:
-        failures.append("Preview scope must emit exactly one no-change outcome")
+    if preview_workflow.count('echo "required=false" >> "$GITHUB_OUTPUT"') != 2:
+        failures.append(
+            "Preview scope must emit exactly one promotion and one no-change outcome"
+        )
     if preview_workflow.count('echo "required=true" >> "$GITHUB_OUTPUT"') != 1:
         failures.append("Preview scope must emit exactly one runtime-required outcome")
     for app_identity_token in (

@@ -82,7 +82,7 @@ canonical-base-to-head upgrade；追加的 Preview repair 本身不能证明首�
 - 把 `supabase/migrations/` 中已提交的文件视为 production、`dev` 和 preview 分支共同遵循的 schema 真相源。
 - 分支差异放在 `supabase/config.toml` 的 `[remotes.<branch>]` 中。
 - 不要为不同 Git 分支复制多套 `supabase/` 目录。
-- pull-request-only Preview 运行态 job 必须与部署隔离。fork PR 在授权前跳过。同仓 PR 先 checkout 准确 head 并验证事件 base/head commit，只比较可部署 Preview 输入：`supabase/config.toml`、`supabase/migrations/`、`supabase/seed.sql`、`supabase/seeds/` 与 `supabase/functions/`。生成 workspace、tests、Auth templates 与仓库文档不是部署输入。该集合无 diff 时，job 无需 secret、branch 解析或 hosted mutation 即成功，并接受官方 App 的 `skipped`。任一可部署输入变化仍要求完整官方 check、BranchResponse、PostgREST、public key、Hybrid 与 sitemap 证据，缺少 authority 时 fail closed。
+- pull-request-only Preview 运行态 job 必须与部署隔离。fork PR 在授权前跳过。同仓 PR 先 checkout 准确 head 并验证事件 base/head commit，只比较可部署 Preview 输入：`supabase/config.toml`、`supabase/migrations/`、`supabase/seed.sql`、`supabase/seeds/` 与 `supabase/functions/`。生成 workspace、tests、Auth templates 与仓库文档不是部署输入。该集合无 diff 时，job 无需 secret、branch 解析或 hosted mutation 即成功，并接受官方 App 的 `skipped`。准确的同仓 `dev -> main` promote 也会在 Preview authority 或 mutation 前结束，因为 Supabase 会把长期 `dev` head 识别为持久 Dev 项目；它复用源 PR 的 disposable Preview 证据和准确的持久 Dev 部署证明。除此之外的可部署输入变化仍要求完整官方 check、disposable BranchResponse、PostgREST、public key、Hybrid 与 sitemap 证据，缺少 authority 时 fail closed。
 - 把 `.github/workflows/supabase-dev.yml` 作为持久化 `dev` 的唯一 migration 部署者；它可以执行 `supabase link`、准确一次 `supabase db push --include-all`，以及一次仅包含 `db_schema`、`db_extra_search_path`、`max_rows` 的 Management API PATCH，让运行中的 PostgREST 与 checked-in 合同一致；但不得部署/删除 Edge Functions、执行 `supabase config push` 或修改其他项目设置。
 - 独立的 ARM64 `scheduler-profile` 作业只重建本地数据库，运行两组完整的合成性能样本并在两组之间重置。x64 `local-contract` 继续运行功能和安全测试；持久化 Dev 部署须等待两个作业。性能作业没有托管凭据或部署权限。
 - 数据库 workflow 成功后，通过 `tiangong-lca-edge-functions` 部署并验证持久化 Dev 所需的 Functions。Function 源码、函数选择、部署命令和运行时验证仍由 Edge 仓负责。
@@ -185,7 +185,7 @@ migration 的提交，因此必须使用该参数；已经存在于远端 histor
   同仓 PR 在任何 secret 或 Management API step 前，先证明事件 base/head commit 与
   可部署输入 allowlist 准确可用。
 - 同仓 PR 缺少 `SUPABASE_ACCESS_TOKEN`、`SUPABASE_MAIN_PROJECT_ID` 或 `SUPABASE_DEV_PROJECT_ID` 任一项时 fail closed，不猜测项目 ref，也不使用持久化 Dev 兜底。
-- 只有可部署输入 allowlist 精确无变化时才不要求 Preview check。任一 allowlist diff 都必须使用官方 Supabase App id `330661`、slug/owner `supabase` 的成功 check，从准确 dashboard `details_url` 捕获 ref，解析唯一 disposable BranchResponse，并要求 ref 相等且不同于 main/Dev。Preview 必需时，失败、取消、跳过、stale、neutral、超时、歧义或非官方 check 都 fail closed。
+- 只有可部署输入 allowlist 精确无变化，或分支对准确为同仓 `dev -> main` promote 时，才不要求 disposable Preview check。promote 例外仍先验证事件 commit 和准确分支对，且不接收 Preview authority、不执行 hosted mutation。除此之外的任一 allowlist diff 都必须使用官方 Supabase App id `330661`、slug/owner `supabase` 的成功 check，从准确 dashboard `details_url` 捕获 ref，解析唯一 disposable BranchResponse，并要求 ref 相等且不同于 main/Dev。Preview 必需时，失败、取消、跳过、stale、neutral、超时、歧义或非官方 check 都 fail closed。
 - 解析出的 ref 必须同时不同于 main parent 与持久化 Dev；job 不执行 `supabase link`、`db push`、Functions 命令、广义 `config push`、seed 或 migration。
 - Management API 修改准确为对该 disposable ref 的一次 PATCH，且只含 checked-in PostgREST schema、search path 与 row limit；传输探测前必须再通过独立 GET 回读三项。
 - 独立 key step 只做一次不带 `reveal` 的 Management API GET，并使用原始 `disabled` 字段；只接受非空、形态正确且启用的 publishable key，缺少时才回退到形态正确且启用的 legacy `anon`。选择出的公共 key 先 mask/export，随后清除 PAT 与原始 JSON；后续 REST step 不含 PAT/service credential，只带 `apikey`，绝不带 `Authorization` 或 `Cookie`。
@@ -328,8 +328,10 @@ python3 scripts/test_check_auth_email_templates.py
 5. 保持两条长期分支上的 migration 历史一致。
 
 数据库验证 workflow 覆盖目标为 `dev` 或 `main` 的 PR，包括 hotfix；两者都执行
-本地合同重建和精确的一次性 Preview 检查。持久 Dev 部署仍只接受
-`refs/heads/dev` 的 push，Main PR 不会部署该持久环境。
+本地合同重建。routine 与 hotfix PR 的可部署变化继续执行精确的一次性 Preview
+检查；准确的同仓 `dev -> main` promote 复用源 PR Preview 与持久 Dev 证明，不再
+执行额外 hosted mutation。持久 Dev 部署仍只接受 `refs/heads/dev` 的 push，Main PR
+不会部署该持久环境。
 
 ## 消费者仓边界
 
