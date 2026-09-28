@@ -499,6 +499,7 @@ For branch-oriented changes:
 
 - preview-branch proof usually happens on the repo PR
 - persistent remote `dev` proof happens after merge into Git `dev`: first record the database workflow result, then the Edge-owned Function deployment and runtime validation
+- an exact same-repository `dev -> main` promotion reruns the local contract but reuses the source-PR disposable Preview and persistent-Dev proof; it must stop before Preview authority or hosted mutation because the `dev` head resolves to the persistent project
 - production `main` proof happens after `dev -> main` promote and should confirm the Supabase GitHub integration applied migrations automatically
 - root workspace proof happens later in `lca-workspace`
 

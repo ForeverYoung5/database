@@ -80,7 +80,7 @@ When review changes an already-applied PR migration, add a later migration that 
 - Treat committed files in `supabase/migrations/` as the schema source of truth for production, `dev`, and preview branches.
 - Keep branch-specific overrides in `[remotes.<branch>]` inside `supabase/config.toml`.
 - Do not create a separate `supabase/` directory per Git branch.
-- Keep the pull-request-only Preview runtime job isolated from deployment. Fork PRs skip before authority. A same-repository PR first checks out the exact event head and verifies both event commits. It compares only deployable Preview inputs: `supabase/config.toml`, `supabase/migrations/`, `supabase/seed.sql`, `supabase/seeds/`, and `supabase/functions/`. Generated workspace, tests, Auth templates, and repository documentation are not deployment inputs. If that set has no diff, the job succeeds without secrets, branch resolution, or hosted mutation and accepts the official App's `skipped` result. Any deployable change retains the exact official-check, BranchResponse, PostgREST, key, Hybrid, and sitemap proof and fails closed when authority is missing.
+- Keep the pull-request-only Preview runtime job isolated from deployment. Fork PRs skip before authority. A same-repository PR first checks out the exact event head and verifies both event commits. It compares only deployable Preview inputs: `supabase/config.toml`, `supabase/migrations/`, `supabase/seed.sql`, `supabase/seeds/`, and `supabase/functions/`. Generated workspace, tests, Auth templates, and repository documentation are not deployment inputs. If that set has no diff, the job succeeds without secrets, branch resolution, or hosted mutation and accepts the official App's `skipped` result. The exact same-repository `dev -> main` promotion also stops before Preview authority or mutation because Supabase identifies its long-lived `dev` head as the persistent Dev project; it reuses the disposable Preview evidence from the source PRs and the exact persistent-Dev deployment proof. Every other deployable change retains the exact official-check, disposable BranchResponse, PostgREST, key, Hybrid, and sitemap proof and fails closed when authority is missing.
 - Keep `.github/workflows/supabase-dev.yml` as the sole persistent-`dev` migration deployer. It may run `supabase link`, exactly one `supabase db push --include-all`, and one Management API PATCH limited to `db_schema`, `db_extra_search_path`, and `max_rows` so the running PostgREST instance matches the checked-in contract; it must not deploy/delete Edge Functions, run `supabase config push`, or mutate any other project setting.
 - The separate ARM64 scheduler-profile job rebuilds only a local database and runs both full synthetic performance cohorts, resetting between them. The x64 local-contract job retains the functional and security suites; persistent Dev deployment waits for both jobs. The profile job has no hosted credentials or deployment authority.
 - After the database workflow succeeds, deploy and validate the intended persistent-Dev Functions through `tiangong-lca-edge-functions`. Function source, function selection, deployment commands, and runtime validation remain owned by that repository.
@@ -199,7 +199,7 @@ discard and rebuild that disposable branch state.
 - Missing `SUPABASE_ACCESS_TOKEN`, `SUPABASE_MAIN_PROJECT_ID`, or
   `SUPABASE_DEV_PROJECT_ID` fails a same-repository PR closed instead of
   guessing a project ref or using persistent Dev as fallback.
-- Exact no-change across the deployable input allowlist is the only path that does not require a Preview check. For any allowlisted diff, the accepted check must be from official Supabase App id `330661`, slug/owner `supabase`; the job captures the expected ref from its exact dashboard `details_url`, resolves one matching disposable BranchResponse, and requires ref equality plus main/Dev inequality. Failed, cancelled, skipped, stale, neutral, timed-out, ambiguous, or non-official checks fail closed whenever Preview is required.
+- Exact no-change across the deployable input allowlist and the exact same-repository `dev -> main` promotion are the only paths that do not require a disposable Preview check. The promotion exception still verifies the event commits and exact branch pair before it stops, receives no Preview authority, and performs no hosted mutation. For every other allowlisted diff, the accepted check must be from official Supabase App id `330661`, slug/owner `supabase`; the job captures the expected ref from its exact dashboard `details_url`, resolves one matching disposable BranchResponse, and requires ref equality plus main/Dev inequality. Failed, cancelled, skipped, stale, neutral, timed-out, ambiguous, or non-official checks fail closed whenever Preview is required.
   `supabase`; the job captures the expected ref from its exact dashboard
   `details_url`. The pinned CLI then uses `branches list --output json` and
   requires exactly one row matching the Git branch, PR number, parent project,
@@ -391,9 +391,12 @@ Rules:
 5. Keep migration history aligned across both long-lived branches.
 
 The database validation workflow runs for PRs targeting either `dev` or `main`,
-including hotfixes. Both targets receive the local contract rebuild and exact
-disposable Preview checks. Persistent Dev deployment still requires a push to
-`refs/heads/dev`; a Main PR never deploys that persistent environment.
+including hotfixes. Both targets receive the local contract rebuild. Routine
+and hotfix PRs with deployable changes retain exact disposable Preview checks;
+the exact same-repository `dev -> main` promotion reuses its source-PR Preview
+and persistent-Dev proof and performs no additional hosted mutation. Persistent
+Dev deployment still requires a push to `refs/heads/dev`; a Main PR never
+deploys that persistent environment.
 
 ## Consumer repo boundaries
 

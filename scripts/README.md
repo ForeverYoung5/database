@@ -391,7 +391,10 @@ head, and apply exactly one three-field PostgREST PATCH. The pull-request-only
 Preview job skips forks and first validates the event base/head commits plus
 the exact deployable-input allowlist: config, migrations, root/extra seeds,
 and Functions. Workspace, tests, Auth templates, and docs are excluded. A
-zero-diff PR emits `required=false` and performs no hosted Preview work. Any
+zero-diff PR emits `required=false` and performs no hosted Preview work. The
+exact same-repository `dev -> main` promotion also emits `required=false`
+after exact commit/branch validation, reuses source-PR disposable Preview and
+persistent-Dev proof, and receives no Preview authority or mutation. Any other
 allowlisted change still fails when its access token, main-parent ref, or
 persistent-Dev ref is absent, then binds one
 successful check from the exact official Supabase App/head to a unique
