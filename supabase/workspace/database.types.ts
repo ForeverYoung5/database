@@ -2203,6 +2203,40 @@ export type Database = {
           total_count: number
         }[]
       }
+      qry_review_get_admin_queue_items_v6: {
+        Args: {
+          p_display_mode?: string
+          p_page?: number
+          p_page_size?: number
+          p_query?: string
+          p_sort_by?: string
+          p_sort_order?: string
+          p_status?: string
+          p_target_table?: string
+        }
+        Returns: {
+          approve_opinion_count: number
+          comment_state_codes: Json
+          completed_reviewer_count: number
+          created_at: string
+          data_id: string
+          data_version: string
+          deadline: string
+          has_rejection_info: boolean
+          id: string
+          json: Json
+          modified_at: string
+          reject_opinion_count: number
+          review_kind: string
+          reviewer_count: number
+          reviewer_id: Json
+          root_can_read: boolean
+          root_matches_status: boolean
+          state_code: number
+          target_table: string
+          total_count: number
+        }[]
+      }
       qry_review_get_admin_root_queue_items_v2: {
         Args: {
           p_page?: number
@@ -2402,6 +2436,43 @@ export type Database = {
           total_count: number
         }[]
       }
+      qry_review_get_member_queue_items_v6: {
+        Args: {
+          p_display_mode?: string
+          p_page?: number
+          p_page_size?: number
+          p_query?: string
+          p_sort_by?: string
+          p_sort_order?: string
+          p_status?: string
+          p_target_table?: string
+        }
+        Returns: {
+          actor_has_rejection_info: boolean
+          approve_opinion_count: number
+          comment_created_at: string
+          comment_json: Json
+          comment_modified_at: string
+          comment_state_code: number
+          completed_reviewer_count: number
+          created_at: string
+          data_id: string
+          data_version: string
+          deadline: string
+          id: string
+          json: Json
+          modified_at: string
+          reject_opinion_count: number
+          review_kind: string
+          review_state_code: number
+          reviewer_count: number
+          reviewer_id: Json
+          root_can_read: boolean
+          root_matches_status: boolean
+          target_table: string
+          total_count: number
+        }[]
+      }
       qry_review_get_member_root_queue_items_v2: {
         Args: {
           p_page?: number
@@ -2453,6 +2524,16 @@ export type Database = {
         }[]
       }
       qry_review_get_my_contact_status: { Args: never; Returns: Json }
+      qry_review_get_rejection_details_v1: {
+        Args: { p_review_id: string }
+        Returns: {
+          actor_id: string
+          reason: string
+          reviewer_status: string
+          source: string
+          submitted_at: string
+        }[]
+      }
       qry_review_member_queue_items_v2: {
         Args: { p_page?: number; p_page_size?: number; p_status?: string }
         Returns: {

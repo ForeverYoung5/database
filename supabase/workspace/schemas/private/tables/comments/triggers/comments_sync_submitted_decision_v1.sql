@@ -1,0 +1,1 @@
+CREATE OR REPLACE TRIGGER "comments_sync_submitted_decision_v1" BEFORE INSERT OR UPDATE OF "state_code" ON "private"."comments" FOR EACH ROW EXECUTE FUNCTION "private"."comments_sync_submitted_decision_v1"();

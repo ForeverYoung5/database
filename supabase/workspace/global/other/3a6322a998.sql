@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "api"."qry_review_get_rejection_details_v1"("p_review_id" "uuid") IS 'Returns rejection details with role-scoped visibility: review admins see admin and reviewer reasons; reviewers see only their own reason.';
