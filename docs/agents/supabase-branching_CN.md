@@ -22,9 +22,9 @@ checkPaths:
   - .github/workflows/supabase-dev.yml
   - .env.supabase.dev.local.example
   - .env.supabase.main.local.example
-lastReviewedAt: 2026-09-27
-lastReviewedCommit: 3326a6701763cbf4bbcf4f61298b3f8f54a3fd16
-lastReviewedNote: "Reviewed Database #733: the legacy V2 regression joins the unchanged local/ARM64/official-Preview gates; exact Main hotfix, required Dev backmerge, credential isolation and production GitHub publication boundaries remain."
+lastReviewedAt: 2026-09-28
+lastReviewedCommit: 44be788b3f1d78732a380a0617f843cb17c33819
+lastReviewedNote: "Reviewed Database #746: modern secret keys use apikey-only dispatch; legacy JWT transport and authority metadata remain preserved. Rollback-only real pg_net coverage, exact local generation, Main hotfix/Dev backmerge and separate hosted/integration gates remain aligned."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

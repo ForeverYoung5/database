@@ -30,9 +30,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-27
-lastReviewedCommit: 5935527b3564fc519549766cc65375a3eca4fd61
-lastReviewedNote: "Reviewed Database #738: closed server-only facade diagnostics preserve public failure bodies, successful queries, signatures, budgets and access; temporary owner/schema/member DDL privileges restore exact prestate. Anonymous, native-cancellation and Portal/adjacent regression proof and exact local schema/type generation remain required; Preview/Main ingestion, Main-to-Dev and Root integration stay separate gates."
+lastReviewedAt: 2026-09-28
+lastReviewedCommit: 44be788b3f1d78732a380a0617f843cb17c33819
+lastReviewedNote: "Reviewed Database #746: modern secret keys use apikey-only dispatch; legacy JWT transport and authority metadata remain preserved. Rollback-only real pg_net coverage, exact local generation, Main hotfix/Dev backmerge and separate hosted/integration gates remain aligned."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -43,6 +43,14 @@ related:
 ## Repo Shape
 
 This repo is organized around one checked-in Supabase project plus a generated schema-inspection workspace.
+
+## Database-to-Edge authentication
+
+`util.invoke_edge_function` obtains the project service credential from Vault.
+Modern `sb_secret_` keys travel only in `apikey`; they are not JWTs and must not
+enter the Edge Bearer-token parser. Legacy JWT service keys retain both `apikey`
+and `Authorization: Bearer`. Dispatch preserves its fixed empty search path,
+SECURITY DEFINER ownership and existing ACLs, body, regional header and timeout.
 
 ## Schema Boundaries
 
