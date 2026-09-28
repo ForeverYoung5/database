@@ -26810,6 +26810,42 @@ COMMENT ON FUNCTION "api"."qry_review_get_admin_queue_items_v5"("p_status" "text
 
 
 
+CREATE OR REPLACE FUNCTION "api"."qry_review_get_admin_queue_items_v6"("p_status" "text" DEFAULT NULL::"text", "p_page" integer DEFAULT 1, "p_page_size" integer DEFAULT 50, "p_sort_by" "text" DEFAULT 'modified_at'::"text", "p_sort_order" "text" DEFAULT 'desc'::"text", "p_display_mode" "text" DEFAULT 'all'::"text", "p_target_table" "text" DEFAULT NULL::"text", "p_query" "text" DEFAULT NULL::"text") RETURNS TABLE("id" "uuid", "data_id" "uuid", "data_version" "text", "state_code" integer, "review_kind" "text", "target_table" "text", "reviewer_id" "jsonb", "json" "jsonb", "deadline" timestamp with time zone, "created_at" timestamp with time zone, "modified_at" timestamp with time zone, "comment_state_codes" "jsonb", "reviewer_count" integer, "completed_reviewer_count" integer, "approve_opinion_count" integer, "reject_opinion_count" integer, "root_matches_status" boolean, "root_can_read" boolean, "has_rejection_info" boolean, "total_count" bigint)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select
+    queue_row.id, queue_row.data_id, queue_row.data_version, queue_row.state_code,
+    queue_row.review_kind, queue_row.target_table, queue_row.reviewer_id,
+    queue_row.json, queue_row.deadline, queue_row.created_at, queue_row.modified_at,
+    queue_row.comment_state_codes, queue_row.reviewer_count,
+    queue_row.completed_reviewer_count, queue_row.approve_opinion_count,
+    queue_row.reject_opinion_count, queue_row.root_matches_status,
+    queue_row.root_can_read,
+    (
+      (queue_row.state_code = -1 and private.review_rejection_reason_v1(queue_row.json) is not null)
+      or exists (
+        select 1 from private.comments as comment_row
+        where comment_row.review_id = queue_row.id
+          and comment_row.submitted_decision = 'reject'
+          and private.review_rejection_reason_v1(comment_row.json::jsonb) is not null
+      )
+    ) as has_rejection_info,
+    queue_row.total_count
+  from api.qry_review_get_admin_queue_items_v5(
+    p_status, p_page, p_page_size, p_sort_by, p_sort_order,
+    p_display_mode, p_target_table, p_query
+  ) as queue_row
+$$;
+
+
+ALTER FUNCTION "api"."qry_review_get_admin_queue_items_v6"("p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text", "p_display_mode" "text", "p_target_table" "text", "p_query" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "api"."qry_review_get_admin_queue_items_v6"("p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text", "p_display_mode" "text", "p_target_table" "text", "p_query" "text") IS 'V5 review-admin workspace queue plus a non-counting rejection-information availability flag.';
+
+
+
 CREATE OR REPLACE FUNCTION "api"."qry_review_get_admin_root_queue_items_v2"("p_status" "text" DEFAULT NULL::"text", "p_page" integer DEFAULT 1, "p_page_size" integer DEFAULT 10, "p_sort_by" "text" DEFAULT 'modified_at'::"text", "p_sort_order" "text" DEFAULT 'desc'::"text") RETURNS TABLE("id" "uuid", "data_id" "uuid", "data_version" "text", "state_code" integer, "review_kind" "text", "target_table" "text", "reviewer_id" "jsonb", "json" "jsonb", "deadline" timestamp with time zone, "created_at" timestamp with time zone, "modified_at" timestamp with time zone, "comment_state_codes" "jsonb", "root_matches_status" boolean, "root_can_read" boolean, "total_count" bigint)
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -27558,6 +27594,42 @@ COMMENT ON FUNCTION "api"."qry_review_get_member_queue_items_v5"("p_status" "tex
 
 
 
+CREATE OR REPLACE FUNCTION "api"."qry_review_get_member_queue_items_v6"("p_status" "text" DEFAULT 'pending'::"text", "p_page" integer DEFAULT 1, "p_page_size" integer DEFAULT 50, "p_sort_by" "text" DEFAULT 'modified_at'::"text", "p_sort_order" "text" DEFAULT 'desc'::"text", "p_display_mode" "text" DEFAULT 'all'::"text", "p_target_table" "text" DEFAULT NULL::"text", "p_query" "text" DEFAULT NULL::"text") RETURNS TABLE("id" "uuid", "data_id" "uuid", "data_version" "text", "review_state_code" integer, "review_kind" "text", "target_table" "text", "reviewer_id" "jsonb", "json" "jsonb", "deadline" timestamp with time zone, "created_at" timestamp with time zone, "modified_at" timestamp with time zone, "comment_state_code" integer, "comment_json" "jsonb", "comment_created_at" timestamp with time zone, "comment_modified_at" timestamp with time zone, "reviewer_count" integer, "completed_reviewer_count" integer, "approve_opinion_count" integer, "reject_opinion_count" integer, "root_matches_status" boolean, "root_can_read" boolean, "actor_has_rejection_info" boolean, "total_count" bigint)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select
+    queue_row.id, queue_row.data_id, queue_row.data_version,
+    queue_row.review_state_code, queue_row.review_kind, queue_row.target_table,
+    queue_row.reviewer_id, queue_row.json, queue_row.deadline,
+    queue_row.created_at, queue_row.modified_at, queue_row.comment_state_code,
+    queue_row.comment_json, queue_row.comment_created_at,
+    queue_row.comment_modified_at, queue_row.reviewer_count,
+    queue_row.completed_reviewer_count, queue_row.approve_opinion_count,
+    queue_row.reject_opinion_count, queue_row.root_matches_status,
+    queue_row.root_can_read,
+    exists (
+      select 1 from private.comments as comment_row
+      where comment_row.review_id = queue_row.id
+        and comment_row.reviewer_id = auth.uid()
+        and comment_row.submitted_decision = 'reject'
+        and private.review_rejection_reason_v1(comment_row.json::jsonb) is not null
+    ) as actor_has_rejection_info,
+    queue_row.total_count
+  from api.qry_review_get_member_queue_items_v5(
+    p_status, p_page, p_page_size, p_sort_by, p_sort_order,
+    p_display_mode, p_target_table, p_query
+  ) as queue_row
+$$;
+
+
+ALTER FUNCTION "api"."qry_review_get_member_queue_items_v6"("p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text", "p_display_mode" "text", "p_target_table" "text", "p_query" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "api"."qry_review_get_member_queue_items_v6"("p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text", "p_display_mode" "text", "p_target_table" "text", "p_query" "text") IS 'V5 reviewer workspace queue plus an actor-scoped rejection-information availability flag.';
+
+
+
 CREATE OR REPLACE FUNCTION "api"."qry_review_get_member_root_queue_items_v2"("p_status" "text" DEFAULT 'pending'::"text", "p_page" integer DEFAULT 1, "p_page_size" integer DEFAULT 10, "p_sort_by" "text" DEFAULT 'modified_at'::"text", "p_sort_order" "text" DEFAULT 'desc'::"text") RETURNS TABLE("id" "uuid", "data_id" "uuid", "data_version" "text", "review_state_code" integer, "review_kind" "text", "target_table" "text", "reviewer_id" "jsonb", "json" "jsonb", "deadline" timestamp with time zone, "created_at" timestamp with time zone, "modified_at" timestamp with time zone, "comment_state_code" integer, "comment_json" "jsonb", "comment_created_at" timestamp with time zone, "comment_modified_at" timestamp with time zone, "root_matches_status" boolean, "root_can_read" boolean, "total_count" bigint)
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -27902,6 +27974,69 @@ $$;
 
 
 ALTER FUNCTION "api"."qry_review_get_my_contact_status"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "api"."qry_review_get_rejection_details_v1"("p_review_id" "uuid") RETURNS TABLE("source" "text", "actor_id" "uuid", "reason" "text", "submitted_at" timestamp with time zone, "reviewer_status" "text")
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_actor uuid := auth.uid();
+  v_is_admin boolean := api.cmd_review_is_review_admin(v_actor);
+  v_is_member boolean := api.cmd_review_is_review_member(v_actor);
+begin
+  if v_actor is null or not (v_is_admin or v_is_member) then
+    return;
+  end if;
+  if not api.policy_review_can_read(p_review_id, v_actor) then
+    return;
+  end if;
+
+  if v_is_admin then
+    return query
+    select
+      'review-admin'::text,
+      nullif(admin_log.value->'user'->>'id', '')::uuid,
+      private.review_rejection_reason_v1(review_row.json),
+      nullif(admin_log.value->>'time', '')::timestamptz,
+      null::text
+    from private.reviews as review_row
+    left join lateral (
+      select log_entry.value
+      from pg_catalog.jsonb_array_elements(
+        api.cmd_review_json_array(review_row.json->'logs')
+      ) with ordinality as log_entry(value, ordinality)
+      where log_entry.value->>'action' = 'rejected'
+      order by log_entry.ordinality desc
+      limit 1
+    ) as admin_log on true
+    where review_row.id = p_review_id
+      and review_row.state_code = -1
+      and private.review_rejection_reason_v1(review_row.json) is not null;
+  end if;
+
+  return query
+  select
+    'reviewer'::text,
+    comment_row.reviewer_id,
+    private.review_rejection_reason_v1(comment_row.json::jsonb),
+    comment_row.submitted_decision_at,
+    case when comment_row.state_code = -2 then 'revoked' else 'active' end
+  from private.comments as comment_row
+  where comment_row.review_id = p_review_id
+    and comment_row.submitted_decision = 'reject'
+    and private.review_rejection_reason_v1(comment_row.json::jsonb) is not null
+    and (v_is_admin or comment_row.reviewer_id = v_actor)
+  order by comment_row.submitted_decision_at, comment_row.reviewer_id;
+end;
+$$;
+
+
+ALTER FUNCTION "api"."qry_review_get_rejection_details_v1"("p_review_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "api"."qry_review_get_rejection_details_v1"("p_review_id" "uuid") IS 'Returns rejection details with role-scoped visibility: review admins see admin and reviewer reasons; reviewers see only their own reason.';
+
 
 
 CREATE OR REPLACE FUNCTION "api"."qry_review_member_queue_items_v2"("p_status" "text" DEFAULT NULL::"text", "p_page" integer DEFAULT 1, "p_page_size" integer DEFAULT 20) RETURNS TABLE("id" "uuid", "review_kind" "text", "target_table" "text", "data_id" "uuid", "data_version" "text", "state_code" integer, "submitted_revision_checksum" "text", "my_comment_state_code" integer, "deadline" timestamp with time zone, "modified_at" timestamp with time zone, "total_count" bigint)
@@ -44612,6 +44747,32 @@ $_$;
 
 
 ALTER FUNCTION "private"."cmd_review_submit_comment_pre_v2"("p_review_id" "uuid", "p_json" "jsonb", "p_comment_state" integer, "p_audit" "jsonb") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."comments_sync_submitted_decision_v1"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+begin
+  if new.state_code = 1 then
+    new.submitted_decision := 'approve';
+    new.submitted_decision_at := pg_catalog.now();
+  elsif new.state_code = -3 then
+    new.submitted_decision := 'reject';
+    new.submitted_decision_at := pg_catalog.now();
+  elsif new.state_code = 0 then
+    new.submitted_decision := null;
+    new.submitted_decision_at := null;
+  elsif tg_op = 'UPDATE' then
+    new.submitted_decision := old.submitted_decision;
+    new.submitted_decision_at := old.submitted_decision_at;
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "private"."comments_sync_submitted_decision_v1"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "private"."contacts_sync_jsonb_version"() RETURNS "trigger"
@@ -62608,6 +62769,35 @@ $$;
 
 
 ALTER FUNCTION "private"."review_quality_diagnostic_projection"("p_job" "private"."worker_jobs") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."review_rejection_reason_v1"("p_payload" "jsonb") RETURNS "text"
+    LANGUAGE "plpgsql" IMMUTABLE
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_comment jsonb;
+begin
+  if nullif(pg_catalog.btrim(p_payload->>'reason'), '') is not null then
+    return pg_catalog.btrim(p_payload->>'reason');
+  end if;
+  v_comment := p_payload->'comment';
+  if pg_catalog.jsonb_typeof(v_comment) = 'object' then
+    return nullif(pg_catalog.btrim(v_comment->>'message'), '');
+  end if;
+  if pg_catalog.jsonb_typeof(v_comment) = 'string' then
+    begin
+      return nullif(pg_catalog.btrim((v_comment #>> '{}')::jsonb->>'message'), '');
+    exception when others then
+      return null;
+    end;
+  end if;
+  return null;
+end;
+$$;
+
+
+ALTER FUNCTION "private"."review_rejection_reason_v1"("p_payload" "jsonb") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "private"."review_resolve_current_reference_targets_v1"("p_root_review_ids" "uuid"[]) RETURNS TABLE("root_review_id" "uuid", "target_table" "text", "data_id" "uuid", "data_version" "text", "revision_checksum" "text", "provenance" "jsonb")
@@ -82797,11 +82987,22 @@ CREATE TABLE IF NOT EXISTS "private"."comments" (
     "created_at" timestamp with time zone DEFAULT "now"(),
     "modified_at" timestamp with time zone DEFAULT "now"(),
     "state_code" integer DEFAULT 0,
-    CONSTRAINT "comments_state_code_check" CHECK (("state_code" = ANY (ARRAY['-3'::integer, '-2'::integer, '-1'::integer, 0, 1, 2])))
+    "submitted_decision" "text",
+    "submitted_decision_at" timestamp with time zone,
+    CONSTRAINT "comments_state_code_check" CHECK (("state_code" = ANY (ARRAY['-3'::integer, '-2'::integer, '-1'::integer, 0, 1, 2]))),
+    CONSTRAINT "comments_submitted_decision_check" CHECK ((("submitted_decision" IS NULL) OR ("submitted_decision" = ANY (ARRAY['approve'::"text", 'reject'::"text"]))))
 );
 
 
 ALTER TABLE "private"."comments" OWNER TO "postgres";
+
+
+COMMENT ON COLUMN "private"."comments"."submitted_decision" IS 'The reviewer latest submitted decision. Draft state clears it; review finalization and reviewer revocation preserve it.';
+
+
+
+COMMENT ON COLUMN "private"."comments"."submitted_decision_at" IS 'The timestamp of the reviewer latest submitted decision.';
+
 
 
 CREATE TABLE IF NOT EXISTS "private"."identity_center_processed_events" (
@@ -87721,6 +87922,10 @@ CREATE UNIQUE INDEX "pending_embedding_jobs_pending_scope_key" ON "util"."pendin
 
 
 
+CREATE OR REPLACE TRIGGER "comments_sync_submitted_decision_v1" BEFORE INSERT OR UPDATE OF "state_code" ON "private"."comments" FOR EACH ROW EXECUTE FUNCTION "private"."comments_sync_submitted_decision_v1"();
+
+
+
 CREATE OR REPLACE TRIGGER "comments_v2_kind_guard" BEFORE INSERT OR UPDATE ON "private"."comments" FOR EACH ROW EXECUTE FUNCTION "private"."review_v2_comment_guard"();
 
 
@@ -91089,6 +91294,12 @@ GRANT ALL ON FUNCTION "api"."qry_review_get_admin_queue_items_v5"("p_status" "te
 
 
 
+REVOKE ALL ON FUNCTION "api"."qry_review_get_admin_queue_items_v6"("p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text", "p_display_mode" "text", "p_target_table" "text", "p_query" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."qry_review_get_admin_queue_items_v6"("p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text", "p_display_mode" "text", "p_target_table" "text", "p_query" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "api"."qry_review_get_admin_queue_items_v6"("p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text", "p_display_mode" "text", "p_target_table" "text", "p_query" "text") TO "api_internal_executor";
+
+
+
 REVOKE ALL ON FUNCTION "api"."qry_review_get_admin_root_queue_items_v2"("p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "api"."qry_review_get_admin_root_queue_items_v2"("p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text") TO "api_internal_executor";
 GRANT ALL ON FUNCTION "api"."qry_review_get_admin_root_queue_items_v2"("p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text") TO "authenticated";
@@ -91137,6 +91348,12 @@ GRANT ALL ON FUNCTION "api"."qry_review_get_member_queue_items_v5"("p_status" "t
 
 
 
+REVOKE ALL ON FUNCTION "api"."qry_review_get_member_queue_items_v6"("p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text", "p_display_mode" "text", "p_target_table" "text", "p_query" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."qry_review_get_member_queue_items_v6"("p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text", "p_display_mode" "text", "p_target_table" "text", "p_query" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "api"."qry_review_get_member_queue_items_v6"("p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text", "p_display_mode" "text", "p_target_table" "text", "p_query" "text") TO "api_internal_executor";
+
+
+
 REVOKE ALL ON FUNCTION "api"."qry_review_get_member_root_queue_items_v2"("p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "api"."qry_review_get_member_root_queue_items_v2"("p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text") TO "api_internal_executor";
 GRANT ALL ON FUNCTION "api"."qry_review_get_member_root_queue_items_v2"("p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text") TO "authenticated";
@@ -91151,6 +91368,12 @@ GRANT ALL ON FUNCTION "api"."qry_review_get_member_workload"("p_page" integer, "
 
 REVOKE ALL ON FUNCTION "api"."qry_review_get_my_contact_status"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "api"."qry_review_get_my_contact_status"() TO "authenticated";
+
+
+
+REVOKE ALL ON FUNCTION "api"."qry_review_get_rejection_details_v1"("p_review_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."qry_review_get_rejection_details_v1"("p_review_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "api"."qry_review_get_rejection_details_v1"("p_review_id" "uuid") TO "api_internal_executor";
 
 
 
@@ -91852,6 +92075,10 @@ GRANT ALL ON FUNCTION "private"."cmd_review_reference_roles"("p_table" "text", "
 
 REVOKE ALL ON FUNCTION "private"."cmd_review_submit_comment_pre_v2"("p_review_id" "uuid", "p_json" "jsonb", "p_comment_state" integer, "p_audit" "jsonb") FROM PUBLIC;
 GRANT ALL ON FUNCTION "private"."cmd_review_submit_comment_pre_v2"("p_review_id" "uuid", "p_json" "jsonb", "p_comment_state" integer, "p_audit" "jsonb") TO "api_internal_executor";
+
+
+
+REVOKE ALL ON FUNCTION "private"."comments_sync_submitted_decision_v1"() FROM PUBLIC;
 
 
 
@@ -93081,6 +93308,10 @@ GRANT SELECT ON TABLE "private"."worker_jobs" TO "api_internal_executor";
 
 REVOKE ALL ON FUNCTION "private"."review_quality_diagnostic_projection"("p_job" "private"."worker_jobs") FROM PUBLIC;
 GRANT ALL ON FUNCTION "private"."review_quality_diagnostic_projection"("p_job" "private"."worker_jobs") TO "api_internal_executor";
+
+
+
+REVOKE ALL ON FUNCTION "private"."review_rejection_reason_v1"("p_payload" "jsonb") FROM PUBLIC;
 
 
 

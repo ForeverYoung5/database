@@ -425,8 +425,8 @@ select is(
       '59800000-0000-0000-0000-000000000001'::uuid
     ])
   ),
-  2,
-  'current Comment JSON dynamically derives both metadata references'
+  0,
+  'current Comment JSON excludes already-published metadata references'
 );
 
 select is(
@@ -472,8 +472,8 @@ select is(
         '39800000-0000-0000-0000-000000000002'
       )
   ),
-  2,
-  'Source and Contact each receive a reusable Reference Review'
+  0,
+  'published Source and Contact references do not receive redundant Reference Reviews'
 );
 
 select is(
@@ -488,8 +488,8 @@ select is(
       and state_code = 2
       and target_owner_id is null
   ),
-  2,
-  'approved ownerless metadata references are represented by approved Reference Reviews'
+  0,
+  'published ownerless metadata references require no approved Reference Review'
 );
 
 select is(

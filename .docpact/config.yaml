@@ -1,7 +1,7 @@
 version: 1
 layout: repo
-lastReviewedAt: 2026-09-28
-lastReviewedCommit: "0a84eb5e14a85c45fb22609ce1ff8449735e9e11"
+lastReviewedAt: "2026-09-28"
+lastReviewedCommit: "f29205aa6019b939da24d28bfdb30d9580ff2021"
 lastReviewedNote: "Reviewed Database #748 published-reference review behavior against current Dev 0a84eb5e14a85c45fb22609ce1ff8449735e9e11. Repository ownership, schema-workspace generation, SQL-test, branch and validation contracts remain unchanged; migration, generated workspace and targeted regression evidence stay aligned with the current Dev migration chain."
 
 # Keep deterministic governance facts here.

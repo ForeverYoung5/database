@@ -5,7 +5,10 @@ CREATE TABLE IF NOT EXISTS "private"."comments" (
     "created_at" timestamp with time zone DEFAULT "now"(),
     "modified_at" timestamp with time zone DEFAULT "now"(),
     "state_code" integer DEFAULT 0,
-    CONSTRAINT "comments_state_code_check" CHECK (("state_code" = ANY (ARRAY['-3'::integer, '-2'::integer, '-1'::integer, 0, 1, 2])))
+    "submitted_decision" "text",
+    "submitted_decision_at" timestamp with time zone,
+    CONSTRAINT "comments_state_code_check" CHECK (("state_code" = ANY (ARRAY['-3'::integer, '-2'::integer, '-1'::integer, 0, 1, 2]))),
+    CONSTRAINT "comments_submitted_decision_check" CHECK ((("submitted_decision" IS NULL) OR ("submitted_decision" = ANY (ARRAY['approve'::"text", 'reject'::"text"]))))
 );
 
 ALTER TABLE "private"."comments" OWNER TO "postgres";
