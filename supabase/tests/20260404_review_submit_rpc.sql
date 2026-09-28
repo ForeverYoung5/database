@@ -20,7 +20,7 @@ begin
 end;
 $$;
 
-select plan(24);
+select plan(27);
 
 select set_config('request.jwt.claim.role', 'authenticated', true);
 
@@ -84,11 +84,14 @@ values
 
 insert into private.teams (id, json, rank, is_public)
 values
-  ('22000000-0000-0000-0000-000000000001', '{"title":"Review Team"}'::jsonb, 1, false);
+  ('22000000-0000-0000-0000-000000000001', '{"title":"Review Team"}'::jsonb, 1, false),
+  ('00000000-0000-0000-0000-000000000000', '{"title":"System Team"}'::jsonb, 0, false)
+on conflict (id) do nothing;
 
 insert into private.roles (user_id, team_id, role)
 values
-  ('12000000-0000-0000-0000-000000000001', '22000000-0000-0000-0000-000000000001', 'owner');
+  ('12000000-0000-0000-0000-000000000001', '22000000-0000-0000-0000-000000000001', 'owner'),
+  ('12000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000000', 'review-member');
 
 alter table public.sources disable trigger "sources_json_sync_trigger";
 alter table public.flowproperties disable trigger "flowproperties_json_sync_trigger";
@@ -612,17 +615,99 @@ select is(
 reset role;
 
 select ok(
-  exists (
+  not exists (
     select 1
     from private.reviews
     where review_kind = 'reference'
       and target_table = 'sources'
       and data_id = '32000000-0000-0000-0000-000000000002'
       and btrim(data_version::text) = '01.00.000'
-      and state_code = 2
-      and target_owner_id is null
   ),
-  'cmd_review_submit auto-approves an ownerless published reference'
+  'cmd_review_submit does not create a review for an ownerless published reference'
+);
+
+select is(
+  (
+    select count(*)::integer
+    from private.review_derive_current_references_v1(array[
+      (
+        select id
+        from private.reviews
+        where review_kind = 'root'
+          and target_table = 'processes'
+          and data_id = '32000000-0000-0000-0000-000000000003'
+      )
+    ])
+  ),
+  2,
+  'current reference progress includes only the two unpublished references'
+);
+
+select set_config('app.review_controlled_write', 'on', true);
+
+update private.reviews
+set state_code = 1,
+    reviewer_id = '["12000000-0000-0000-0000-000000000002"]'::jsonb
+where review_kind = 'root'
+  and target_table = 'processes'
+  and data_id = '32000000-0000-0000-0000-000000000003';
+
+insert into private.comments (review_id, reviewer_id, json, state_code)
+select
+  review_row.id,
+  '12000000-0000-0000-0000-000000000002',
+  '{}'::json,
+  0
+from private.reviews as review_row
+where review_row.review_kind = 'root'
+  and review_row.target_table = 'processes'
+  and review_row.data_id = '32000000-0000-0000-0000-000000000003';
+
+select set_config('app.review_controlled_write', 'off', true);
+
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '12000000-0000-0000-0000-000000000002', true);
+
+select is(
+  api.cmd_review_submit_comment(
+    (
+      select id
+      from private.reviews
+      where review_kind = 'root'
+        and target_table = 'processes'
+        and data_id = '32000000-0000-0000-0000-000000000003'
+    ),
+    '{
+      "modellingAndValidation": {
+        "validation": {
+          "review": [{
+            "common:referenceToReviewDetails": {
+              "@type": "source data set",
+              "@refObjectId": "32000000-0000-0000-0000-000000000002",
+              "@version": "01.00.000"
+            }
+          }]
+        }
+      }
+    }'::jsonb,
+    '{}'::jsonb
+  )->>'ok',
+  'true',
+  'reviewer comments may reference published data without creating a review task'
+);
+
+reset role;
+
+select ok(
+  not exists (
+    select 1
+    from private.reviews
+    where review_kind = 'reference'
+      and target_table = 'sources'
+      and data_id = '32000000-0000-0000-0000-000000000002'
+      and btrim(data_version::text) = '01.00.000'
+  ),
+  'published comment references remain absent from Reference Reviews'
 );
 
 set local role authenticated;
