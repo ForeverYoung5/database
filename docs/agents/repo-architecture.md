@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-28
-lastReviewedCommit: "ec12f8cc9524163a3178fd2e304a2c9033d4601b"
-lastReviewedNote: "Reviewed Database #746 exact Main 4a7023c09b0666ab2e2746bc0992bfb4fe3a5b57 backmerge into Dev ec12f8cc9524163a3178fd2e304a2c9033d4601b. Only review metadata conflicted; existing Dev-only migrations, workflow policy and generated API contracts remain preserved. Modern secret transport and authority retain the qualified Main bytes; combined local replay, CI/Preview and persistent Dev are separate proofs. Root selects Main only."
+lastReviewedCommit: "0a84eb5e14a85c45fb22609ce1ff8449735e9e11"
+lastReviewedNote: "Reviewed Database #748 published-reference review behavior against current Dev 0a84eb5e14a85c45fb22609ce1ff8449735e9e11. Repository ownership, schema-workspace generation, SQL-test, branch and validation contracts remain unchanged; migration, generated workspace and targeted regression evidence stay aligned with the current Dev migration chain."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

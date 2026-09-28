@@ -62206,7 +62206,15 @@ begin
     join private.reviews as root_review
       on root_review.id = target.root_review_id
       and root_review.state_code in (0, 1)
-    where not exists (
+    where coalesce((
+      api.cmd_review_get_dataset_row(
+        target.target_table,
+        target.data_id,
+        target.data_version,
+        false
+      )->>'state_code'
+    )::integer, 0) < 100
+      and not exists (
       select 1
       from private.reviews as candidate
       where candidate.review_kind = 'reference'
@@ -62249,6 +62257,14 @@ begin
       candidate.id
     limit 1
   ) as reference_review on true
+  where coalesce((
+    api.cmd_review_get_dataset_row(
+      target.target_table,
+      target.data_id,
+      target.data_version,
+      false
+    )->>'state_code'
+  )::integer, 0) < 100
   order by target.root_review_id, target.target_table,
     target.data_id, target.data_version;
 end;
@@ -62272,7 +62288,11 @@ declare
   v_team_id uuid := nullif(p_target_row->>'team_id', '')::uuid;
   v_state integer := coalesce((p_target_row->>'state_code')::integer, 0);
 begin
-  if v_owner_id is null and v_state < 100 then
+  if v_state >= 100 then
+    return null;
+  end if;
+
+  if v_owner_id is null then
     raise exception using
       errcode = '23502',
       message = 'REFERENCE_OWNER_UNRESOLVED';
@@ -62315,7 +62335,7 @@ begin
       gen_random_uuid(),
       (p_target_row->>'id')::uuid,
       p_target_row->>'version',
-      case when v_state >= 100 then 2 else 0 end,
+      0,
       '[]'::jsonb,
       private.review_build_json_v1(
         p_target_table,
@@ -62327,7 +62347,7 @@ begin
       'reference',
       p_target_table,
       p_checksum,
-      case when v_state >= 100 then p_checksum else null end,
+      null,
       v_owner_id,
       v_team_id
     )

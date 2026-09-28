@@ -11,7 +11,15 @@ begin
     join private.reviews as root_review
       on root_review.id = target.root_review_id
       and root_review.state_code in (0, 1)
-    where not exists (
+    where coalesce((
+      api.cmd_review_get_dataset_row(
+        target.target_table,
+        target.data_id,
+        target.data_version,
+        false
+      )->>'state_code'
+    )::integer, 0) < 100
+      and not exists (
       select 1
       from private.reviews as candidate
       where candidate.review_kind = 'reference'
@@ -54,6 +62,14 @@ begin
       candidate.id
     limit 1
   ) as reference_review on true
+  where coalesce((
+    api.cmd_review_get_dataset_row(
+      target.target_table,
+      target.data_id,
+      target.data_version,
+      false
+    )->>'state_code'
+  )::integer, 0) < 100
   order by target.root_review_id, target.target_table,
     target.data_id, target.data_version;
 end;
