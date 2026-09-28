@@ -22,9 +22,9 @@ checkPaths:
   - .github/workflows/supabase-dev.yml
   - .env.supabase.dev.local.example
   - .env.supabase.main.local.example
-lastReviewedAt: 2026-09-27
-lastReviewedCommit: 37d8ccc54dc5f4f8fb8501b82f233a24f91299a2
-lastReviewedNote: "Reviewed Database #735 exact Main-to-Dev backmerge of #733/#734 at 5935527b3564fc519549766cc65375a3eca4fd61. The combined 390-migration history retains all three existing Dev-only migrations byte-for-byte and reaches 20260926143000. Reader definitions and public contracts retain the qualified Main bytes; seven scoped suites pass 188 assertions. Generated schema/types are regenerated from the isolated combined history. CI, official Preview and persistent Dev publication remain separate gates; Root #1570 selects Main only."
+lastReviewedAt: 2026-09-28
+lastReviewedCommit: "ec12f8cc9524163a3178fd2e304a2c9033d4601b"
+lastReviewedNote: "Reviewed Database #746 exact Main 4a7023c09b0666ab2e2746bc0992bfb4fe3a5b57 backmerge into Dev ec12f8cc9524163a3178fd2e304a2c9033d4601b. Only review metadata conflicted; existing Dev-only migrations, workflow policy and generated API contracts remain preserved. Modern secret transport and authority retain the qualified Main bytes; combined local replay, CI/Preview and persistent Dev are separate proofs. Root selects Main only."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

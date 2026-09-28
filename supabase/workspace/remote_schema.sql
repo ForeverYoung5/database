@@ -77082,17 +77082,26 @@ CREATE OR REPLACE FUNCTION "util"."invoke_edge_function"("name" "text", "body" "
     AS $$
 declare
   service_key text;
+  request_headers jsonb;
 begin
   service_key := util.project_secret_key();
+  request_headers := pg_catalog.jsonb_build_object(
+    'Content-Type', 'application/json',
+    'apikey', service_key,
+    'x_region', 'us-east-1'
+  );
+
+  -- Retain the legacy JWT-key transport. Modern sb_secret_ keys must not
+  -- enter the Edge runtime's Authorization/JWT authentication path.
+  if not pg_catalog.starts_with(service_key, 'sb_secret_') then
+    request_headers := request_headers || pg_catalog.jsonb_build_object(
+      'Authorization', 'Bearer ' || service_key
+    );
+  end if;
 
   perform net.http_post(
     url => util.project_url() || '/functions/v1/' || name,
-    headers => jsonb_build_object(
-      'Content-Type', 'application/json',
-      'Authorization', 'Bearer ' || service_key,
-      'apikey', service_key,
-      'x_region', 'us-east-1'
-    ),
+    headers => request_headers,
     body => body,
     timeout_milliseconds => timeout_milliseconds
   );

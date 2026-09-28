@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-28
-lastReviewedCommit: ec12f8cc9524163a3178fd2e304a2c9033d4601b
-lastReviewedNote: "Reviewed Database #741 exact Main44be788b3f1d78732a380a0617f843cb17c33819 diagnostic backmerge into Dev2ac2ed4093e6d14f8d583aefee747f22ef5a41bc. All prior Dev migrations/features and successful public queries remain inputs; only closed failure diagnostics are adopted from #738/#739. Combined394-migration/head20260927053003 schema/type determinism, cold CI/Preview and persistent Dev publication remain separate gates. Root selects the eligible Main source; parent#1574 retains incident follow-through."
+lastReviewedCommit: "0a84eb5e14a85c45fb22609ce1ff8449735e9e11"
+lastReviewedNote: "Reviewed Database #748 published-reference review behavior against current Dev 0a84eb5e14a85c45fb22609ce1ff8449735e9e11. Repository ownership, schema-workspace generation, SQL-test, branch and validation contracts remain unchanged; migration, generated workspace and targeted regression evidence stay aligned with the current Dev migration chain."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -43,6 +43,14 @@ related:
 ## Repo Shape
 
 This repo is organized around one checked-in Supabase project plus a generated schema-inspection workspace.
+
+## Database-to-Edge authentication
+
+`util.invoke_edge_function` obtains the project service credential from Vault.
+Modern `sb_secret_` keys travel only in `apikey`; they are not JWTs and must not
+enter the Edge Bearer-token parser. Legacy JWT service keys retain both `apikey`
+and `Authorization: Bearer`. Dispatch preserves its fixed empty search path,
+SECURITY DEFINER ownership and existing ACLs, body, regional header and timeout.
 
 ## Schema Boundaries
 

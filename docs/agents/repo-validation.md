@@ -33,8 +33,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-28
-lastReviewedCommit: ec12f8cc9524163a3178fd2e304a2c9033d4601b
-lastReviewedNote: "Reviewed Database #741 exact Main44be788b3f1d78732a380a0617f843cb17c33819 diagnostic backmerge into Dev2ac2ed4093e6d14f8d583aefee747f22ef5a41bc. All prior Dev migrations/features and successful public queries remain inputs; only closed failure diagnostics are adopted from #738/#739. Combined394-migration/head20260927053003 schema/type determinism, cold CI/Preview and persistent Dev publication remain separate gates. Root selects the eligible Main source; parent#1574 retains incident follow-through."
+lastReviewedCommit: "0a84eb5e14a85c45fb22609ce1ff8449735e9e11"
+lastReviewedNote: "Reviewed Database #748 published-reference review behavior against current Dev 0a84eb5e14a85c45fb22609ce1ff8449735e9e11. Repository ownership, schema-workspace generation, SQL-test, branch and validation contracts remain unchanged; migration, generated workspace and targeted regression evidence stay aligned with the current Dev migration chain."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -517,6 +517,18 @@ V1 latest-only and V2 matched-version expectations. Record populated shard timin
 replay/concurrency results, long multilingual page/cursor bounds, strict consumer
 DTO validation, and the exact local regeneration comparison. Production source
 readback and deployed cache-expiry verification remain separate evidence.
+
+## Database-to-Edge credential transport
+
+Run `supabase/tests/20260928_edge_dispatch_modern_secret_headers.sql` and the
+adjacent embedding queue suites after a blank migration rebuild. The regression
+uses synthetic credentials and a synthetic `.invalid` URL, inspects real pg_net
+requests before commit, and rolls the transaction back before any HTTP dispatch.
+Prove modern apikey-only and legacy JWT headers, body, URL, POST method, default
+and explicit timeout, and the unchanged owner/security/search-path/ACL boundary.
+Compare authority metadata with the previous migration head on upgrade. Hosted
+proof must include automatic migration application and a bounded observation of
+existing scheduled invocations; HTTP 200 alone does not prove every batch job.
 
 ## Minimum PR Validation Note
 
