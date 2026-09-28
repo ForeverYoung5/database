@@ -38,7 +38,7 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-28
-lastReviewedCommit: f29205aa6019b939da24d28bfdb30d9580ff2021
+lastReviewedCommit: 884eef253b21d917568aa4d134c21147ffc87661
 lastReviewedNote: "Reviewed Database #748 published-reference review behavior against current Dev 0a84eb5e14a85c45fb22609ce1ff8449735e9e11. Repository ownership, schema-workspace generation, SQL-test, branch and validation contracts remain unchanged; migration, generated workspace and targeted regression evidence stay aligned with the current Dev migration chain."
 related:
   - .docpact/config.yaml
