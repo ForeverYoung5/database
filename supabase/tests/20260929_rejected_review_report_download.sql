@@ -322,7 +322,7 @@ select is(
   (
     select capability_id
     from private.api_capability_grants
-    where routine_identity = 'api.qry_review_report_download_descriptor_v1(uuid,text,uuid,text)'
+    where routine_identity = 'api.qry_review_report_download_descriptor_v1(uuid, text, uuid, text)'
   ),
   'NX-REV-01',
   'descriptor RPC is registered under the review capability'

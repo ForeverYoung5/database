@@ -258,7 +258,7 @@ insert into private.api_capability_grants (
   allow_service_role
 )
 values (
-  'api.qry_review_report_download_descriptor_v1(uuid,text,uuid,text)',
+  'api.qry_review_report_download_descriptor_v1(uuid, text, uuid, text)',
   'NX-REV-01',
   false,
   true,
