@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-29
-lastReviewedCommit: 18c3090d8335d805290e8b0b9556e0c3e6fb3f43
-lastReviewedNote: "Reviewed Database #754 rejected review report download delivery. The generated RPC/helper workspace and public/api type snapshot match the exact local migration head and remain reproducible; generated-versus-stable ownership rules are unchanged."
+lastReviewedCommit: b446dd7a7999b4872f7f808673464327ec89f009
+lastReviewedNote: "Reviewed Database #754 rejected review report download delivery after integrating current Dev through Database #755. The generated RPC/helper workspace and public/api type snapshot match the combined exact local migration head; generated-versus-stable ownership rules are unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

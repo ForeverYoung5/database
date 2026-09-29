@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-29
-lastReviewedCommit: 18c3090d8335d805290e8b0b9556e0c3e6fb3f43
-lastReviewedNote: "复核 Database #754 驳回审查报告下载交付。生成的 RPC/helper workspace 与 public/api 类型快照匹配本地准确 migration head，且可重复生成；生成内容与稳定内容的归属规则不变。"
+lastReviewedCommit: b446dd7a7999b4872f7f808673464327ec89f009
+lastReviewedNote: "复核 Database #754 驳回审查报告下载交付，并合入截至 Database #755 的当前 Dev。生成的 RPC/helper workspace 与 public/api 类型快照匹配合并后的本地准确 migration head；生成内容与稳定内容的归属规则不变。"
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-29
-lastReviewedCommit: 18c3090d8335d805290e8b0b9556e0c3e6fb3f43
-lastReviewedNote: "Reviewed Database #754 rejected review report download delivery. Existing schema-workspace and Data API type generation commands remain authoritative; the exact-local snapshots were regenerated twice without drift after a blank migration rebuild."
+lastReviewedCommit: b446dd7a7999b4872f7f808673464327ec89f009
+lastReviewedNote: "Reviewed Database #754 rejected review report download delivery after integrating current Dev through Database #755. Existing schema-workspace and Data API type generation commands remain authoritative; exact-local snapshots are regenerated with the CI-pinned CLI and checked for drift."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml
@@ -501,13 +501,15 @@ Refreshes the human-readable schema workspace under:
 Usage:
 
 ```bash
-python scripts/build_schema_workspace.py --environment dev
+python scripts/build_schema_workspace.py --environment dev \
+  --schemas public api private util archive
 ```
 
 For an exact local migration-state reconstruction:
 
 ```bash
-python scripts/build_schema_workspace.py --environment local
+python scripts/build_schema_workspace.py --environment local \
+  --schemas public api private util archive
 ```
 
 Behavior:

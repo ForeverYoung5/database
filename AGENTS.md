@@ -38,8 +38,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-29
-lastReviewedCommit: 6578fc9ecf49046c15d082a1808d7e29836bae6c
-lastReviewedNote: "Reviewed Database #754 rejected review-report download authorization. The actor-bound descriptor RPC preserves Source RLS, derives only current exact-version external_docs attachments, and follows the existing migration, capability-manifest, SQL-test, and branch contracts."
+lastReviewedCommit: b446dd7a7999b4872f7f808673464327ec89f009
+lastReviewedNote: "Reviewed Database #754 rejected review-report download authorization after integrating current Dev through Database #755. The actor-bound descriptor RPC preserves Source RLS, derives only current exact-version external_docs attachments, and follows the existing migration, capability-manifest, SQL-test, and branch contracts."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md
