@@ -20,9 +20,9 @@ checkPaths:
   - .githooks/pre-push
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-28
-lastReviewedCommit: 884eef253b21d917568aa4d134c21147ffc87661
-lastReviewedNote: "Reviewed Database #748 published-reference review behavior against current Dev 0a84eb5e14a85c45fb22609ce1ff8449735e9e11. Repository ownership, schema-workspace generation, SQL-test, branch and validation contracts remain unchanged; migration, generated workspace and targeted regression evidence stay aligned with the current Dev migration chain."
+lastReviewedAt: 2026-09-29
+lastReviewedCommit: 18c3090d8335d805290e8b0b9556e0c3e6fb3f43
+lastReviewedNote: "复核 Database #754 驳回审查报告下载交付。生成的 RPC/helper workspace 与 public/api 类型快照匹配本地准确 migration head，且可重复生成；生成内容与稳定内容的归属规则不变。"
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

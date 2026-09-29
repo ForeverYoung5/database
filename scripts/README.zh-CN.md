@@ -20,9 +20,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-28
-lastReviewedCommit: 884eef253b21d917568aa4d134c21147ffc87661
-lastReviewedNote: "Reviewed Database #748 published-reference review behavior against current Dev 0a84eb5e14a85c45fb22609ce1ff8449735e9e11. Repository ownership, schema-workspace generation, SQL-test, branch and validation contracts remain unchanged; migration, generated workspace and targeted regression evidence stay aligned with the current Dev migration chain."
+lastReviewedAt: 2026-09-29
+lastReviewedCommit: 18c3090d8335d805290e8b0b9556e0c3e6fb3f43
+lastReviewedNote: "复核 Database #754 驳回审查报告下载交付。现有 schema workspace 与 Data API 类型生成命令仍为权威流程；空库 migration 重建后，exact-local 快照重复生成两次均无漂移。"
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml
