@@ -1,7 +1,14 @@
-CREATE OR REPLACE FUNCTION "private"."lcia_scope_closure_normalize_request"("p_requested_scope" "jsonb") RETURNS "jsonb"
-    LANGUAGE "plpgsql" SECURITY DEFINER
-    SET "search_path" TO 'private', 'api', 'public', 'util', 'extensions', 'pg_temp'
-    AS $$
+-- Database #755 / Worker #305: new frozen requests use allocation v4.
+-- Drain v3 jobs and coordinate Edge + Worker cutover before resuming admission.
+-- Historical manifests and certificate evidence remain byte-identical.
+begin;
+
+create or replace function private.lcia_scope_closure_normalize_request(p_requested_scope jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = 'private', 'api', 'public', 'util', 'extensions', 'pg_temp'
+as $$
 declare
   v_mode text := lower(trim(coalesce(p_requested_scope->>'coverageMode', '')));
   v_processes jsonb;
@@ -230,10 +237,10 @@ exception
 end;
 $$;
 
-ALTER FUNCTION "private"."lcia_scope_closure_normalize_request"("p_requested_scope" "jsonb") OWNER TO "postgres";
+ALTER FUNCTION private.lcia_scope_closure_normalize_request(jsonb) OWNER TO postgres;
+REVOKE ALL ON FUNCTION private.lcia_scope_closure_normalize_request(jsonb) FROM PUBLIC;
+GRANT ALL ON FUNCTION private.lcia_scope_closure_normalize_request(jsonb) TO service_role;
+GRANT ALL ON FUNCTION private.lcia_scope_closure_normalize_request(jsonb) TO api_internal_executor;
 
-REVOKE ALL ON FUNCTION "private"."lcia_scope_closure_normalize_request"("p_requested_scope" "jsonb") FROM PUBLIC;
 
-GRANT ALL ON FUNCTION "private"."lcia_scope_closure_normalize_request"("p_requested_scope" "jsonb") TO "service_role";
-
-GRANT ALL ON FUNCTION "private"."lcia_scope_closure_normalize_request"("p_requested_scope" "jsonb") TO "api_internal_executor";
+commit;

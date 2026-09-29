@@ -40,6 +40,8 @@ related:
   - ./supabase-branching.md
 ---
 
+Allocation contract update (Database #755): `private.lcia_scope_closure_normalize_request` freezes omitted/explicit v4 allocation intent as `tidas-reference-allocation-v4`, rejects explicit stale/unknown versions, and preserves cutoff, numerical eligibility and ACLs. Historical manifests/certificates are not rewritten. Coordinate with Worker #305 and Edge #443; drain v3 work before switching admission, and obtain new v4 closure checks instead of reusing v3 evidence.
+
 ## Repo Shape
 
 This repo is organized around one checked-in Supabase project plus a generated schema-inspection workspace.

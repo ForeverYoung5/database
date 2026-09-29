@@ -20,8 +20,8 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-28
-lastReviewedCommit: 884eef253b21d917568aa4d134c21147ffc87661
+lastReviewedAt: 2026-09-29
+lastReviewedCommit: 6578fc9ecf49046c15d082a1808d7e29836bae6c
 lastReviewedNote: "Reviewed Database #748 published-reference review behavior against current Dev 0a84eb5e14a85c45fb22609ce1ff8449735e9e11. Repository ownership, schema-workspace generation, SQL-test, branch and validation contracts remain unchanged; migration, generated workspace and targeted regression evidence stay aligned with the current Dev migration chain."
 related:
   - ../AGENTS.md
@@ -435,13 +435,15 @@ python scripts/export_remote_schema.py --environment dev
 用法：
 
 ```bash
-python scripts/build_schema_workspace.py --environment dev
+python scripts/build_schema_workspace.py --environment dev \
+  --schemas public api private util archive
 ```
 
 如需按本地已应用 migration 精确重建：
 
 ```bash
-python scripts/build_schema_workspace.py --environment local
+python scripts/build_schema_workspace.py --environment local \
+  --schemas public api private util archive
 ```
 
 行为：
