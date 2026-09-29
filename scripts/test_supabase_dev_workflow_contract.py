@@ -483,6 +483,7 @@ def main() -> int:
         "supabase test db supabase/tests/20260925_foundry60_cli_alias_oauth_capability.sql",
         "supabase test db supabase/tests/20260827_portal_sitemap_shards_v1.sql",
         "supabase test db supabase/tests/20260909_review_queue_full_text_search.sql",
+        "supabase test db supabase/tests/20260929_rejected_review_report_download.sql",
         "supabase test db supabase/tests/20260909_tidas_partial_import.sql",
         "supabase test db supabase/tests/20260910_example_dataset_scope.sql",
         "supabase test db supabase/tests/20260714_guarded_dataset_derivative_rebuild.sql",

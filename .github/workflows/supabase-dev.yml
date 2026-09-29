@@ -66,6 +66,7 @@ jobs:
           supabase test db supabase/tests/20260910_selected_export_refresh.sql
           supabase test db supabase/tests/20260909_review_queue_full_text_search.sql
           supabase test db supabase/tests/20260928_review_rejection_visibility.sql
+          supabase test db supabase/tests/20260929_rejected_review_report_download.sql
           supabase test db supabase/tests/20260909_tidas_partial_import.sql
           supabase test db supabase/tests/20260918_tidas_full_package_import.sql
           supabase test db supabase/tests/20260919_portal_navigation_v1.sql
