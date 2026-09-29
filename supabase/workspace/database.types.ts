@@ -2554,6 +2554,15 @@ export type Database = {
         Args: { p_run_id?: string }
         Returns: Json
       }
+      qry_review_report_download_descriptor_v1: {
+        Args: {
+          p_process_id: string
+          p_process_version: string
+          p_source_id: string
+          p_source_version: string
+        }
+        Returns: Json
+      }
       qry_root_review_reference_progress: {
         Args: { p_root_review_id: string }
         Returns: {

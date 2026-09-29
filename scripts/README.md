@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-09-29
-lastReviewedCommit: 6578fc9ecf49046c15d082a1808d7e29836bae6c
-lastReviewedNote: "Reviewed Database #748 published-reference review behavior against current Dev 0a84eb5e14a85c45fb22609ce1ff8449735e9e11. Repository ownership, schema-workspace generation, SQL-test, branch and validation contracts remain unchanged; migration, generated workspace and targeted regression evidence stay aligned with the current Dev migration chain."
+lastReviewedCommit: b446dd7a7999b4872f7f808673464327ec89f009
+lastReviewedNote: "Reviewed Database #754 rejected review report download delivery after integrating current Dev through Database #755. Existing schema-workspace and Data API type generation commands remain authoritative; exact-local snapshots are regenerated with the CI-pinned CLI and checked for drift."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml

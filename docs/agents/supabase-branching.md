@@ -22,9 +22,9 @@ checkPaths:
   - .github/workflows/supabase-dev.yml
   - .env.supabase.dev.local.example
   - .env.supabase.main.local.example
-lastReviewedAt: 2026-09-28
-lastReviewedCommit: dde37edc109a659bef66224dff5939bd6aab3b19
-lastReviewedNote: "Reviewed Database #746 exact Main 4a7023c09b0666ab2e2746bc0992bfb4fe3a5b57 backmerge into Dev ec12f8cc9524163a3178fd2e304a2c9033d4601b. Only review metadata conflicted; existing Dev-only migrations, workflow policy and generated API contracts remain preserved. Modern secret transport and authority retain the qualified Main bytes; combined local replay, CI/Preview and persistent Dev are separate proofs. Root selects Main only."
+lastReviewedAt: 2026-09-29
+lastReviewedCommit: 18c3090d8335d805290e8b0b9556e0c3e6fb3f43
+lastReviewedNote: "Reviewed Database #754 rejected review report download delivery. Adding the targeted pgTAP file to the existing local-contract job does not change branch bindings, Preview authority, persistent Dev deployment, or production promotion behavior."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

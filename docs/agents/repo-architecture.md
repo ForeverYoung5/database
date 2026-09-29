@@ -30,9 +30,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-28
-lastReviewedCommit: dde37edc109a659bef66224dff5939bd6aab3b19
-lastReviewedNote: "Reviewed Database #748 published-reference review behavior against current Dev 0a84eb5e14a85c45fb22609ce1ff8449735e9e11. Repository ownership, schema-workspace generation, SQL-test, branch and validation contracts remain unchanged; migration, generated workspace and targeted regression evidence stay aligned with the current Dev migration chain."
+lastReviewedAt: 2026-09-29
+lastReviewedCommit: 6578fc9ecf49046c15d082a1808d7e29836bae6c
+lastReviewedNote: "Reviewed Database #754 rejected review-report download authorization. One SECURITY DEFINER API façade binds the authenticated Process owner to an exact terminal rejected comment and returns only current attachment descriptors; Source relations and RLS remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
