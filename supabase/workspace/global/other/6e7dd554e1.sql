@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "private"."review_member_workload_classification_v1"("p_reviewer_id" "uuid") IS 'Classifies one reviewer workload: current assigned drafts are pending and durable submitted decisions are reviewed.';

@@ -1,6 +1,6 @@
 CREATE OR REPLACE FUNCTION "api"."qry_review_get_member_workload"("p_page" integer DEFAULT 1, "p_page_size" integer DEFAULT 10, "p_sort_by" "text" DEFAULT 'created_at'::"text", "p_sort_order" "text" DEFAULT 'desc'::"text", "p_role" "text" DEFAULT NULL::"text") RETURNS TABLE("user_id" "uuid", "team_id" "uuid", "role" "text", "email" "text", "display_name" "text", "pending_count" bigint, "reviewed_count" bigint, "created_at" timestamp with time zone, "modified_at" timestamp with time zone, "total_count" bigint)
-    LANGUAGE "plpgsql" SECURITY DEFINER
-    SET "search_path" TO 'api', 'private', 'public', 'util', 'extensions', 'pg_temp'
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
     AS $_$
 declare
   v_actor uuid := auth.uid();
@@ -10,53 +10,38 @@ declare
   v_order_by text := api.cmd_membership_resolve_member_order_by(p_sort_by, true);
   v_order_dir text := api.cmd_membership_resolve_sort_direction(p_sort_order);
 begin
-  if v_actor is null then
+  if v_actor is null or not api.cmd_membership_is_review_admin(v_actor) then
     return;
   end if;
 
-  if not api.cmd_membership_is_review_admin(v_actor) then
-    return;
-  end if;
-
-  return query execute format(
+  return query execute pg_catalog.format(
     $sql$
       with members as (
         select
-          r.user_id,
-          r.team_id,
-          r.role::text as role,
-          coalesce(u.raw_user_meta_data->>'email', '') as email,
+          role_row.user_id,
+          role_row.team_id,
+          role_row.role::text as role,
+          coalesce(user_row.raw_user_meta_data->>'email', '') as email,
           coalesce(
-            nullif(u.raw_user_meta_data->>'display_name', ''),
-            u.raw_user_meta_data->>'email',
+            nullif(user_row.raw_user_meta_data->>'display_name', ''),
+            user_row.raw_user_meta_data->>'email',
             '-'
           ) as display_name,
-          coalesce(w.pending_count, 0) as pending_count,
-          coalesce(w.reviewed_count, 0) as reviewed_count,
-          r.created_at,
-          r.modified_at
-        from private.roles as r
-        left join private.users as u
-          on u.id = r.user_id
+          coalesce(workload.pending_count, 0) as pending_count,
+          coalesce(workload.reviewed_count, 0) as reviewed_count,
+          role_row.created_at,
+          role_row.modified_at
+        from private.roles as role_row
+        left join private.users as user_row on user_row.id = role_row.user_id
         left join lateral (
           select
-            count(*) filter (
-              where c.state_code = 0
-                and rv.state_code > 0
-            ) as pending_count,
-            count(*) filter (
-              where c.state_code in (1, 2)
-                and rv.state_code > 0
-            ) as reviewed_count
-          from private.comments as c
-          join private.reviews as rv
-            on rv.id = c.review_id
-          where c.reviewer_id = r.user_id
-            and c.state_code in (0, 1, 2)
-        ) as w on true
-        where r.team_id = $1
-          and r.role in ('review-admin', 'review-member')
-          and ($4::text is null or r.role = $4::text)
+            count(*) filter (where item.workload_status = 'pending') as pending_count,
+            count(*) filter (where item.workload_status = 'reviewed') as reviewed_count
+          from private.review_member_workload_classification_v1(role_row.user_id) as item
+        ) as workload on true
+        where role_row.team_id = $1
+          and role_row.role in ('review-admin', 'review-member')
+          and ($4::text is null or role_row.role = $4::text)
       )
       select
         m.user_id,
@@ -71,13 +56,11 @@ begin
         count(*) over() as total_count
       from members as m
       order by %s %s nulls last, m.user_id asc
-      limit $2
-      offset $3
+      limit $2 offset $3
     $sql$,
     v_order_by,
     v_order_dir
-  )
-  using v_team_id, v_limit, v_offset, p_role;
+  ) using v_team_id, v_limit, v_offset, p_role;
 end;
 $_$;
 

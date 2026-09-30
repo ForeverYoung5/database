@@ -1,7 +1,7 @@
 version: 1
 layout: repo
-lastReviewedAt: "2026-09-29"
-lastReviewedCommit: "b446dd7a7999b4872f7f808673464327ec89f009"
+lastReviewedAt: "2026-09-30"
+lastReviewedCommit: "40d92feb476fec4d8ccdea04edc9d3075333db8f"
 lastReviewedNote: "Reviewed Database #754 rejected review-report download authorization after integrating current Dev through Database #755. The migration and pgTAP proof stay within existing schema, capability-manifest, ownership, and validation routing; Docpact rule semantics are unchanged."
 
 # Keep deterministic governance facts here.

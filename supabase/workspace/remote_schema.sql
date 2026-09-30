@@ -27823,8 +27823,8 @@ COMMENT ON FUNCTION "api"."qry_review_get_member_root_queue_items_v2"("p_status"
 
 
 CREATE OR REPLACE FUNCTION "api"."qry_review_get_member_workload"("p_page" integer DEFAULT 1, "p_page_size" integer DEFAULT 10, "p_sort_by" "text" DEFAULT 'created_at'::"text", "p_sort_order" "text" DEFAULT 'desc'::"text", "p_role" "text" DEFAULT NULL::"text") RETURNS TABLE("user_id" "uuid", "team_id" "uuid", "role" "text", "email" "text", "display_name" "text", "pending_count" bigint, "reviewed_count" bigint, "created_at" timestamp with time zone, "modified_at" timestamp with time zone, "total_count" bigint)
-    LANGUAGE "plpgsql" SECURITY DEFINER
-    SET "search_path" TO 'api', 'private', 'public', 'util', 'extensions', 'pg_temp'
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
     AS $_$
 declare
   v_actor uuid := auth.uid();
@@ -27834,53 +27834,38 @@ declare
   v_order_by text := api.cmd_membership_resolve_member_order_by(p_sort_by, true);
   v_order_dir text := api.cmd_membership_resolve_sort_direction(p_sort_order);
 begin
-  if v_actor is null then
+  if v_actor is null or not api.cmd_membership_is_review_admin(v_actor) then
     return;
   end if;
 
-  if not api.cmd_membership_is_review_admin(v_actor) then
-    return;
-  end if;
-
-  return query execute format(
+  return query execute pg_catalog.format(
     $sql$
       with members as (
         select
-          r.user_id,
-          r.team_id,
-          r.role::text as role,
-          coalesce(u.raw_user_meta_data->>'email', '') as email,
+          role_row.user_id,
+          role_row.team_id,
+          role_row.role::text as role,
+          coalesce(user_row.raw_user_meta_data->>'email', '') as email,
           coalesce(
-            nullif(u.raw_user_meta_data->>'display_name', ''),
-            u.raw_user_meta_data->>'email',
+            nullif(user_row.raw_user_meta_data->>'display_name', ''),
+            user_row.raw_user_meta_data->>'email',
             '-'
           ) as display_name,
-          coalesce(w.pending_count, 0) as pending_count,
-          coalesce(w.reviewed_count, 0) as reviewed_count,
-          r.created_at,
-          r.modified_at
-        from private.roles as r
-        left join private.users as u
-          on u.id = r.user_id
+          coalesce(workload.pending_count, 0) as pending_count,
+          coalesce(workload.reviewed_count, 0) as reviewed_count,
+          role_row.created_at,
+          role_row.modified_at
+        from private.roles as role_row
+        left join private.users as user_row on user_row.id = role_row.user_id
         left join lateral (
           select
-            count(*) filter (
-              where c.state_code = 0
-                and rv.state_code > 0
-            ) as pending_count,
-            count(*) filter (
-              where c.state_code in (1, 2)
-                and rv.state_code > 0
-            ) as reviewed_count
-          from private.comments as c
-          join private.reviews as rv
-            on rv.id = c.review_id
-          where c.reviewer_id = r.user_id
-            and c.state_code in (0, 1, 2)
-        ) as w on true
-        where r.team_id = $1
-          and r.role in ('review-admin', 'review-member')
-          and ($4::text is null or r.role = $4::text)
+            count(*) filter (where item.workload_status = 'pending') as pending_count,
+            count(*) filter (where item.workload_status = 'reviewed') as reviewed_count
+          from private.review_member_workload_classification_v1(role_row.user_id) as item
+        ) as workload on true
+        where role_row.team_id = $1
+          and role_row.role in ('review-admin', 'review-member')
+          and ($4::text is null or role_row.role = $4::text)
       )
       select
         m.user_id,
@@ -27895,18 +27880,172 @@ begin
         count(*) over() as total_count
       from members as m
       order by %s %s nulls last, m.user_id asc
-      limit $2
-      offset $3
+      limit $2 offset $3
     $sql$,
     v_order_by,
     v_order_dir
-  )
-  using v_team_id, v_limit, v_offset, p_role;
+  ) using v_team_id, v_limit, v_offset, p_role;
 end;
 $_$;
 
 
 ALTER FUNCTION "api"."qry_review_get_member_workload"("p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text", "p_role" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "api"."qry_review_get_member_workload"("p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text", "p_role" "text") IS 'Lists Review team members with pending and reviewed workload counts from the shared workload classification.';
+
+
+
+CREATE OR REPLACE FUNCTION "api"."qry_review_get_member_workload_items_v1"("p_reviewer_id" "uuid", "p_status" "text" DEFAULT 'pending'::"text", "p_page" integer DEFAULT 1, "p_page_size" integer DEFAULT 50, "p_sort_by" "text" DEFAULT 'modified_at'::"text", "p_sort_order" "text" DEFAULT 'desc'::"text", "p_display_mode" "text" DEFAULT 'all'::"text", "p_target_table" "text" DEFAULT NULL::"text", "p_query" "text" DEFAULT NULL::"text") RETURNS TABLE("id" "uuid", "data_id" "uuid", "data_version" "text", "review_state_code" integer, "review_kind" "text", "target_table" "text", "reviewer_id" "jsonb", "json" "jsonb", "deadline" timestamp with time zone, "created_at" timestamp with time zone, "modified_at" timestamp with time zone, "comment_state_code" integer, "comment_json" "jsonb", "comment_created_at" timestamp with time zone, "comment_modified_at" timestamp with time zone, "reviewer_count" integer, "completed_reviewer_count" integer, "approve_opinion_count" integer, "reject_opinion_count" integer, "root_matches_status" boolean, "root_can_read" boolean, "actor_has_rejection_info" boolean, "total_count" bigint)
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_actor uuid := auth.uid();
+  v_query text := nullif(pg_catalog.btrim(p_query), '');
+  v_limit integer := greatest(1, least(coalesce(p_page_size, 50), 100));
+  v_offset integer := (greatest(coalesce(p_page, 1), 1) - 1) * v_limit;
+  v_sort_key text := case pg_catalog.lower(coalesce(p_sort_by, ''))
+    when 'created_at' then 'created_at'
+    when 'createat' then 'created_at'
+    when 'deadline' then 'deadline'
+    when 'state_code' then 'state_code'
+    when 'statecode' then 'state_code'
+    when 'comment_modified_at' then 'comment_modified_at'
+    when 'commentmodifiedat' then 'comment_modified_at'
+    else 'modified_at'
+  end;
+  v_order_dir text := api.cmd_membership_resolve_sort_direction(p_sort_order);
+  v_status text := pg_catalog.lower(coalesce(p_status, 'pending'));
+  v_display_mode text := pg_catalog.lower(pg_catalog.btrim(coalesce(p_display_mode, 'all')));
+  v_target_table text := nullif(
+    pg_catalog.lower(pg_catalog.btrim(coalesce(p_target_table, ''))),
+    ''
+  );
+begin
+  if v_actor is null or not api.cmd_membership_is_review_admin(v_actor) then
+    return;
+  end if;
+  if p_reviewer_id is null or not exists (
+    select 1
+    from private.roles as role_row
+    where role_row.user_id = p_reviewer_id
+      and role_row.team_id = '00000000-0000-0000-0000-000000000000'::uuid
+      and role_row.role in ('review-admin', 'review-member')
+  ) then
+    return;
+  end if;
+  if v_status not in ('pending', 'reviewed') then
+    return;
+  end if;
+  if v_display_mode not in ('all', 'model_process', 'other') then
+    raise exception using errcode = '22023', message = 'INVALID_REVIEW_DISPLAY_MODE';
+  end if;
+  if v_target_table is not null and not (
+    v_target_table = any(array[
+      'contacts', 'sources', 'unitgroups', 'flowproperties', 'flows',
+      'processes', 'lifecyclemodels'
+    ]::text[])
+  ) then
+    raise exception using errcode = '22023', message = 'INVALID_REVIEW_TARGET_TABLE';
+  end if;
+  if pg_catalog.char_length(v_query) > 1000 then
+    raise exception using errcode = '22023', message = 'REVIEW_QUERY_TOO_LONG';
+  end if;
+
+  return query
+  with matches as materialized (
+    select * from private.review_search_dataset_versions_v1(v_query, v_target_table)
+    where v_query is not null
+  ), queue_rows as (
+    select
+      review_row.id,
+      review_row.data_id,
+      pg_catalog.btrim(review_row.data_version::text) as data_version,
+      review_row.state_code as review_state_code,
+      review_row.review_kind,
+      review_row.target_table,
+      coalesce(review_row.reviewer_id, '[]'::jsonb) as reviewer_id,
+      coalesce(review_row.json, '{}'::jsonb) as json,
+      review_row.deadline,
+      review_row.created_at,
+      greatest(review_row.modified_at, reviewer_comment.modified_at) as modified_at,
+      reviewer_comment.state_code as comment_state_code,
+      coalesce(reviewer_comment.json::jsonb, '{}'::jsonb) as comment_json,
+      reviewer_comment.created_at as comment_created_at,
+      reviewer_comment.modified_at as comment_modified_at,
+      pg_catalog.jsonb_array_length(coalesce(review_row.reviewer_id, '[]'::jsonb))::integer
+        as reviewer_count,
+      coalesce(review_comments.completed_reviewer_count, 0)::integer
+        as completed_reviewer_count,
+      coalesce(review_comments.approve_opinion_count, 0)::integer
+        as approve_opinion_count,
+      coalesce(review_comments.reject_opinion_count, 0)::integer
+        as reject_opinion_count,
+      true as root_matches_status,
+      true as root_can_read,
+      reviewer_comment.submitted_decision = 'reject'
+        and private.review_rejection_reason_v1(reviewer_comment.json::jsonb) is not null
+        as actor_has_rejection_info
+    from private.review_member_workload_classification_v1(p_reviewer_id) as workload
+    join private.reviews as review_row on review_row.id = workload.review_id
+    join private.comments as reviewer_comment
+      on reviewer_comment.review_id = workload.review_id
+      and reviewer_comment.reviewer_id = workload.reviewer_id
+    left join lateral (
+      select
+        pg_catalog.count(*) filter (
+          where comment_row.state_code in (1, -3, 2, -1)
+        ) as completed_reviewer_count,
+        pg_catalog.count(*) filter (where comment_row.state_code in (1, 2))
+          as approve_opinion_count,
+        pg_catalog.count(*) filter (where comment_row.state_code in (-3, -1))
+          as reject_opinion_count
+      from private.comments as comment_row
+      where comment_row.review_id = review_row.id
+        and coalesce(review_row.reviewer_id, '[]'::jsonb)
+          @> pg_catalog.jsonb_build_array(pg_catalog.to_jsonb(comment_row.reviewer_id::text))
+        and comment_row.state_code <> -2
+    ) as review_comments on true
+    where workload.workload_status = v_status
+      and api.policy_review_can_read(review_row.id, v_actor)
+      and (
+        v_display_mode = 'all'
+        or (v_display_mode = 'model_process' and review_row.target_table in ('processes', 'lifecyclemodels'))
+        or (v_display_mode = 'other' and review_row.target_table not in ('processes', 'lifecyclemodels'))
+      )
+      and (v_target_table is null or review_row.target_table = v_target_table)
+      and (v_query is null or exists (
+        select 1 from matches
+        where matches.target_table = review_row.target_table
+          and matches.data_id = review_row.data_id
+          and matches.data_version = review_row.data_version
+      ))
+  )
+  select queue_rows.*, pg_catalog.count(*) over() as total_count
+  from queue_rows
+  order by
+    case when v_sort_key = 'created_at' and v_order_dir = 'asc' then queue_rows.created_at end asc nulls last,
+    case when v_sort_key = 'created_at' and v_order_dir = 'desc' then queue_rows.created_at end desc nulls last,
+    case when v_sort_key = 'deadline' and v_order_dir = 'asc' then queue_rows.deadline end asc nulls last,
+    case when v_sort_key = 'deadline' and v_order_dir = 'desc' then queue_rows.deadline end desc nulls last,
+    case when v_sort_key = 'state_code' and v_order_dir = 'asc' then queue_rows.review_state_code end asc nulls last,
+    case when v_sort_key = 'state_code' and v_order_dir = 'desc' then queue_rows.review_state_code end desc nulls last,
+    case when v_sort_key = 'comment_modified_at' and v_order_dir = 'asc' then queue_rows.comment_modified_at end asc nulls last,
+    case when v_sort_key = 'comment_modified_at' and v_order_dir = 'desc' then queue_rows.comment_modified_at end desc nulls last,
+    case when v_sort_key = 'modified_at' and v_order_dir = 'asc' then queue_rows.modified_at end asc nulls last,
+    case when v_sort_key = 'modified_at' and v_order_dir = 'desc' then queue_rows.modified_at end desc nulls last,
+    queue_rows.id
+  limit v_limit offset v_offset;
+end;
+$$;
+
+
+ALTER FUNCTION "api"."qry_review_get_member_workload_items_v1"("p_reviewer_id" "uuid", "p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text", "p_display_mode" "text", "p_target_table" "text", "p_query" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "api"."qry_review_get_member_workload_items_v1"("p_reviewer_id" "uuid", "p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text", "p_display_mode" "text", "p_target_table" "text", "p_query" "text") IS 'Review-admin-only paginated drill-down for one reviewer workload, using the same classification as member counts.';
+
 
 
 CREATE OR REPLACE FUNCTION "api"."qry_review_get_my_contact_status"() RETURNS "jsonb"
@@ -62732,6 +62871,45 @@ $$;
 ALTER FUNCTION "private"."review_get_or_create_reference_v1"("p_target_table" "text", "p_target_row" "jsonb", "p_checksum" "text", "p_actor" "uuid") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "private"."review_member_workload_classification_v1"("p_reviewer_id" "uuid") RETURNS TABLE("review_id" "uuid", "reviewer_id" "uuid", "workload_status" "text")
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select
+    review_row.id,
+    comment_row.reviewer_id,
+    case
+      when review_row.state_code = 1
+        and comment_row.state_code = 0
+        and coalesce(review_row.reviewer_id, '[]'::jsonb)
+          @> pg_catalog.jsonb_build_array(pg_catalog.to_jsonb(comment_row.reviewer_id::text))
+        then 'pending'::text
+      when comment_row.submitted_decision is not null then 'reviewed'::text
+      else null::text
+    end as workload_status
+  from private.comments as comment_row
+  join private.reviews as review_row on review_row.id = comment_row.review_id
+  where comment_row.reviewer_id = p_reviewer_id
+    and review_row.review_kind in ('root', 'reference')
+    and (
+      (
+        review_row.state_code = 1
+        and comment_row.state_code = 0
+        and coalesce(review_row.reviewer_id, '[]'::jsonb)
+          @> pg_catalog.jsonb_build_array(pg_catalog.to_jsonb(comment_row.reviewer_id::text))
+      )
+      or comment_row.submitted_decision is not null
+    )
+$$;
+
+
+ALTER FUNCTION "private"."review_member_workload_classification_v1"("p_reviewer_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "private"."review_member_workload_classification_v1"("p_reviewer_id" "uuid") IS 'Classifies one reviewer workload: current assigned drafts are pending and durable submitted decisions are reviewed.';
+
+
+
 CREATE OR REPLACE FUNCTION "private"."review_notify_event_v1"("p_event_type" "text", "p_review_id" "uuid", "p_recipient_user_id" "uuid", "p_sender_user_id" "uuid", "p_target_table" "text", "p_target_id" "uuid", "p_target_version" "text", "p_root_review_id" "uuid" DEFAULT NULL::"uuid", "p_scope_version" integer DEFAULT NULL::integer, "p_reason_code" "text" DEFAULT NULL::"text") RETURNS "text"
     LANGUAGE "sql" SECURITY DEFINER
     SET "search_path" TO 'pg_catalog', 'pg_temp'
@@ -91598,6 +91776,12 @@ GRANT ALL ON FUNCTION "api"."qry_review_get_member_workload"("p_page" integer, "
 
 
 
+REVOKE ALL ON FUNCTION "api"."qry_review_get_member_workload_items_v1"("p_reviewer_id" "uuid", "p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text", "p_display_mode" "text", "p_target_table" "text", "p_query" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."qry_review_get_member_workload_items_v1"("p_reviewer_id" "uuid", "p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text", "p_display_mode" "text", "p_target_table" "text", "p_query" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "api"."qry_review_get_member_workload_items_v1"("p_reviewer_id" "uuid", "p_status" "text", "p_page" integer, "p_page_size" integer, "p_sort_by" "text", "p_sort_order" "text", "p_display_mode" "text", "p_target_table" "text", "p_query" "text") TO "api_internal_executor";
+
+
+
 REVOKE ALL ON FUNCTION "api"."qry_review_get_my_contact_status"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "api"."qry_review_get_my_contact_status"() TO "authenticated";
 
@@ -93526,6 +93710,10 @@ GRANT ALL ON FUNCTION "private"."review_derive_current_references_v1"("p_root_re
 
 REVOKE ALL ON FUNCTION "private"."review_get_or_create_reference_v1"("p_target_table" "text", "p_target_row" "jsonb", "p_checksum" "text", "p_actor" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "private"."review_get_or_create_reference_v1"("p_target_table" "text", "p_target_row" "jsonb", "p_checksum" "text", "p_actor" "uuid") TO "api_internal_executor";
+
+
+
+REVOKE ALL ON FUNCTION "private"."review_member_workload_classification_v1"("p_reviewer_id" "uuid") FROM PUBLIC;
 
 
 

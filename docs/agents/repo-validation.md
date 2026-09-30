@@ -32,8 +32,8 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-29
-lastReviewedCommit: 6578fc9ecf49046c15d082a1808d7e29836bae6c
+lastReviewedAt: 2026-09-30
+lastReviewedCommit: 40d92feb476fec4d8ccdea04edc9d3075333db8f
 lastReviewedNote: "Reviewed Database #754 rejected review-report download authorization. Full local reset plus focused pgTAP covers exact-owner admission, cross-user/version/process denials, unchanged Source RLS, current attachment replacement, empty attachments, and traversal rejection."
 related:
   - ../../AGENTS.md
