@@ -32,9 +32,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-29
-lastReviewedCommit: 6578fc9ecf49046c15d082a1808d7e29836bae6c
-lastReviewedNote: "Reviewed Database #754 rejected review-report download authorization. Full local reset plus focused pgTAP covers exact-owner admission, cross-user/version/process denials, unchanged Source RLS, current attachment replacement, empty attachments, and traversal rejection."
+lastReviewedAt: 2026-10-01
+lastReviewedCommit: 40d92feb476fec4d8ccdea04edc9d3075333db8f
+lastReviewedNote: "Reviewed Database #761 filtered Flow latest-version reads: matching historical visible versions and hydrating paged latest keys preserve schema ownership, invoker RLS, capability routing, and the existing timeout; local fixture and migration proof requirements are recorded in the owning guides."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -625,3 +625,24 @@ Compare the exact Main predecessor and candidate on one owned synthetic fixture,
 The populated cutover must reject missing/drifted facts before replacing readers. Assert that temporary DDL membership/schema rights return to their prestate, that the retained internal execution principal still works and external private access stays denied. Rebuild the owned fixture before writer probes and export. Qualify real committed withdrawal with an independent reader session, regenerate all five schemas and Data API types twice without drift, then require official Preview/CI, exact Main deployment/source/functional readback, required Dev synchronization and eligible Root integration.
 
 Allocation-v4 qualification additionally runs `supabase/tests/20260929_allocation_v4_scope_closure.sql` with the scope-closure suites above in an isolated local project. Verify omitted/explicit identity parity, v3 hash separation, stale-version rejection, cutoff and unchanged internal ACLs. This local proof does not authorize production migration or certificate reuse.
+
+## Filtered Flow latest-version reads
+
+After an isolated blank reset, run
+`supabase/tests/20261001_filtered_latest_flow_payloads.sql`,
+`20260910_example_dataset_scope.sql`, `20260806_api_contract_closure.sql`, and
+the adjacent OAuth capability and full-schema suites. Prove old-version matches
+return the latest visible payload, invisible history cannot admit an identity,
+classification object/array and both namespaces remain equivalent, legacy
+Emissions containment is unchanged, counts precede pagination, nullable sorts
+and empty pages retain their behavior, and actor/OAuth RLS remains enforced.
+
+Compare the predecessor and candidate on the same production-sized, structured
+local fixture with realistic TOAST payloads and multiple versions, using ordered
+full-result parity and at least 20 alternating samples for sparse type, sparse
+classification and broad type filters. Record actual table/TOAST bytes, the
+fixture and source identities, natural plans, buffers and temporary I/O.
+A `pg_stats.avg_width` of 18 for an externally stored value is a TOAST pointer,
+not its payload size. Preserve invoker security and the 60-second setting;
+do not add an index or relax RLS to improve the measured plan. Local timing
+does not replace exact-head CI and disposable Preview proof.

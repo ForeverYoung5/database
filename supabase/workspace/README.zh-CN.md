@@ -20,9 +20,9 @@ checkPaths:
   - .githooks/pre-push
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-29
-lastReviewedCommit: b446dd7a7999b4872f7f808673464327ec89f009
-lastReviewedNote: "复核 Database #754 驳回审查报告下载交付，并合入截至 Database #755 的当前 Dev。生成的 RPC/helper workspace 与 public/api 类型快照匹配合并后的本地准确 migration head；生成内容与稳定内容的归属规则不变。"
+lastReviewedAt: 2026-10-01
+lastReviewedCommit: 40d92feb476fec4d8ccdea04edc9d3075333db8f
+lastReviewedNote: "复核 Database #761：使用 CI 固定 Supabase CLI 2.117.0 按精确本地 migration 状态生成 schema 与 Data API 类型，两遍快照逐字一致；生成内容归属与命令合同不变。"
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

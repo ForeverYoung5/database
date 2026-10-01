@@ -1,8 +1,8 @@
 version: 1
 layout: repo
-lastReviewedAt: "2026-09-29"
-lastReviewedCommit: "b446dd7a7999b4872f7f808673464327ec89f009"
-lastReviewedNote: "Reviewed Database #754 rejected review-report download authorization after integrating current Dev through Database #755. The migration and pgTAP proof stay within existing schema, capability-manifest, ownership, and validation routing; Docpact rule semantics are unchanged."
+lastReviewedAt: "2026-10-01"
+lastReviewedCommit: "40d92feb476fec4d8ccdea04edc9d3075333db8f"
+lastReviewedNote: "Reviewed Database #761 filtered Flow latest-version reads: matching historical visible versions and hydrating paged latest keys preserve schema ownership, invoker RLS, capability routing, and the existing timeout; local fixture and migration proof requirements are recorded in the owning guides."
 
 # Keep deterministic governance facts here.
 # AGENTS.md remains the repo contract entrypoint.

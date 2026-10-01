@@ -20,9 +20,9 @@ checkPaths:
   - .githooks/pre-push
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-29
-lastReviewedCommit: b446dd7a7999b4872f7f808673464327ec89f009
-lastReviewedNote: "Reviewed Database #754 rejected review report download delivery after integrating current Dev through Database #755. The generated RPC/helper workspace and public/api type snapshot match the combined exact local migration head; generated-versus-stable ownership rules are unchanged."
+lastReviewedAt: 2026-10-01
+lastReviewedCommit: 40d92feb476fec4d8ccdea04edc9d3075333db8f
+lastReviewedNote: "Reviewed Database #761: exact-local schema and Data API type generation with CI-pinned Supabase CLI 2.117.0 produced two identical snapshots; generated ownership and command contracts remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
