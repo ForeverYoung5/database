@@ -32,9 +32,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-30
-lastReviewedCommit: 40d92feb476fec4d8ccdea04edc9d3075333db8f
-lastReviewedNote: "Reviewed Database #754 rejected review-report download authorization. Full local reset plus focused pgTAP covers exact-owner admission, cross-user/version/process denials, unchanged Source RLS, current attachment replacement, empty attachments, and traversal rejection."
+lastReviewedAt: 2026-10-01
+lastReviewedCommit: f643921e
+lastReviewedNote: "Reviewed Database #759 member workload drill-down after a clean local reset and deterministic public/api type regeneration with Supabase CLI 2.117.0. Focused workload and API contract pgTAP suites remain green."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

@@ -30,9 +30,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-30
-lastReviewedCommit: 40d92feb476fec4d8ccdea04edc9d3075333db8f
-lastReviewedNote: "Reviewed Database #754 rejected review-report download authorization. One SECURITY DEFINER API façade binds the authenticated Process owner to an exact terminal rejected comment and returns only current attachment descriptors; Source relations and RLS remain unchanged."
+lastReviewedAt: 2026-10-01
+lastReviewedCommit: f643921e
+lastReviewedNote: "Reviewed Database #759 member workload drill-down after regenerating the public/api type snapshot with the CI-pinned Supabase CLI 2.117.0. The generated helper-only formatting drift does not change repository architecture or ownership."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

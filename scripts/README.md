@@ -20,9 +20,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-30
-lastReviewedCommit: 40d92feb476fec4d8ccdea04edc9d3075333db8f
-lastReviewedNote: "Reviewed Database #754 rejected review report download delivery after integrating current Dev through Database #755. Existing schema-workspace and Data API type generation commands remain authoritative; exact-local snapshots are regenerated with the CI-pinned CLI and checked for drift."
+lastReviewedAt: 2026-10-01
+lastReviewedCommit: f643921e
+lastReviewedNote: "Reviewed Database #759 member workload drill-down CI repair. Existing schema-workspace and Data API type generation commands remain authoritative; the public/api snapshot was regenerated twice with the CI-pinned Supabase CLI 2.117.0 and was stable."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml

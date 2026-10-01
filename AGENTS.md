@@ -37,9 +37,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-30
-lastReviewedCommit: 40d92feb476fec4d8ccdea04edc9d3075333db8f
-lastReviewedNote: "Reviewed Database #754 rejected review-report download authorization after integrating current Dev through Database #755. The actor-bound descriptor RPC preserves Source RLS, derives only current exact-version external_docs attachments, and follows the existing migration, capability-manifest, SQL-test, and branch contracts."
+lastReviewedAt: 2026-10-01
+lastReviewedCommit: f643921e
+lastReviewedNote: "Reviewed Database #759 member workload drill-down CI repair after a clean local reset and deterministic type generation with the CI-pinned Supabase CLI 2.117.0. The generated helper formatting change follows existing ownership, validation, and delivery contracts."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md

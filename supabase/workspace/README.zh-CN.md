@@ -20,9 +20,9 @@ checkPaths:
   - .githooks/pre-push
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-30
-lastReviewedCommit: 40d92feb476fec4d8ccdea04edc9d3075333db8f
-lastReviewedNote: "复核 Database #754 驳回审查报告下载交付，并合入截至 Database #755 的当前 Dev。生成的 RPC/helper workspace 与 public/api 类型快照匹配合并后的本地准确 migration head；生成内容与稳定内容的归属规则不变。"
+lastReviewedAt: 2026-10-01
+lastReviewedCommit: f643921e
+lastReviewedNote: "复核 Database #759 成员审核工作量下钻，并完成干净本地重置。生成的 public/api 类型快照现已匹配 Supabase CLI 2.117.0；仅通用 helper 格式变化，生成内容与稳定内容的归属规则不变。"
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
