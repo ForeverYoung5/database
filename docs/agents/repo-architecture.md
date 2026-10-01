@@ -30,9 +30,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-29
-lastReviewedCommit: 6578fc9ecf49046c15d082a1808d7e29836bae6c
-lastReviewedNote: "Reviewed Database #754 rejected review-report download authorization. One SECURITY DEFINER API façade binds the authenticated Process owner to an exact terminal rejected comment and returns only current attachment descriptors; Source relations and RLS remain unchanged."
+lastReviewedAt: 2026-10-01
+lastReviewedCommit: eae0933d87cf83dbf160b2439c6de5431c758ab1
+lastReviewedNote: "Reviewed Database #761 CI regression registration: the filtered latest-Flow suite runs in the existing schema/capability local-contract step; workflow authority, branch bindings and SQL behavior stay unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -953,3 +953,14 @@ For nonempty text, the same legacy pattern helpers, exact-id union semantics and
 V2 Facets intersects authoritative legacy candidate keys with the synchronized classic-filter universe, then groups the six existing scalar facet columns. Duplicate pattern hits do not double-count an exact dataset version. Both readers remain subject to explicit public states, facet-contract identity and the complete cutover coverage/state/timestamp guard. Their public DTOs, scientific values, runtime budgets, projection/writer graph and exposed ACLs remain unchanged.
 
 The Search kernel owner aligns with the existing portal_public_executor reader; the previous api_internal_executor EXECUTE principal is explicitly retained. Temporary DDL role/schema permissions are restored before the migration commits, including after a failed transaction. These owner and grant changes require generated snapshots and role/visibility tests rather than a blanket assertion that all ownership metadata is identical.
+
+## Filtered Flow latest-version reader
+
+`api.get_latest_flow_versions` admits an identity when any version visible to
+the invoker matches its filters, then returns that identity's latest visible
+version. The filtered branch reads matching id/JSON facts separately from
+visible keys, counts and pages those narrow keys, and hydrates only the selected
+exact id/version through the primary key under the same RLS. It preserves
+legacy object/array classification and Emissions containment, source scopes,
+count and sort semantics, the existing type-expression indexes, and the
+60-second function setting. No projection, index, writer or grant is added.

@@ -37,9 +37,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-09-29
-lastReviewedCommit: b446dd7a7999b4872f7f808673464327ec89f009
-lastReviewedNote: "Reviewed Database #754 rejected review-report download authorization after integrating current Dev through Database #755. The actor-bound descriptor RPC preserves Source RLS, derives only current exact-version external_docs attachments, and follows the existing migration, capability-manifest, SQL-test, and branch contracts."
+lastReviewedAt: 2026-10-01
+lastReviewedCommit: eae0933d87cf83dbf160b2439c6de5431c758ab1
+lastReviewedNote: "Reviewed Database #761 CI regression registration: the filtered latest-Flow suite runs in the existing schema/capability local-contract step; workflow authority, branch bindings and SQL behavior stay unchanged."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md

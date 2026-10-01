@@ -22,9 +22,9 @@ checkPaths:
   - .github/workflows/supabase-dev.yml
   - .env.supabase.dev.local.example
   - .env.supabase.main.local.example
-lastReviewedAt: 2026-09-29
-lastReviewedCommit: 18c3090d8335d805290e8b0b9556e0c3e6fb3f43
-lastReviewedNote: "复核 Database #754 驳回审查报告下载交付。将定向 pgTAP 文件接入现有 local-contract job，不改变分支绑定、Preview 权限、持久 Dev 部署或生产晋升行为。"
+lastReviewedAt: 2026-10-01
+lastReviewedCommit: eae0933d87cf83dbf160b2439c6de5431c758ab1
+lastReviewedNote: "复核 Database #761 CI 回归测试注册：过滤后的最新 Flow 测试接入现有 schema/capability 本地合同步骤；工作流权限、分支绑定及 SQL 行为不变。"
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
