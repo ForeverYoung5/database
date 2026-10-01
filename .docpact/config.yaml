@@ -1,8 +1,8 @@
 version: 1
 layout: repo
 lastReviewedAt: "2026-10-01"
-lastReviewedCommit: "f643921e"
-lastReviewedNote: "Reviewed Database #759 member workload drill-down after regenerating the public/api type snapshot with the CI-pinned Supabase CLI 2.117.0. Only generated helper formatting changed; Docpact rule semantics are unchanged."
+lastReviewedCommit: "59f250a8cbbbc6cb867230581ec9c5f6d11bfc60"
+lastReviewedNote: "Reviewed Database #759 member workload drill-down CI repair after integrating current Dev through Database #761. The public/api snapshot is regenerated with Supabase CLI 2.117.0; Docpact rule semantics are unchanged."
 
 # Keep deterministic governance facts here.
 # AGENTS.md remains the repo contract entrypoint.

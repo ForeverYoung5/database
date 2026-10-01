@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-01
-lastReviewedCommit: f643921e
-lastReviewedNote: "Reviewed Database #759 member workload drill-down after regenerating the public/api type snapshot with the CI-pinned Supabase CLI 2.117.0. The generated helper-only formatting drift does not change repository architecture or ownership."
+lastReviewedCommit: 59f250a8cbbbc6cb867230581ec9c5f6d11bfc60
+lastReviewedNote: "Reviewed Database #759 member workload drill-down CI repair after integrating current Dev through Database #761. Generated type formatting does not change repository architecture or ownership."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -953,3 +953,14 @@ For nonempty text, the same legacy pattern helpers, exact-id union semantics and
 V2 Facets intersects authoritative legacy candidate keys with the synchronized classic-filter universe, then groups the six existing scalar facet columns. Duplicate pattern hits do not double-count an exact dataset version. Both readers remain subject to explicit public states, facet-contract identity and the complete cutover coverage/state/timestamp guard. Their public DTOs, scientific values, runtime budgets, projection/writer graph and exposed ACLs remain unchanged.
 
 The Search kernel owner aligns with the existing portal_public_executor reader; the previous api_internal_executor EXECUTE principal is explicitly retained. Temporary DDL role/schema permissions are restored before the migration commits, including after a failed transaction. These owner and grant changes require generated snapshots and role/visibility tests rather than a blanket assertion that all ownership metadata is identical.
+
+## Filtered Flow latest-version reader
+
+`api.get_latest_flow_versions` admits an identity when any version visible to
+the invoker matches its filters, then returns that identity's latest visible
+version. The filtered branch reads matching id/JSON facts separately from
+visible keys, counts and pages those narrow keys, and hydrates only the selected
+exact id/version through the primary key under the same RLS. It preserves
+legacy object/array classification and Emissions containment, source scopes,
+count and sort semantics, the existing type-expression indexes, and the
+60-second function setting. No projection, index, writer or grant is added.

@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-01
-lastReviewedCommit: f643921e
-lastReviewedNote: "复核 Database #759 成员审核工作量下钻的 CI 修复。现有 schema workspace 与 Data API 类型生成命令仍为权威流程；public/api 快照使用 CI 固定的 Supabase CLI 2.117.0 连续生成两次且结果稳定。"
+lastReviewedCommit: 59f250a8cbbbc6cb867230581ec9c5f6d11bfc60
+lastReviewedNote: "复核 Database #759，并合入截至 Database #761 的当前 Dev。现有生成命令仍为权威流程；public/api 快照必须使用 CI 固定的 Supabase CLI 2.117.0 生成并检查结果可复现。"
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml

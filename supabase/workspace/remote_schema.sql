@@ -18927,25 +18927,25 @@ BEGIN
 
   RETURN QUERY
     WITH visible_rows AS (
-      SELECT f.*
+      SELECT f.id, f.json
       FROM public.flows f
       WHERE ((data_source = 'tg' AND f.state_code = 100) OR (data_source = 'ex' AND f.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
         AND (team_id_filter IS NULL OR f.team_id = team_id_filter)
       UNION ALL
-      SELECT f.*
+      SELECT f.id, f.json
       FROM public.flows f
       WHERE data_source = 'co'
         AND f.state_code = 200
         AND (team_id_filter IS NULL OR f.team_id = team_id_filter)
       UNION ALL
-      SELECT f.*
+      SELECT f.id, f.json
       FROM public.flows f
       WHERE data_source = 'my'
         AND normalized_this_user_id IS NOT NULL
         AND f.user_id = normalized_this_user_id
         AND (state_code_filter IS NULL OR f.state_code = state_code_filter)
       UNION ALL
-      SELECT f.*
+      SELECT f.id, f.json
       FROM public.flows f
       WHERE data_source = 'te'
         AND team_id_filter IS NOT NULL
@@ -18958,7 +18958,7 @@ BEGIN
       WHERE visible_rows.json @> filter_condition_jsonb
         AND (
           flow_type IS NULL
-          OR (visible_rows.json #>> '{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}') = ANY(flow_type_array)
+          OR (visible_rows.json -> 'flowDataSet' -> 'modellingAndValidation' -> 'LCIMethod' ->> 'typeOfDataSet') = ANY(flow_type_array)
         )
         AND (
           as_input IS NULL
@@ -19004,52 +19004,104 @@ BEGIN
           )
         )
     ),
-    latest_rows AS (
-      SELECT DISTINCT ON (visible_rows.id)
-        visible_rows.id,
-        visible_rows.json,
-        visible_rows.version,
-        visible_rows.created_at,
-        visible_rows.modified_at,
-        visible_rows.team_id
-      FROM visible_rows
-      JOIN matched_ids ON matched_ids.id = visible_rows.id
-      ORDER BY visible_rows.id, visible_rows.version DESC, visible_rows.modified_at DESC
-    ),
-    counted_rows AS (
-      SELECT latest_rows.*, count(*) OVER()::bigint AS total_count
-      FROM latest_rows
-    )
-    SELECT
-      counted_rows.id,
-      counted_rows.json,
-      counted_rows.version,
-      counted_rows.modified_at,
-      counted_rows.team_id,
-      counted_rows.total_count
-    FROM counted_rows
-    ORDER BY
-      CASE
-        WHEN normalized_sort_by = 'version' AND normalized_sort_direction = 'asc' THEN counted_rows.version
-      END ASC NULLS LAST,
-      CASE
-        WHEN normalized_sort_by = 'version' AND normalized_sort_direction <> 'asc' THEN counted_rows.version
-      END DESC NULLS LAST,
-      CASE
-        WHEN normalized_sort_by = 'created_at' AND normalized_sort_direction = 'asc' THEN counted_rows.created_at
-      END ASC NULLS LAST,
-      CASE
-        WHEN normalized_sort_by = 'created_at' AND normalized_sort_direction <> 'asc' THEN counted_rows.created_at
-      END DESC NULLS LAST,
-      CASE
-        WHEN normalized_sort_by = 'modified_at' AND normalized_sort_direction = 'asc' THEN counted_rows.modified_at
-      END ASC NULLS LAST,
-      CASE
-        WHEN normalized_sort_by = 'modified_at' AND normalized_sort_direction <> 'asc' THEN counted_rows.modified_at
-      END DESC NULLS LAST,
-      counted_rows.id
-    LIMIT normalized_page_size
-    OFFSET (normalized_page_current - 1) * normalized_page_size;
+    visible_keys AS (
+        SELECT f.id, f.version, f.created_at, f.modified_at, f.team_id
+        FROM public.flows f
+        WHERE ((data_source = 'tg' AND f.state_code = 100) OR (data_source = 'ex' AND f.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL))
+          AND (team_id_filter IS NULL OR f.team_id = team_id_filter)
+        UNION ALL
+        SELECT f.id, f.version, f.created_at, f.modified_at, f.team_id
+        FROM public.flows f
+        WHERE data_source = 'co'
+          AND f.state_code = 200
+          AND (team_id_filter IS NULL OR f.team_id = team_id_filter)
+        UNION ALL
+        SELECT f.id, f.version, f.created_at, f.modified_at, f.team_id
+        FROM public.flows f
+        WHERE data_source = 'my'
+          AND normalized_this_user_id IS NOT NULL
+          AND f.user_id = normalized_this_user_id
+          AND (state_code_filter IS NULL OR f.state_code = state_code_filter)
+        UNION ALL
+        SELECT f.id, f.version, f.created_at, f.modified_at, f.team_id
+        FROM public.flows f
+        WHERE data_source = 'te'
+          AND team_id_filter IS NOT NULL
+          AND f.team_id = team_id_filter
+          AND (state_code_filter IS NULL OR f.state_code = state_code_filter)
+      ),
+      latest_keys AS (
+        SELECT DISTINCT ON (visible_keys.id)
+          visible_keys.id,
+          visible_keys.version,
+          visible_keys.created_at,
+          visible_keys.modified_at,
+          visible_keys.team_id
+        FROM visible_keys
+        JOIN matched_ids ON matched_ids.id = visible_keys.id
+        ORDER BY visible_keys.id, visible_keys.version DESC, visible_keys.modified_at DESC
+      ),
+      counted_keys AS (
+        SELECT latest_keys.*, count(*) OVER()::bigint AS total_count
+        FROM latest_keys
+      ),
+      paged_keys AS (
+        SELECT counted_keys.*
+        FROM counted_keys
+        ORDER BY
+          CASE
+            WHEN normalized_sort_by = 'version' AND normalized_sort_direction = 'asc' THEN counted_keys.version
+          END ASC NULLS LAST,
+          CASE
+            WHEN normalized_sort_by = 'version' AND normalized_sort_direction <> 'asc' THEN counted_keys.version
+          END DESC NULLS LAST,
+          CASE
+            WHEN normalized_sort_by = 'created_at' AND normalized_sort_direction = 'asc' THEN counted_keys.created_at
+          END ASC NULLS LAST,
+          CASE
+            WHEN normalized_sort_by = 'created_at' AND normalized_sort_direction <> 'asc' THEN counted_keys.created_at
+          END DESC NULLS LAST,
+          CASE
+            WHEN normalized_sort_by = 'modified_at' AND normalized_sort_direction = 'asc' THEN counted_keys.modified_at
+          END ASC NULLS LAST,
+          CASE
+            WHEN normalized_sort_by = 'modified_at' AND normalized_sort_direction <> 'asc' THEN counted_keys.modified_at
+          END DESC NULLS LAST,
+          counted_keys.id
+        LIMIT normalized_page_size
+        OFFSET (normalized_page_current - 1) * normalized_page_size
+      )
+      SELECT
+        payload.id,
+        payload.json,
+        payload.version,
+        payload.modified_at,
+        payload.team_id,
+        paged_keys.total_count
+      FROM paged_keys
+      JOIN public.flows payload
+        ON payload.id = paged_keys.id
+       AND payload.version = paged_keys.version
+      ORDER BY
+        CASE
+          WHEN normalized_sort_by = 'version' AND normalized_sort_direction = 'asc' THEN paged_keys.version
+        END ASC NULLS LAST,
+        CASE
+          WHEN normalized_sort_by = 'version' AND normalized_sort_direction <> 'asc' THEN paged_keys.version
+        END DESC NULLS LAST,
+        CASE
+          WHEN normalized_sort_by = 'created_at' AND normalized_sort_direction = 'asc' THEN paged_keys.created_at
+        END ASC NULLS LAST,
+        CASE
+          WHEN normalized_sort_by = 'created_at' AND normalized_sort_direction <> 'asc' THEN paged_keys.created_at
+        END DESC NULLS LAST,
+        CASE
+          WHEN normalized_sort_by = 'modified_at' AND normalized_sort_direction = 'asc' THEN paged_keys.modified_at
+        END ASC NULLS LAST,
+        CASE
+          WHEN normalized_sort_by = 'modified_at' AND normalized_sort_direction <> 'asc' THEN paged_keys.modified_at
+        END DESC NULLS LAST,
+        paged_keys.id;
 END;
 $_$;
 

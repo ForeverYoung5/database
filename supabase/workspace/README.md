@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-01
-lastReviewedCommit: f643921e
-lastReviewedNote: "Reviewed Database #759 member workload drill-down after a clean local reset. The generated public/api type snapshot now matches Supabase CLI 2.117.0; only generic helper formatting changed and generated-versus-stable ownership rules are unchanged."
+lastReviewedCommit: 59f250a8cbbbc6cb867230581ec9c5f6d11bfc60
+lastReviewedNote: "Reviewed Database #759 after integrating current Dev through Database #761. The generated public/api snapshot matches Supabase CLI 2.117.0; generic helper formatting and generated-versus-stable ownership rules remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

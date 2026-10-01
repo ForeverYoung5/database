@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-01
-lastReviewedCommit: f643921e
-lastReviewedNote: "复核 Database #759 成员审核工作量下钻，并完成干净本地重置。生成的 public/api 类型快照现已匹配 Supabase CLI 2.117.0；仅通用 helper 格式变化，生成内容与稳定内容的归属规则不变。"
+lastReviewedCommit: 59f250a8cbbbc6cb867230581ec9c5f6d11bfc60
+lastReviewedNote: "复核 Database #759，并合入截至 Database #761 的当前 Dev。生成的 public/api 快照匹配 Supabase CLI 2.117.0；通用 helper 格式及生成内容与稳定内容的归属规则不变。"
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

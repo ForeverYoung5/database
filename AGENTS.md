@@ -38,8 +38,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-01
-lastReviewedCommit: f643921e
-lastReviewedNote: "Reviewed Database #759 member workload drill-down CI repair after a clean local reset and deterministic type generation with the CI-pinned Supabase CLI 2.117.0. The generated helper formatting change follows existing ownership, validation, and delivery contracts."
+lastReviewedCommit: 59f250a8cbbbc6cb867230581ec9c5f6d11bfc60
+lastReviewedNote: "Reviewed Database #759 member workload drill-down CI repair after integrating current Dev through Database #761. The generated helper formatting change follows existing ownership, validation, and delivery contracts."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md

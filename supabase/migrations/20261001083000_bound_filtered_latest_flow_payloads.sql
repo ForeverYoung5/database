@@ -1,3 +1,13 @@
+-- Database #761: preserve history-match/latest-visible output while paging narrow keys.
+-- The filtered reader formerly materialized full Flow rows and carried JSON through
+-- latest-version sorting/window counting before LIMIT. Match visible IDs separately,
+-- page only existing key columns, and hydrate the selected exact versions under the
+-- unchanged invoker RLS. The type predicate uses the existing expression B-trees.
+-- No index, writer, ACL, signature, projection or timeout change.
+begin;
+set local lock_timeout = '5s';
+set local statement_timeout = '60s';
+
 CREATE OR REPLACE FUNCTION "api"."get_latest_flow_versions"("page_size" bigint DEFAULT 10, "page_current" bigint DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer, "filter_condition" "jsonb" DEFAULT '{}'::"jsonb", "sort_by" "text" DEFAULT 'modified_at'::"text", "sort_direction" "text" DEFAULT 'desc'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
     LANGUAGE "plpgsql"
     SET "search_path" TO 'api', 'private', 'public', 'util', 'extensions', 'extensions', 'pg_temp'
@@ -334,12 +344,4 @@ BEGIN
 END;
 $_$;
 
-ALTER FUNCTION "api"."get_latest_flow_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "filter_condition" "jsonb", "sort_by" "text", "sort_direction" "text") OWNER TO "postgres";
-
-REVOKE ALL ON FUNCTION "api"."get_latest_flow_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "filter_condition" "jsonb", "sort_by" "text", "sort_direction" "text") FROM PUBLIC;
-
-GRANT ALL ON FUNCTION "api"."get_latest_flow_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "filter_condition" "jsonb", "sort_by" "text", "sort_direction" "text") TO "api_internal_executor";
-
-GRANT ALL ON FUNCTION "api"."get_latest_flow_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "filter_condition" "jsonb", "sort_by" "text", "sort_direction" "text") TO "anon";
-
-GRANT ALL ON FUNCTION "api"."get_latest_flow_versions"("page_size" bigint, "page_current" bigint, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer, "filter_condition" "jsonb", "sort_by" "text", "sort_direction" "text") TO "authenticated";
+commit;
