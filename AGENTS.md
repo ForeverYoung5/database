@@ -38,8 +38,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-01
-lastReviewedCommit: 40d92feb476fec4d8ccdea04edc9d3075333db8f
-lastReviewedNote: "Reviewed Database #761 filtered Flow latest-version reads: matching historical visible versions and hydrating paged latest keys preserve schema ownership, invoker RLS, capability routing, and the existing timeout; local fixture and migration proof requirements are recorded in the owning guides."
+lastReviewedCommit: eae0933d87cf83dbf160b2439c6de5431c758ab1
+lastReviewedNote: "Reviewed Database #761 CI regression registration: the filtered latest-Flow suite runs in the existing schema/capability local-contract step; workflow authority, branch bindings and SQL behavior stay unchanged."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md
