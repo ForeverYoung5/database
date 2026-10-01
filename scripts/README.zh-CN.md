@@ -21,7 +21,7 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-01
-lastReviewedCommit: 59f250a8cbbbc6cb867230581ec9c5f6d11bfc60
+lastReviewedCommit: c5fc0522
 lastReviewedNote: "复核 Database #759，并合入截至 Database #761 的当前 Dev。现有生成命令仍为权威流程；public/api 快照必须使用 CI 固定的 Supabase CLI 2.117.0 生成并检查结果可复现。"
 related:
   - ../AGENTS.md
