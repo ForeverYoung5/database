@@ -33,8 +33,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-11
-lastReviewedCommit: f0650b91
-lastReviewedNote: "Database #828 / PR #830: reviewed forward-only fresh post-lock AI deadline and audit clocks, preserved non-AI and current-lease contracts, exact helper inventory 600. CLI 2.117.0/PG 17.11 clean rebuild; 245 SQL assertions, two clock waits, four lease races, both populated fault upgrades, unchanged lint/types and deterministic exports pass. Hosted forward qualification and review remain pending."
+lastReviewedCommit: c55ae785b5700e0b2ebc1e27a2400d6333f2452f
+lastReviewedNote: "Database #829: reviewed statement-local scope evaluation, scope-isolation tests, synthetic performance and exact-local snapshots; retained #828 enqueue-relative suggestion lifetimes and claim caps. Existing ownership, API, ACL/security barrier, budgets, branches and hosted qualification remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -1099,3 +1099,23 @@ Database #824 fixture construction and bulk Flow-kind changes use a transaction-
 60-second setup budget because real projection triggers run for every synthetic
 source write. Restore and assert the eight-second statement budget before public
 read probes; fixture setup time must not be reported as exchange-query latency.
+
+
+### Scoped Portal settings reader (Database #829)
+
+Run `supabase/tests/20261011_portal_scoped_settings_reads.sql` with the existing
+display-reader, brand-foundation, settings, navigation, API-closure and schema
+cutover suites. Keep the same prepared statement across Tiangong, BAFU, combined
+and empty scopes; test multiple RPC scopes in one SQL statement and restoration
+of pre-existing request GUCs after rejected inputs. A security-barrier drift must
+remain unavailable. Do not weaken the eight-second public budgets or manifest.
+
+The guarded `supabase/tests/upgrade/test_portal_scoped_settings_upgrade.py`
+proves unchanged routine/ACL/config/view metadata and source/settings/mode state,
+repeat application, and positive overlap of two prepared-statement sessions.
+Its synthetic clone is removed before the receipt is written. The guarded
+`scripts/benchmark_portal_scoped_tail.py` compares complete scoped RPCs and real
+continuation cursors on one rollback-only fixture, alternates variant order,
+retains nested natural plans, and covers empty/filtered/lexical/UUID/escaped/
+one-character/zero-result shapes in single- and multi-brand deployments. These
+are local synthetic warm samples, not hosted p95 or concurrent-load acceptance.

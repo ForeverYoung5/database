@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-11
-lastReviewedCommit: f0650b91
-lastReviewedNote: "Database #828 / PR #830: reviewed forward-only fresh post-lock AI deadline and audit clocks, preserved non-AI and current-lease contracts, exact helper inventory 600. CLI 2.117.0/PG 17.11 clean rebuild; 245 SQL assertions, two clock waits, four lease races, both populated fault upgrades, unchanged lint/types and deterministic exports pass. Hosted forward qualification and review remain pending."
+lastReviewedCommit: c55ae785b5700e0b2ebc1e27a2400d6333f2452f
+lastReviewedNote: "Database #829: reviewed statement-local scope evaluation, scope-isolation tests, synthetic performance and exact-local snapshots; retained #828 enqueue-relative suggestion lifetimes and claim caps. Existing ownership, API, ACL/security barrier, budgets, branches and hosted qualification remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -1288,3 +1288,21 @@ rows. No new index, projection, grant or source rewrite is introduced. PostgreSQ
 [materialization](https://www.postgresql.org/docs/17/queries-with.html) and
 [conditional expressions](https://www.postgresql.org/docs/17/functions-conditional.html)
 define the relevant evaluation boundaries.
+
+
+### Request-scope settings evaluation (Database #829)
+
+Migration `20261011142438` changes only the private security-barrier scope view
+and refreshes its existing manifest identity. Each SQL statement reads the three
+request GUCs and parses the allowed-brand array through uncorrelated scalar
+subqueries, instead of repeating those operations for each settings row. The
+exact visible kind/id/version keys, global support mode and narrowing brand
+filter retain their existing predicates. The view's columns, owner, grants,
+security barrier and every reader/function configuration remain unchanged.
+
+InitPlan values belong to the current statement execution; they are not a
+session or prepared-statement authorization cache. The focused SQL and local
+upgrade/concurrency harness verify successive scopes on one prepared statement,
+multiple differently scoped RPCs in one statement, outer-GUC restoration after
+success and failure, and simultaneous sessions. The ordinary contract assertion
+still rejects a changed view definition or security barrier before serving.
