@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-11
-lastReviewedCommit: efbcea01
-lastReviewedNote: "Database #828: reviewed AI admission/recovery deadline cancellation, bounded owner-only minute expiry, live-lease and canonical history preservation; CLI 2.117.0/PG 17.11 clean rebuild, 202 SQL assertions, four concurrency cases, populated fault rollback and no-consumer scheduler pass. Exact-local exports only; hosted qualification, review and integration remain pending."
+lastReviewedCommit: f0650b91
+lastReviewedNote: "Database #828 / PR #830: reviewed forward-only fresh post-lock AI deadline and audit clocks, preserved non-AI and current-lease contracts, exact helper inventory 600. CLI 2.117.0/PG 17.11 clean rebuild; 245 SQL assertions, two clock waits, four lease races, both populated fault upgrades, unchanged lint/types and deterministic exports pass. Hosted forward qualification and review remain pending."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
