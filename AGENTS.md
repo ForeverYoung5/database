@@ -38,8 +38,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-11
-lastReviewedCommit: 6e7d4741710636a850e8ba304c777ad8bb876fe9
-lastReviewedNote: "Database #824: reviewed sparse-kind exact Flow prefilter, full support and cursor parity, local upgrade proof, CI registration and exact-local exports. Existing ownership, branch, API, ACL, LCIA and hosted qualification boundaries remain unchanged."
+lastReviewedCommit: efbcea01
+lastReviewedNote: "Database #828: reviewed AI admission/recovery deadline cancellation, bounded owner-only minute expiry, live-lease and canonical history preservation; CLI 2.117.0/PG 17.11 clean rebuild, 202 SQL assertions, four concurrency cases, populated fault rollback and no-consumer scheduler pass. Exact-local exports only; hosted qualification, review and integration remain pending."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md
