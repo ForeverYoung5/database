@@ -33,8 +33,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-11
-lastReviewedCommit: 00a086e6184e30fb46aea621f11e567836153cf5
-lastReviewedNote: "Database #824: reviewed sparse-kind exact Flow prefilter, full support and cursor parity, local upgrade proof, CI registration and exact-local exports. Existing ownership, branch, API, ACL, LCIA and hosted qualification boundaries remain unchanged."
+lastReviewedCommit: 6e7d4741710636a850e8ba304c777ad8bb876fe9
+lastReviewedNote: "Database #824 / PR #826: reviewed bounded synthetic fixture writes and restoration of the eight-second public read budget. Migration, reader, support/cursor semantics, generated schema and hosted boundaries remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -1094,3 +1094,8 @@ Keep timing/plan receipts private and record sanitized summaries on the Issue/PR
 Local sequential initial/repeat timings have uncontrolled caches and do not prove
 hosted latency or concurrency. CI/Preview, persistent Dev, promote, production
 sparse-kind probes and workspace integration remain separate later gates.
+
+Database #824 fixture construction and bulk Flow-kind changes use a transaction-local
+60-second setup budget because real projection triggers run for every synthetic
+source write. Restore and assert the eight-second statement budget before public
+read probes; fixture setup time must not be reported as exchange-query latency.

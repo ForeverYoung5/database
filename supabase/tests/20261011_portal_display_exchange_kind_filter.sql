@@ -1,5 +1,7 @@
 -- Rollback-only synthetic World steel-size exchanges, real scoped API and RLS.
 begin;
+-- Synthetic source writes run real projection triggers; they are not API probes.
+set local statement_timeout='60s';
 create extension if not exists pgtap with schema extensions;
 set local search_path=extensions,public,auth;
 select no_plan();
@@ -96,7 +98,11 @@ select is(jsonb_array_length(api.portal_list_process_exchanges_v2(array['worldst
 reset role;
 select lives_ok($q$select private.portal_display_assert_contract_v1()$q$,'original helper and manifest restored');
 update private.dataset_display_settings set is_visible=true where dataset_kind='unitgroup' and dataset_id='82400000-0000-4000-8000-000000000001';
+-- Bound bulk fixture maintenance separately, restoring the API budget below.
+set local statement_timeout='60s';
 update public.flows set json=jsonb_set(json,'{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}','"Elementary flow"') where id::text like '82400000%' and right(id::text,12)::bigint>10000;
+set local statement_timeout='8s';
+select is(current_setting('statement_timeout'),'8s','zero-match probes retain the eight-second statement budget');
 set local role anon;
 select is(jsonb_array_length(api.portal_list_process_exchanges_v2(array['worldsteel'],'82400000-0000-4000-8000-000000002556','01.00.000','waste',null,20)->'rows'),0,'2556 nonmatching exact refs return an empty page');
 select is(api.portal_list_process_exchanges_v2(array['worldsteel'],'82400000-0000-4000-8000-000000002556','01.00.000','technosphere',null,20)->'nextCursor','null'::jsonb,'zero matches have no continuation');

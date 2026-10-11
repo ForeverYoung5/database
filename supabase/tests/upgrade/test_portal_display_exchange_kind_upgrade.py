@@ -144,13 +144,13 @@ for iteration in range(1, 4):
         sql += 'select pg_temp.verify_upgrade();\n'
 
 # Exhaust the large arrays with no matching kinds, preserving the fixture afterward.
-sql += "update public.flows set json=jsonb_set(json,'{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}','\"Elementary flow\"') where id::text like '82400000%' and right(id::text,12)::bigint>10000;\n"
+sql += "set local statement_timeout='60s'; update public.flows set json=jsonb_set(json,'{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}','\"Elementary flow\"') where id::text like '82400000%' and right(id::text,12)::bigint>10000;\n"
 for phase in ['baseline', 'candidate']:
     sql += ((baseline + refresh) if phase == 'baseline' else candidate) + "\nset local statement_timeout='8s';\n"
     for n in (2540, 2556):
         for kind in ['technosphere', 'waste']:
             sql += f"set local role anon; select pg_temp.probe('{phase}',1,'no-match-{n}','{kind}',{literal(call(n,kind))}); reset role;\n"
-sql += "update public.flows set json=jsonb_set(json,'{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}',to_jsonb(case when right(id::text,12)::integer-10000=1 or (right(id::text,12)::integer-10000)%61=0 then 'Product flow' when (right(id::text,12)::integer-10000)%67=0 then 'Waste flow' else 'Elementary flow' end)) where id::text like '82400000%' and right(id::text,12)::bigint>10000;\n"
+sql += "set local statement_timeout='60s'; update public.flows set json=jsonb_set(json,'{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}',to_jsonb(case when right(id::text,12)::integer-10000=1 or (right(id::text,12)::integer-10000)%61=0 then 'Product flow' when (right(id::text,12)::integer-10000)%67=0 then 'Waste flow' else 'Elementary flow' end)) where id::text like '82400000%' and right(id::text,12)::bigint>10000;\n"
 
 # Reuse the adversarial source update from the pgTAP regression unchanged.
 text = FIXTURE.read_text()
