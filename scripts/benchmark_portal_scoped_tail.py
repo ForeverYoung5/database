@@ -18,7 +18,7 @@ import benchmark_portal_catalog_bounded as fixture_source
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTAINER = 'supabase_db_database-829-portal-tail'
-CANDIDATE = ROOT/'supabase/migrations/20261011142438_optimize_portal_scoped_navigation_facets.sql'
+CANDIDATE = ROOT/'supabase/migrations/20261011151720_optimize_portal_scoped_navigation_facets.sql'
 TABLES = ('display_catalog_search_rows_v1','display_catalog_search_rows_v2','display_catalog_facet_rows_v1','display_navigation_versions_v1','display_navigation_membership_v1','dataset_display_settings')
 
 

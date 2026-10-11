@@ -1292,7 +1292,7 @@ define the relevant evaluation boundaries.
 
 ### Request-scope settings evaluation (Database #829)
 
-Migration `20261011142438` changes only the private security-barrier scope view
+Migration `20261011151720` changes only the private security-barrier scope view
 and refreshes its existing manifest identity. Each SQL statement reads the three
 request GUCs and parses the allowed-brand array through uncorrelated scalar
 subqueries, instead of repeating those operations for each settings row. The

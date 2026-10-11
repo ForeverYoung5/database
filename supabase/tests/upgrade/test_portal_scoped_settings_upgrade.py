@@ -19,7 +19,7 @@ import time
 ROOT=Path(__file__).resolve().parents[3]
 CONTAINER='supabase_db_database-829-portal-tail'
 DATABASE='portal829_scope_concurrency'
-CANDIDATE=ROOT/'supabase/migrations/20261011142438_optimize_portal_scoped_navigation_facets.sql'
+CANDIDATE=ROOT/'supabase/migrations/20261011151720_optimize_portal_scoped_navigation_facets.sql'
 
 
 def sql(source: str,database: str='postgres') -> str:
