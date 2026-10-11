@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-11
-lastReviewedCommit: f0650b91
-lastReviewedNote: "Database #828 / PR #830: reviewed forward-only fresh post-lock AI deadline and audit clocks, preserved non-AI and current-lease contracts, exact helper inventory 600. CLI 2.117.0/PG 17.11 clean rebuild; 245 SQL assertions, two clock waits, four lease races, both populated fault upgrades, unchanged lint/types and deterministic exports pass. Hosted forward qualification and review remain pending."
+lastReviewedCommit: c55ae785b5700e0b2ebc1e27a2400d6333f2452f
+lastReviewedNote: "Database #829: reviewed statement-local scope evaluation, scope-isolation tests, synthetic performance and exact-local snapshots; retained #828 enqueue-relative suggestion lifetimes and claim caps. Existing ownership, API, ACL/security barrier, budgets, branches and hosted qualification remain unchanged."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml
@@ -924,3 +924,32 @@ synthetic source/projection rows, six scope settings and three kind filters.
 Requires the fixed owned local container and a new report path; checks exact
 response digests and the unchanged eight-second candidate budget. See the
 Portal display qualification section in `docs/agents/repo-validation.md`.
+
+
+### `benchmark_portal_scoped_tail.py` (Database #829)
+
+This full-RPC, order-balanced comparison admits only task-labelled local
+`supabase_db_database-829-portal-tail`, PostgreSQL 17.11, an empty synthetic
+fixture target and new evidence paths. It accepts no remote URL or credentials.
+The imported read-scale fixture builder is not its historical CLI admission
+path; the #829 guard independently admits this exact local target. It does not
+increase public timeouts or force planner settings. Reader fixtures and variant
+DDL roll back; real-writer and request-scope tests remain separate proof.
+
+```bash
+python3 scripts/benchmark_portal_scoped_tail.py \
+  --container supabase_db_database-829-portal-tail --base-ref <exact-predecessor> \
+  --samples 20 --report <new-private-json>
+python3 supabase/tests/upgrade/test_portal_scoped_settings_upgrade.py \
+  --container supabase_db_database-829-portal-tail --base-ref <exact-predecessor> \
+  --report <new-private-json>
+```
+
+The upgrade harness temporarily closes source connections only in the exact
+labelled local task container to clone through PostgreSQL `FILE_COPY`, retaining
+PGroonga index files. It admits only the image workers and local autovacuum,
+restores source connections immediately, and owns only its fixed local clone
+`portal829_scope_concurrency`; it refuses an existing clone, verifies overlapping
+sessions with independent scopes, and removes the clone before recording success.
+Release the task-owned Docker group through the workspace resource controller
+once qualification evidence is preserved.
