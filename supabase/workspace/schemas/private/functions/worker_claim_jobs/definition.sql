@@ -40,12 +40,16 @@ begin
     where worker_runtime = 'calculator'
       and worker_queue = v_worker_queue
       and status = 'running'
-      and lease_expires_at < now()
+      and lease_expires_at < case when job_kind = 'ai.tidas_suggestion'
+        then clock_timestamp() else now() end
       and attempt_count >= max_attempts
-      and (job_kind <> 'ai.tidas_suggestion' or timeout_at is null or timeout_at > now())
+      and (job_kind <> 'ai.tidas_suggestion' or timeout_at is null or timeout_at > clock_timestamp())
     order by lease_expires_at asc, created_at asc
     limit v_limit
     for update skip locked
+  ),
+  failure_clock as materialized (
+    select id, clock_timestamp() as failed_at from expired_candidates
   ),
   expired as (
     update private.worker_jobs as j
@@ -65,16 +69,19 @@ begin
           leased_by = null,
           lease_token = null,
           lease_expires_at = null,
-          heartbeat_at = coalesce(j.heartbeat_at, now()),
-          updated_at = now(),
-          finished_at = now()
-    from expired_candidates
-    where j.id = expired_candidates.id
+          heartbeat_at = coalesce(j.heartbeat_at, case when j.job_kind = 'ai.tidas_suggestion'
+            then c.failed_at else now() end),
+          updated_at = case when j.job_kind = 'ai.tidas_suggestion'
+            then c.failed_at else now() end,
+          finished_at = case when j.job_kind = 'ai.tidas_suggestion'
+            then c.failed_at else now() end
+    from failure_clock c
+    where j.id = c.id
     returning j.*
   ),
   expired_events as (
     insert into private.worker_job_events (
-      job_id, event_type, status, worker_id, message, details
+      job_id, event_type, status, worker_id, message, details, created_at
     )
     select
       expired.id,
@@ -86,7 +93,9 @@ begin
         'errorCode', expired.error_code,
         'attemptCount', expired.attempt_count,
         'maxAttempts', expired.max_attempts
-      )
+      ),
+      case when expired.job_kind = 'ai.tidas_suggestion'
+        then expired.finished_at else now() end
     from expired
     returning id
   ),
@@ -97,14 +106,19 @@ begin
       and worker_queue = v_worker_queue
       and run_after <= now()
       and attempt_count < max_attempts
-      and (job_kind <> 'ai.tidas_suggestion' or timeout_at is null or timeout_at > now())
+      and (job_kind <> 'ai.tidas_suggestion' or timeout_at is null or timeout_at > clock_timestamp())
       and (
         status in ('queued', 'stale')
-        or (status = 'running' and lease_expires_at < now())
+        or (status = 'running' and lease_expires_at < case when job_kind = 'ai.tidas_suggestion'
+        then clock_timestamp() else now() end)
       )
     order by priority desc, run_after asc, created_at asc
     limit v_limit
     for update skip locked
+  ),
+  admission_clock as materialized (
+    -- FOR UPDATE has completed before any AI admission timestamp is captured.
+    select id, clock_timestamp() as admitted_at from candidate
   ),
   updated as (
     update private.worker_jobs as j
@@ -112,10 +126,14 @@ begin
           attempt_count = j.attempt_count + 1,
           leased_by = v_worker_id,
           lease_token = gen_random_uuid(),
-          lease_expires_at = now() + make_interval(secs => v_lease_seconds),
-          heartbeat_at = now(),
-          started_at = coalesce(j.started_at, now()),
-          updated_at = now(),
+          lease_expires_at = (case when j.job_kind = 'ai.tidas_suggestion'
+            then c.admitted_at else now() end) + make_interval(secs => v_lease_seconds),
+          heartbeat_at = case when j.job_kind = 'ai.tidas_suggestion'
+            then c.admitted_at else now() end,
+          started_at = coalesce(j.started_at, case when j.job_kind = 'ai.tidas_suggestion'
+            then c.admitted_at else now() end),
+          updated_at = case when j.job_kind = 'ai.tidas_suggestion'
+            then c.admitted_at else now() end,
           diagnostics = case
             when j.attempt_count > 0 then '{}'::jsonb
             else j.diagnostics
@@ -123,13 +141,15 @@ begin
           error_code = null,
           error_message = null,
           error_details = null
-    from candidate
-    where j.id = candidate.id
+    from admission_clock c
+    where j.id = c.id
+      and (j.job_kind <> 'ai.tidas_suggestion' or j.timeout_at is null
+        or j.timeout_at > c.admitted_at)
     returning j.*
   ),
   claim_events as (
     insert into private.worker_job_events (
-      job_id, event_type, status, phase, progress, worker_id, lease_token, details
+      job_id, event_type, status, phase, progress, worker_id, lease_token, details, created_at
     )
     select
       updated.id,
@@ -142,7 +162,9 @@ begin
       jsonb_build_object(
         'attemptCount', updated.attempt_count,
         'leaseExpiresAt', updated.lease_expires_at
-      )
+      ),
+      case when updated.job_kind = 'ai.tidas_suggestion'
+        then updated.updated_at else now() end
     from updated
     returning id
   )

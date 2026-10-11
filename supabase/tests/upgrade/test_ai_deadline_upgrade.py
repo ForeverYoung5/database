@@ -24,7 +24,7 @@ identity=subprocess.run(cmd,input="select current_setting('server_version');sele
 if identity!=['17.11','0']:
     p.error('Exact empty local17.11 queue required')
 base='\n'.join(subprocess.check_output(['git','show',BASE+':supabase/workspace/schemas/private/functions/'+name+'/definition.sql'],cwd=ROOT,text=True) for name in ('worker_claim_jobs','worker_retry_job'))
-candidate=(ROOT/'supabase/migrations/20261011141704_ai_queue_deadline_recovery.sql').read_text()
+candidate=(ROOT/'supabase/migrations/20261011141704_ai_queue_deadline_recovery.sql').read_text()+'\n'+(ROOT/'supabase/migrations/20261011143718_ai_deadline_fresh_clock.sql').read_text()
 sql="""begin;set local statement_timeout='30s';set local lock_timeout='1s';
 select cron.unschedule(jobid) from cron.job where jobname='worker-ai-deadline-expiry';
 drop index private.worker_jobs_ai_deadline_idx;
