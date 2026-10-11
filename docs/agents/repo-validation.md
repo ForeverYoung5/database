@@ -33,8 +33,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-11
-lastReviewedCommit: 021b0c9b98efcae47fe0c52a38c80746b10eca3f
-lastReviewedNote: "Database #818: display-only license-independent capabilities and atomic derived policy reconciliation preserve exact settings, scope, support integrity, publication, legacy manifests and ACLs."
+lastReviewedCommit: 26362ba7d4861534a89db2b2c2127f90c1df4680
+lastReviewedNote: "Database #821: reviewed display-only exchange page hydration, full duplicate detection, cursor/support parity, synthetic upgrade proofs and CI test registration. Branch, API, ACL, legacy/LCIA and generator boundaries are unchanged; hosted promotion and integration remain pending."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -1039,3 +1039,30 @@ closure checked before migration. The measured qualification block includes the
 injected-failure proof and first upgrade; it is not source-writer throughput or p95.
 Record duration and fixture size; local proof does not activate or
 qualify production-volume migration time or actual Portal browser rendering.
+
+
+### Display exchange paging regression (Database #821)
+
+Run `20261011_portal_display_exchange_paging.sql` after a blank rebuild with the
+existing display readers/foundation, Portal, publication and adjacent API/OAuth
+contracts. The CI local-contract job includes it. Reversed 2,540/2,556-exchange
+fixtures verify the anonymous scoped API, decimal precision, exact cross-brand and
+null support, malformed/duplicate IDs, unsupported rows, kind filters, normalized
+ID aliases, continuation and final-page behavior. A transaction-only instrumented
+support helper proves the all-supported 20-row first page hydrates 22 times,
+including functional-unit validation and one lookahead; restore its definition
+and manifest before rolling back.
+
+Run `python3 supabase/tests/upgrade/test_portal_display_exchange_upgrade.py
+--container supabase_db_portal-exchanges-821 --report <new-private-json>` on the
+explicitly owned empty local stack, with task ownership recorded in
+`/private/tmp/lca-portal-821-20261011/OWNER.md`. The collector admits only that local
+Docker project. It compares complete response text digests against the canonical
+predecessor for first/second/final large pages, all kinds, adversarial support,
+invalid cursors and hidden/out-of-scope rows. It alternates three baseline/candidate
+large-case samples, records EXPLAIN ANALYZE/BUFFERS, and proves populated upgrade,
+failure rollback, repeat apply and unchanged source/settings/projections,
+non-target functions (including legacy/LCIA), ownership, ACLs and timeout configs.
+Local initial/repeat timings do not establish cold-cache, concurrency or hosted
+latency. Preserve the eight-second budget; actual production measurements require
+the later Dev/promote/production and workspace-integration gates in #821.
