@@ -30,6 +30,10 @@ begin
     );
   end if;
 
+  if v_worker_queue = 'ai' then
+    perform private.worker_expire_ai_suggestions(v_limit);
+  end if;
+
   with expired_candidates as (
     select id
     from private.worker_jobs
@@ -38,6 +42,7 @@ begin
       and status = 'running'
       and lease_expires_at < now()
       and attempt_count >= max_attempts
+      and (job_kind <> 'ai.tidas_suggestion' or timeout_at is null or timeout_at > now())
     order by lease_expires_at asc, created_at asc
     limit v_limit
     for update skip locked
@@ -92,6 +97,7 @@ begin
       and worker_queue = v_worker_queue
       and run_after <= now()
       and attempt_count < max_attempts
+      and (job_kind <> 'ai.tidas_suggestion' or timeout_at is null or timeout_at > now())
       and (
         status in ('queued', 'stale')
         or (status = 'running' and lease_expires_at < now())

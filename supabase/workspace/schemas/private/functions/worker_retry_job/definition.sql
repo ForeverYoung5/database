@@ -38,6 +38,14 @@ begin
     );
   end if;
 
+  if v_job.job_kind = 'ai.tidas_suggestion'
+    and v_job.timeout_at is not null and v_job.timeout_at <= now() then
+    return jsonb_build_object(
+      'ok', false, 'code', 'WORKER_JOB_DEADLINE_EXPIRED', 'status', 409,
+      'message', 'Expired AI suggestions require a new request'
+    );
+  end if;
+
   update private.worker_jobs
     set status = 'queued',
         run_after = coalesce(p_run_after, now()),

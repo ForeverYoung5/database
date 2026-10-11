@@ -105,6 +105,10 @@ jobs:
           supabase test db supabase/tests/20261010_portal_display_readers.sql
           supabase test db supabase/tests/20261011_portal_display_exchange_paging.sql
           supabase test db supabase/tests/20261011_portal_display_exchange_kind_filter.sql
+          supabase test db supabase/tests/20261011_ai_queue_deadline_recovery.sql
+          supabase test db supabase/tests/20260825_ai_worker_contract.sql
+          supabase test db supabase/tests/20260531_worker_jobs_foundation.sql
+          supabase test db supabase/tests/20260829_private_schema_p0_controls.sql
           supabase test db supabase/tests/20260924_reviewer_contact_profile_activation.sql
           supabase test db supabase/tests/20260921_foundry60_time_alias_v2_math.sql
           supabase test db supabase/tests/20260921_foundry60_time_alias_v2_vectors.sql

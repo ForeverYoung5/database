@@ -87162,6 +87162,10 @@ begin
     );
   end if;
 
+  if v_worker_queue = 'ai' then
+    perform private.worker_expire_ai_suggestions(v_limit);
+  end if;
+
   with expired_candidates as (
     select id
     from private.worker_jobs
@@ -87170,6 +87174,7 @@ begin
       and status = 'running'
       and lease_expires_at < now()
       and attempt_count >= max_attempts
+      and (job_kind <> 'ai.tidas_suggestion' or timeout_at is null or timeout_at > now())
     order by lease_expires_at asc, created_at asc
     limit v_limit
     for update skip locked
@@ -87224,6 +87229,7 @@ begin
       and worker_queue = v_worker_queue
       and run_after <= now()
       and attempt_count < max_attempts
+      and (job_kind <> 'ai.tidas_suggestion' or timeout_at is null or timeout_at > now())
       and (
         status in ('queued', 'stale')
         or (status = 'running' and lease_expires_at < now())
@@ -87586,6 +87592,56 @@ ALTER FUNCTION "private"."worker_enqueue_job"("p_job_kind" "text", "p_payload_js
 
 COMMENT ON FUNCTION "private"."worker_enqueue_job"("p_job_kind" "text", "p_payload_json" "jsonb", "p_payload_schema_version" "text", "p_subject_type" "text", "p_subject_id" "uuid", "p_subject_version" "text", "p_requested_by" "uuid", "p_requester_type" "text", "p_team_id" "uuid", "p_idempotency_key" "text", "p_request_hash" "text", "p_concurrency_key" "text", "p_priority" integer, "p_queue_key" "text", "p_run_after" timestamp with time zone, "p_visibility" "text", "p_max_attempts" integer, "p_timeout_at" timestamp with time zone, "p_payload_ref" "jsonb", "p_parent_job_id" "uuid", "p_root_job_id" "uuid") IS 'Canonical service-only Worker admission. Reuses active idempotent jobs, reuses any same-key maintenance run under a transaction advisory lock, and rejects the latest exact deterministic non-retryable failure without inserting a job or event.';
 
+
+
+CREATE OR REPLACE FUNCTION "private"."worker_expire_ai_suggestions"("p_limit" integer DEFAULT 50) RETURNS integer
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_limit integer := greatest(1, least(coalesce(p_limit, 50), 50));
+  v_count integer;
+begin
+  with candidates as (
+    select j.id
+    from private.worker_jobs j
+    where j.worker_runtime = 'calculator' and j.worker_queue = 'ai'
+      and j.job_kind = 'ai.tidas_suggestion'
+      and j.timeout_at <= now()
+      and (j.status in ('queued', 'stale')
+        or (j.status = 'running' and j.lease_expires_at < now()))
+    order by j.timeout_at, j.id
+    limit v_limit
+    for update skip locked
+  ), expired as (
+    update private.worker_jobs j
+    set status = 'cancelled', cancelled_at = now(), cancelled_by = null,
+        leased_by = null, lease_token = null, lease_expires_at = null,
+        error_code = 'worker_job_timeout',
+        error_message = 'AI suggestion deadline expired before admission or lease recovery',
+        updated_at = now(), finished_at = now()
+    from candidates c
+    where j.id = c.id
+      -- Recheck ownership eligibility at the locked row, never cancel a live lease.
+      and j.timeout_at <= now()
+      and (j.status in ('queued', 'stale')
+        or (j.status = 'running' and j.lease_expires_at < now()))
+    returning j.id, j.timeout_at
+  ), events as (
+    insert into private.worker_job_events(job_id, event_type, status, message, details)
+    select id, 'cancelled', 'cancelled',
+      'AI suggestion deadline expired before admission or lease recovery',
+      jsonb_build_object('errorCode', 'worker_job_timeout', 'timeoutAt', timeout_at)
+    from expired
+    returning id
+  )
+  select count(*)::integer into v_count from events;
+  return v_count;
+end;
+$$;
+
+
+ALTER FUNCTION "private"."worker_expire_ai_suggestions"("p_limit" integer) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "private"."worker_heartbeat_job"("p_job_id" "uuid", "p_lease_token" "uuid", "p_phase" "text" DEFAULT NULL::"text", "p_progress" numeric DEFAULT NULL::numeric, "p_diagnostics" "jsonb" DEFAULT NULL::"jsonb", "p_lease_seconds" integer DEFAULT 300) RETURNS "jsonb"
@@ -88241,6 +88297,14 @@ begin
       'code', 'WORKER_JOB_NOT_RETRYABLE',
       'status', 409,
       'message', 'Worker job is not in a retryable status'
+    );
+  end if;
+
+  if v_job.job_kind = 'ai.tidas_suggestion'
+    and v_job.timeout_at is not null and v_job.timeout_at <= now() then
+    return jsonb_build_object(
+      'ok', false, 'code', 'WORKER_JOB_DEADLINE_EXPIRED', 'status', 409,
+      'message', 'Expired AI suggestions require a new request'
     );
   end if;
 
@@ -102205,6 +102269,10 @@ CREATE INDEX "worker_job_events_job_created_idx" ON "private"."worker_job_events
 
 
 
+CREATE INDEX "worker_jobs_ai_deadline_idx" ON "private"."worker_jobs" USING "btree" ("timeout_at", "id") WHERE (("worker_runtime" = 'calculator'::"text") AND ("worker_queue" = 'ai'::"text") AND ("job_kind" = 'ai.tidas_suggestion'::"text") AND ("timeout_at" IS NOT NULL) AND ("status" = ANY (ARRAY['queued'::"text", 'stale'::"text", 'running'::"text"])));
+
+
+
 CREATE INDEX "worker_jobs_ai_tidas_suggestion_requester_idx" ON "private"."worker_jobs" USING "btree" ("requested_by", "updated_at" DESC, "id" DESC) WHERE ("job_kind" = 'ai.tidas_suggestion'::"text");
 
 
@@ -109967,6 +110035,10 @@ GRANT ALL ON FUNCTION "private"."worker_claim_jobs"("p_worker_queue" "text", "p_
 REVOKE ALL ON FUNCTION "private"."worker_enqueue_job"("p_job_kind" "text", "p_payload_json" "jsonb", "p_payload_schema_version" "text", "p_subject_type" "text", "p_subject_id" "uuid", "p_subject_version" "text", "p_requested_by" "uuid", "p_requester_type" "text", "p_team_id" "uuid", "p_idempotency_key" "text", "p_request_hash" "text", "p_concurrency_key" "text", "p_priority" integer, "p_queue_key" "text", "p_run_after" timestamp with time zone, "p_visibility" "text", "p_max_attempts" integer, "p_timeout_at" timestamp with time zone, "p_payload_ref" "jsonb", "p_parent_job_id" "uuid", "p_root_job_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "private"."worker_enqueue_job"("p_job_kind" "text", "p_payload_json" "jsonb", "p_payload_schema_version" "text", "p_subject_type" "text", "p_subject_id" "uuid", "p_subject_version" "text", "p_requested_by" "uuid", "p_requester_type" "text", "p_team_id" "uuid", "p_idempotency_key" "text", "p_request_hash" "text", "p_concurrency_key" "text", "p_priority" integer, "p_queue_key" "text", "p_run_after" timestamp with time zone, "p_visibility" "text", "p_max_attempts" integer, "p_timeout_at" timestamp with time zone, "p_payload_ref" "jsonb", "p_parent_job_id" "uuid", "p_root_job_id" "uuid") TO "service_role";
 GRANT ALL ON FUNCTION "private"."worker_enqueue_job"("p_job_kind" "text", "p_payload_json" "jsonb", "p_payload_schema_version" "text", "p_subject_type" "text", "p_subject_id" "uuid", "p_subject_version" "text", "p_requested_by" "uuid", "p_requester_type" "text", "p_team_id" "uuid", "p_idempotency_key" "text", "p_request_hash" "text", "p_concurrency_key" "text", "p_priority" integer, "p_queue_key" "text", "p_run_after" timestamp with time zone, "p_visibility" "text", "p_max_attempts" integer, "p_timeout_at" timestamp with time zone, "p_payload_ref" "jsonb", "p_parent_job_id" "uuid", "p_root_job_id" "uuid") TO "api_internal_executor";
+
+
+
+REVOKE ALL ON FUNCTION "private"."worker_expire_ai_suggestions"("p_limit" integer) FROM PUBLIC;
 
 
 
