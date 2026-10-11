@@ -12,7 +12,11 @@ declare
   v_cursor_internal integer;
   v_cursor_internal_text text;
   v_cursor_kind text;
-  v_rows jsonb;
+  v_rows jsonb := '[]'::jsonb;
+  v_group record;
+  v_row jsonb;
+  v_last_row jsonb;
+  v_count integer := 0;
   v_next_cursor text;
 begin
   if pg_catalog.octet_length(coalesce(p_exchange_kind, '')) > 32 then
@@ -58,51 +62,68 @@ begin
     v_cursor_kind := v_cursor ->> 'kind';
   end if;
 
-  with raw_exchanges as materialized (
-    select exchange.item,
-      exchange.item ->> '@dataSetInternalID' as internal_id,
-      count(*) over (partition by exchange.item ->> '@dataSetInternalID') as identity_count
-    from private.display_json_items_v1(v_process_json #> '{processDataSet,exchanges,exchange}') as exchange(item)
-  ), supported as materialized (
-    select support -> 'row' as row_data
-    from raw_exchanges
-    cross join lateral private.display_exchange_support_v1(v_process_state, v_process_json, raw_exchanges.item) as support
-    where raw_exchanges.identity_count = 1
-      and nullif(v_functional_unit ->> 'amount', '') is not null
-      and nullif(v_functional_unit ->> 'unit', '') is not null
-      and support is not null
-  ), filtered as materialized (
-    select supported.row_data,
-      (supported.row_data ->> 'internalId')::integer as internal_number,
-      supported.row_data ->> 'internalId' as internal_text,
-      supported.row_data ->> 'kind' as row_kind
-    from supported
-    where v_kind = 'all' or supported.row_data ->> 'kind' = v_kind
-  ), ordered as materialized (
-    select filtered.*,
-      row_number() over (order by filtered.internal_number, filtered.internal_text, filtered.row_kind) as page_rank
-    from filtered
-    where v_cursor is null
-      or (filtered.internal_number, filtered.internal_text, filtered.row_kind) >
-         (v_cursor_internal, v_cursor_internal_text, v_cursor_kind)
-    order by filtered.internal_number, filtered.internal_text, filtered.row_kind
-    limit p_limit + 1
-  )
-  select
-    coalesce(jsonb_agg(ordered.row_data order by ordered.page_rank)
-      filter (where ordered.page_rank <= p_limit), '[]'::jsonb),
-    case when max(ordered.page_rank) > p_limit then private.display_cursor_encode_v1(
-      (jsonb_agg(jsonb_build_object(
-        'v', 1,
-        'processId', p_process_id::text,
-        'processVersion', p_process_version,
-        'filterKind', v_kind,
-        'internalId', ordered.internal_text,
-        'kind', ordered.row_kind
-      ) order by ordered.page_rank) filter (where ordered.page_rank = p_limit)) -> 0
-    ) else null end
-  into v_rows, v_next_cursor
-  from ordered;
+  -- Duplicate detection spans the complete raw array, including rows behind the
+  -- cursor or with invalid support. Hydration starts only after this cheap pass.
+  -- Support trims IDs; group whitespace aliases before sorting their row kinds
+  -- so the original (numeric ID, normalized ID, kind) cursor order is retained.
+  if nullif(v_functional_unit ->> 'amount', '') is not null
+     and nullif(v_functional_unit ->> 'unit', '') is not null then
+    <<page_groups>>
+    for v_group in
+      with raw_exchanges as materialized (
+        select exchange.item,
+          exchange.item ->> '@dataSetInternalID' as raw_id,
+          btrim(exchange.item ->> '@dataSetInternalID') as internal_id,
+          count(*) over (partition by exchange.item ->> '@dataSetInternalID') as identity_count
+        from private.display_json_items_v1(v_process_json #> '{processDataSet,exchanges,exchange}') as exchange(item)
+      ), candidates as materialized (
+        select item, raw_id, internal_id,
+          case when internal_id ~ '^(0|[1-9][0-9]{0,5})$'
+            then internal_id::integer end as internal_number
+        from raw_exchanges
+        where identity_count = 1
+      )
+      select internal_number, internal_id, jsonb_agg(item order by raw_id) as items
+      from candidates
+      where internal_number is not null
+        and (v_cursor is null or internal_number >= v_cursor_internal)
+      group by internal_number, internal_id
+      order by internal_number, internal_id
+    loop
+      -- Only a same-ID group is materialized. Never hydrate the entire Process
+      -- before LIMIT. Unsupported/nonmatching rows must still be skipped until
+      -- a real lookahead is found (a sparse filter can scan the remaining IDs).
+      for v_row in
+        with supported as materialized (
+          select private.display_exchange_support_v1(v_process_state, v_process_json, item) -> 'row' as row_data
+          from jsonb_array_elements(v_group.items) as exchange(item)
+        )
+        select row_data
+        from supported
+        where row_data is not null
+          and (v_kind = 'all' or row_data ->> 'kind' = v_kind)
+          and (v_cursor is null or
+            (v_group.internal_number, row_data ->> 'internalId', row_data ->> 'kind') >
+            (v_cursor_internal, v_cursor_internal_text, v_cursor_kind))
+        order by row_data ->> 'kind'
+      loop
+        if v_count = p_limit then
+          v_next_cursor := private.display_cursor_encode_v1(jsonb_build_object(
+            'v', 1,
+            'processId', p_process_id::text,
+            'processVersion', p_process_version,
+            'filterKind', v_kind,
+            'internalId', v_last_row ->> 'internalId',
+            'kind', v_last_row ->> 'kind'
+          ));
+          exit page_groups;
+        end if;
+        v_rows := v_rows || jsonb_build_array(v_row);
+        v_last_row := v_row;
+        v_count := v_count + 1;
+      end loop;
+    end loop page_groups;
+  end if;
 
   return jsonb_build_object(
     'schemaVersion', 'portal.public-exchange-page.v1',

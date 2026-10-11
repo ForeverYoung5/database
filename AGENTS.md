@@ -38,8 +38,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-11
-lastReviewedCommit: 021b0c9b98efcae47fe0c52a38c80746b10eca3f
-lastReviewedNote: "Database #818: display-only license-independent capabilities and atomic derived policy reconciliation preserve exact settings, scope, support integrity, publication, legacy manifests and ACLs."
+lastReviewedCommit: 26362ba7d4861534a89db2b2c2127f90c1df4680
+lastReviewedNote: "Database #821: reviewed display-only exchange page hydration, full duplicate detection, cursor/support parity, synthetic upgrade proofs and CI test registration. Branch, API, ACL, legacy/LCIA and generator boundaries are unchanged; hosted promotion and integration remain pending."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md
