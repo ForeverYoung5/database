@@ -1,8 +1,8 @@
 version: 1
 layout: repo
 lastReviewedAt: "2026-10-11"
-lastReviewedCommit: "26362ba7d4861534a89db2b2c2127f90c1df4680"
-lastReviewedNote: "Database #821: reviewed display-only exchange page hydration, full duplicate detection, cursor/support parity, synthetic upgrade proofs and CI test registration. Branch, API, ACL, legacy/LCIA and generator boundaries are unchanged; hosted promotion and integration remain pending."
+lastReviewedCommit: "00a086e6184e30fb46aea621f11e567836153cf5"
+lastReviewedNote: "Database #824: reviewed sparse-kind exact Flow prefilter, full support and cursor parity, local upgrade proof, CI registration and exact-local exports. Existing ownership, branch, API, ACL, LCIA and hosted qualification boundaries remain unchanged."
 
 # Keep deterministic governance facts here.
 # AGENTS.md remains the repo contract entrypoint.

@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-11
-lastReviewedCommit: 26362ba7d4861534a89db2b2c2127f90c1df4680
-lastReviewedNote: "Database #821: reviewed display-only exchange page hydration, full duplicate detection, cursor/support parity, synthetic upgrade proofs and CI test registration. Branch, API, ACL, legacy/LCIA and generator boundaries are unchanged; hosted promotion and integration remain pending."
+lastReviewedCommit: 00a086e6184e30fb46aea621f11e567836153cf5
+lastReviewedNote: "Database #824: reviewed sparse-kind exact Flow prefilter, full support and cursor parity, local upgrade proof, CI registration and exact-local exports. Existing ownership, branch, API, ACL, LCIA and hosted qualification boundaries remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -1266,3 +1266,23 @@ source, setting, projection, license rule, LCIA publication rule, legacy reader,
 ACL, rollout mode or public API signature changes. PostgreSQL 17 loop termination
 and materialization contracts are documented in [control structures](https://www.postgresql.org/docs/17/plpgsql-control-structures.html)
 and [WITH queries](https://www.postgresql.org/docs/17/queries-with.html).
+
+### Sparse display exchange kinds (Database #824)
+
+Migration `20261011100000` adds a necessary Flow-kind filter to the display reader
+before full support hydration. It deduplicates exact Flow UUID/version references
+from valid normalized exchange IDs at or beyond the cursor, reads their kinds through bounded lateral exact-key lookups under
+the existing display executor RLS, and hydrates only candidates of the requested
+kind. The `all` path performs no additional Flow reads. Safe casts stay inside
+CASE guards; kind extraction uses the same string-only and kind helpers as support.
+
+Whole-array raw-ID duplicate rejection precedes filtering, including duplicates
+of different kinds or behind the cursor. Matching rows still require the unchanged
+full Flow/FlowProperty/UnitGroup and functional-unit checks. Same-ID whitespace
+aliases, exact versions, cross-brand/null dependencies, decimals, cursors, rollout,
+LCIA and legacy contracts retain their existing semantics. This avoids hydrating
+nonmatching dependency chains; it does not bound the number of unsupported matching
+rows. No new index, projection, grant or source rewrite is introduced. PostgreSQL17
+[materialization](https://www.postgresql.org/docs/17/queries-with.html) and
+[conditional expressions](https://www.postgresql.org/docs/17/functions-conditional.html)
+define the relevant evaluation boundaries.

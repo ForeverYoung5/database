@@ -79,20 +79,57 @@ begin
       ), candidates as materialized (
         select item, raw_id, internal_id,
           case when internal_id ~ '^(0|[1-9][0-9]{0,5})$'
-            then internal_id::integer end as internal_number
+            then internal_id::integer end as internal_number,
+          case when v_kind <> 'all'
+              and item #>> '{referenceToFlowDataSet,@type}' = 'flow data set'
+              and lower(btrim(item #>> '{referenceToFlowDataSet,@refObjectId}'))
+                ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+            then lower(btrim(item #>> '{referenceToFlowDataSet,@refObjectId}'))::uuid
+          end as flow_id,
+          btrim(item #>> '{referenceToFlowDataSet,@version}') as flow_version
         from raw_exchanges
         where identity_count = 1
+      ), flow_keys as materialized (
+        -- No extra Flow reads for the unfiltered path. Deduplicate references,
+        -- not exchanges; keep global raw-ID duplicate rejection above the filter.
+        select distinct flow_id, flow_version
+        from candidates
+        where v_kind <> 'all'
+          and internal_number is not null
+          and (v_cursor is null or internal_number >= v_cursor_internal)
+          and flow_id is not null
+          and flow_version ~ '^\d{2}\.\d{2}\.\d{3}$'
+      ), matching_flows as materialized (
+        -- This is only a necessary kind test against the same exact source and
+        -- existing display RLS as the support helper, never numeric admission.
+        select keys.flow_id, keys.flow_version
+        from flow_keys as keys
+        join lateral (
+          -- Preserve exact indexed lookups even when Flow cardinality/stats make
+          -- a broad source scan attractive. The key is unique; LIMIT is a fence.
+          select source.json from public.flows as source
+          where source.id = keys.flow_id and source.version::text = keys.flow_version
+            and jsonb_typeof(source.json) = 'object'
+            and jsonb_typeof(source.json -> 'flowDataSet') = 'object'
+          limit 1
+        ) as flow on true
+        where private.display_flow_kind_v1(private.display_scalar_text_v1(
+            flow.json #> '{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}'
+          )) = case v_kind when 'technosphere' then 'product' else v_kind end
       )
       select internal_number, internal_id, jsonb_agg(item order by raw_id) as items
       from candidates
       where internal_number is not null
         and (v_cursor is null or internal_number >= v_cursor_internal)
+        and (v_kind = 'all' or (flow_id, flow_version) in
+          (select flow_id, flow_version from matching_flows))
       group by internal_number, internal_id
       order by internal_number, internal_id
     loop
       -- Only a same-ID group is materialized. Never hydrate the entire Process
       -- before LIMIT. Unsupported/nonmatching rows must still be skipped until
-      -- a real lookahead is found (a sparse filter can scan the remaining IDs).
+      -- a real lookahead is found. All matching candidates still pass the full
+      -- unchanged support helper, including exact FlowProperty/UnitGroup checks.
       for v_row in
         with supported as materialized (
           select private.display_exchange_support_v1(v_process_state, v_process_json, item) -> 'row' as row_data
