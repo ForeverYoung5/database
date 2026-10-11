@@ -1,0 +1,1 @@
+CREATE INDEX "worker_jobs_ai_deadline_idx" ON "private"."worker_jobs" USING "btree" ("timeout_at", "id") WHERE (("worker_runtime" = 'calculator'::"text") AND ("worker_queue" = 'ai'::"text") AND ("job_kind" = 'ai.tidas_suggestion'::"text") AND ("timeout_at" IS NOT NULL) AND ("status" = ANY (ARRAY['queued'::"text", 'stale'::"text", 'running'::"text"])));

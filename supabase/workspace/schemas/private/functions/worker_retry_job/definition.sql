@@ -4,6 +4,7 @@ CREATE OR REPLACE FUNCTION "private"."worker_retry_job"("p_job_id" "uuid", "p_ru
     AS $$
 declare
   v_job private.worker_jobs%rowtype;
+  v_retry_at timestamptz;
 begin
   if not coalesce(util.is_service_request(), false) then
     return jsonb_build_object(
@@ -38,9 +39,20 @@ begin
     );
   end if;
 
+  -- A retry may have waited for its row lock across the admission deadline.
+  v_retry_at := clock_timestamp();
+  if v_job.job_kind = 'ai.tidas_suggestion'
+    and v_job.timeout_at is not null and v_job.timeout_at <= v_retry_at then
+    return jsonb_build_object(
+      'ok', false, 'code', 'WORKER_JOB_DEADLINE_EXPIRED', 'status', 409,
+      'message', 'Expired AI suggestions require a new request'
+    );
+  end if;
+
   update private.worker_jobs
     set status = 'queued',
-        run_after = coalesce(p_run_after, now()),
+        run_after = coalesce(p_run_after, case when v_job.job_kind = 'ai.tidas_suggestion'
+          then v_retry_at else now() end),
         attempt_count = 0,
         max_attempts = greatest(1, coalesce(p_max_attempts, max_attempts)),
         leased_by = null,
@@ -56,7 +68,8 @@ begin
         cancelled_at = null,
         cancelled_by = null,
         finished_at = null,
-        updated_at = now()
+        updated_at = case when v_job.job_kind = 'ai.tidas_suggestion'
+          then v_retry_at else now() end
   where id = v_job.id
   returning *
     into v_job;
@@ -66,13 +79,15 @@ begin
     event_type,
     status,
     message,
-    details
+    details,
+    created_at
   ) values (
     v_job.id,
     'retried',
     v_job.status,
     p_reason,
-    jsonb_build_object('runAfter', v_job.run_after)
+    jsonb_build_object('runAfter', v_job.run_after),
+    case when v_job.job_kind = 'ai.tidas_suggestion' then v_retry_at else now() end
   );
 
   return jsonb_build_object(
