@@ -33,8 +33,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-11
-lastReviewedCommit: 26362ba7d4861534a89db2b2c2127f90c1df4680
-lastReviewedNote: "Database #821: reviewed display-only exchange page hydration, full duplicate detection, cursor/support parity, synthetic upgrade proofs and CI test registration. Branch, API, ACL, legacy/LCIA and generator boundaries are unchanged; hosted promotion and integration remain pending."
+lastReviewedCommit: 6e7d4741710636a850e8ba304c777ad8bb876fe9
+lastReviewedNote: "Database #824 / PR #826: reviewed bounded synthetic fixture writes and restoration of the eight-second public read budget. Migration, reader, support/cursor semantics, generated schema and hosted boundaries remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -1066,3 +1066,36 @@ non-target functions (including legacy/LCIA), ownership, ACLs and timeout config
 Local initial/repeat timings do not establish cold-cache, concurrency or hosted
 latency. Preserve the eight-second budget; actual production measurements require
 the later Dev/promote/production and workspace-integration gates in #821.
+
+### Sparse display exchange kind regression (Database #824)
+
+Run `20261011_portal_display_exchange_kind_filter.sql` with the existing paging,
+display, Portal and adjacent API/publication/OAuth suites after a blank rebuild.
+The CI local-contract job registers both exchange suites. Synthetic reversed
+2,540/2,556-exchange fixtures reference 2,556 distinct visible cross-brand Flows;
+product/waste matches are sparse among elementary flows. Assert page filling,
+continuation, final and zero-match pages, full-array duplicates across kinds,
+whitespace aliases, malformed references, decimal precision and hidden support.
+Transaction-only instrumentation must prove a supported sparse first page hydrates
+only the functional unit, 20 results and one lookahead, restoring the helper and
+manifest afterward.
+
+Run `python3 supabase/tests/upgrade/test_portal_display_exchange_kind_upgrade.py
+--container supabase_db_portal-exchanges-824 --report <new-private-json>` only on
+the owned empty local project, with `tiangong-lca/database#824` recorded in
+`/private/tmp/lca-portal-824-20261011/OWNER.md`. The harness compares the #821
+predecessor with the new migration: three alternating first/second/final samples
+for every kind and both sizes, zero matches, malformed/duplicate IDs and references,
+invalid cursors, outside-brand roots, hidden dependencies and invalid functional
+units. Complete response text digests must agree. Preserve the public eight-second
+budget, source/settings/projection digests, other routines and owner/ACL/config
+identities through populated upgrade, injected failure rollback and repeat apply.
+Keep timing/plan receipts private and record sanitized summaries on the Issue/PR.
+Local sequential initial/repeat timings have uncontrolled caches and do not prove
+hosted latency or concurrency. CI/Preview, persistent Dev, promote, production
+sparse-kind probes and workspace integration remain separate later gates.
+
+Database #824 fixture construction and bulk Flow-kind changes use a transaction-local
+60-second setup budget because real projection triggers run for every synthetic
+source write. Restore and assert the eight-second statement budget before public
+read probes; fixture setup time must not be reported as exchange-query latency.

@@ -1,8 +1,8 @@
 version: 1
 layout: repo
 lastReviewedAt: "2026-10-11"
-lastReviewedCommit: "26362ba7d4861534a89db2b2c2127f90c1df4680"
-lastReviewedNote: "Database #821: reviewed display-only exchange page hydration, full duplicate detection, cursor/support parity, synthetic upgrade proofs and CI test registration. Branch, API, ACL, legacy/LCIA and generator boundaries are unchanged; hosted promotion and integration remain pending."
+lastReviewedCommit: "6e7d4741710636a850e8ba304c777ad8bb876fe9"
+lastReviewedNote: "Database #824 / PR #826: reviewed bounded synthetic fixture writes and restoration of the eight-second public read budget. Migration, reader, support/cursor semantics, generated schema and hosted boundaries remain unchanged."
 
 # Keep deterministic governance facts here.
 # AGENTS.md remains the repo contract entrypoint.

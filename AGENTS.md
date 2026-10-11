@@ -38,8 +38,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-11
-lastReviewedCommit: 26362ba7d4861534a89db2b2c2127f90c1df4680
-lastReviewedNote: "Database #821: reviewed display-only exchange page hydration, full duplicate detection, cursor/support parity, synthetic upgrade proofs and CI test registration. Branch, API, ACL, legacy/LCIA and generator boundaries are unchanged; hosted promotion and integration remain pending."
+lastReviewedCommit: 6e7d4741710636a850e8ba304c777ad8bb876fe9
+lastReviewedNote: "Database #824: reviewed sparse-kind exact Flow prefilter, full support and cursor parity, local upgrade proof, CI registration and exact-local exports. Existing ownership, branch, API, ACL, LCIA and hosted qualification boundaries remain unchanged."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md
