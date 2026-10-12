@@ -33,8 +33,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-12
-lastReviewedCommit: 294e6cbe38dbb1f26c901d74b67d9c47ebfcc7dd
-lastReviewedNote: "Reviewed Database #834 / Worker #318 internal scanner R5 admission and warm-history test contract. New requests avoid old R4 metadata while historical fingerprints, artifacts, public DTOs, scientific rules and leases remain unchanged. Worker-before-config adoption and real reset/populated-upgrade/native-consumer validation remain required; source review is not SQL execution."
+lastReviewedCommit: e95456e8ddac9ee99639bd810ecbaecea5df9fe3
+lastReviewedNote: "Reviewed Database #834 isolated CI Scope Closure suites and bounded canonical-base R4-to-R5 SQL upgrade helper. Hosted credentials, persistent Dev deployment, Preview verification, schema ownership and generated-workspace boundaries are unchanged; original R1 browser acceptance remains separate."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
