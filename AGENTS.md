@@ -37,9 +37,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-10-11
-lastReviewedCommit: c55ae785b5700e0b2ebc1e27a2400d6333f2452f
-lastReviewedNote: "Database #829: reviewed statement-local scope evaluation, scope-isolation tests, synthetic performance and exact-local snapshots; retained #828 enqueue-relative suggestion lifetimes and claim caps. Existing ownership, API, ACL/security barrier, budgets, branches and hosted qualification remain unchanged."
+lastReviewedAt: 2026-10-12
+lastReviewedCommit: 294e6cbe38dbb1f26c901d74b67d9c47ebfcc7dd
+lastReviewedNote: "Reviewed Database #834 / Worker #318 internal scanner R5 admission and warm-history test contract. New requests avoid old R4 metadata while historical fingerprints, artifacts, public DTOs, scientific rules and leases remain unchanged. Worker-before-config adoption and real reset/populated-upgrade/native-consumer validation remain required; source review is not SQL execution."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md
