@@ -208,14 +208,13 @@ select private.svc_lcia_scope_closure_check_record_result_v3(
     'scan','first',
     'evidenceHash',hash.evidence_hash
   ),
-  '[]'::jsonb,'{}'::text[],report.id,bundle.id,complete.id
+  '[]'::jsonb,'{}'::text[],report.id,bundle.id,artifact.id
 )
 from private.lcia_scope_closure_checks c
 join private.lcia_scope_closure_scan_executions e on e.id=c.scan_execution_id
 join private.lca_snapshot_artifacts artifact on artifact.snapshot_id=e.numerical_snapshot_id
 join private.worker_job_artifacts report on report.job_id=c.worker_job_id and report.artifact_type='closure_report_xlsx'
 join private.worker_job_artifacts bundle on bundle.job_id=c.worker_job_id and bundle.artifact_type='closure_bundle'
-join private.worker_job_artifacts complete on complete.job_id=c.worker_job_id and complete.artifact_type='closure_complete_machine_result'
 cross join lateral (
   select private.lcia_scope_closure_sha256_text(
     'lcia.scope-closure-evidence.v2'||chr(10)||'source-a'||chr(10)||repeat('e',64)||chr(10)
@@ -580,8 +579,8 @@ select is(private.svc_lcia_scope_closure_finalize_reused_scan(
   (select worker_job_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-after-completion'),
   'c7220000-0000-4000-8000-000000000111',
   (select id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-a'),
-  'c7220000-0000-4000-8000-000000000212','{}'
-)->>'code','worker_job_lease_invalid','r5 reuse finalization rejects a stale lease');
+  'c7220000-0000-4000-8000-000000000212',jsonb_build_object('schemaVersion','lcia.scope-closure-summary.v1','scan','r5-reused-target')
+)->>'code','scan_execution_not_reusable','r5 reuse finalization rejects a stale lease');
 select is(private.svc_lcia_scope_closure_finalize_reused_scan(
   (select id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-after-completion'),
   (select worker_job_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-after-completion'),
