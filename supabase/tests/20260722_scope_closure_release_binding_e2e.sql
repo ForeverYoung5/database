@@ -574,6 +574,16 @@ select is(private.svc_lcia_scope_closure_reuse_completed_scan(
   'c7220000-0000-4000-8000-000000000110',
   (select id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-a')
 )#>>'{data,reuseAvailable}','true','completed r5 evidence is normally reusable by the new r5 token');
+create temporary view closure_e2e_r5_finalization_target as
+select 'check'::text as kind, to_jsonb(c) as content
+from private.lcia_scope_closure_checks c
+where c.request_idempotency_token='closure-e2e-r5-after-completion'
+union all
+select 'job', to_jsonb(j) from private.worker_jobs j
+where j.id=(select worker_job_id from private.lcia_scope_closure_checks
+            where request_idempotency_token='closure-e2e-r5-after-completion');
+create temporary table closure_e2e_r5_before_stale_finalize as
+select * from closure_e2e_r5_finalization_target;
 select is(private.svc_lcia_scope_closure_finalize_reused_scan(
   (select id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-after-completion'),
   (select worker_job_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-after-completion'),
@@ -581,6 +591,13 @@ select is(private.svc_lcia_scope_closure_finalize_reused_scan(
   (select id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-a'),
   'c7220000-0000-4000-8000-000000000212',jsonb_build_object('schemaVersion','lcia.scope-closure-summary.v1','scan','r5-reused-target')
 )->>'code','scan_execution_not_reusable','r5 reuse finalization rejects a stale lease');
+select is((
+  select count(*) from (
+    (select * from closure_e2e_r5_finalization_target except select * from closure_e2e_r5_before_stale_finalize)
+    union all
+    (select * from closure_e2e_r5_before_stale_finalize except select * from closure_e2e_r5_finalization_target)
+  ) changes
+),0::bigint,'rejected stale finalization preserves the target check and worker job');
 select is(private.svc_lcia_scope_closure_finalize_reused_scan(
   (select id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-after-completion'),
   (select worker_job_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-after-completion'),
