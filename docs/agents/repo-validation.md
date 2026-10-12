@@ -102,7 +102,17 @@ base; a clean reset alone does not establish upgrade preservation. Database
 pgTAP covers admission and durable binding, not Worker metadata production or
 Chrome preview/download acceptance; those require the matching r5-capable
 Worker and original consumer warm-history test. Record unexecuted gates
-explicitly when no task-owned PostgreSQL environment is available.
+explicitly when no task-owned PostgreSQL environment is available. The existing
+`local-contract` CI job now runs the four directly related Scope Closure suites
+listed below and `scripts/test_scope_closure_scanner_upgrade.sh`. The helper
+resets only its explicitly admitted isolated local project to canonical commit
+`03939b8880f983d494406f0e10b213081b9f900a` / migration `20261011151720`,
+uses the shared populated R4 fixture, and executes the actual R5 migration SQL
+twice inside its rollback transaction. It verifies R5 admission, preservation of
+other config fields and the existing history/lease/reuse assertions before
+restoring current HEAD with local migrations. Future migrations do not enter
+the bounded R4-to-R5 assertions. This database-contract evidence does not
+qualify original R1 inputs, a hosted Preview branch, or browser acceptance.
 
 | Change type | Minimum local proof | Stronger proof when risk is higher | Notes |
 | --- | --- | --- | --- |

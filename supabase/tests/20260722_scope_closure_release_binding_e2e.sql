@@ -4,12 +4,19 @@ create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, auth;
 select no_plan();
 
+-- The upgrade helper supplies the canonical base revision before replaying the
+-- actual migration. Ordinary head validation requires the current revision.
+\if :{?scope_closure_initial_scanner}
+\else
+\set scope_closure_initial_scanner 'scope-closure-validator-scanner.v1+cutoff-readiness-r5'
+\endif
+
 select is(
   (select expected_validator_scanner_fingerprint
    from private.lcia_scope_closure_config
    where singleton),
-  'scope-closure-validator-scanner.v1+cutoff-readiness-r5',
-  'new closure requests use the canonical LCIA metadata scanner cache revision'
+  :'scope_closure_initial_scanner',
+  'closure admission starts at the expected checked migration revision'
 );
 
 -- Recreate native pre-upgrade r4 history inside this rollback-only test. Run A
@@ -423,10 +430,12 @@ select ok((
   where c.request_idempotency_token='closure-e2e-a'
 ),'warm fixture contains a native completed passed r4 scan before r5 admission');
 
+-- SCANNER_R5_MIGRATION_BEGIN
 update private.lcia_scope_closure_config
 set expected_validator_scanner_fingerprint='scope-closure-validator-scanner.v1+cutoff-readiness-r5',
     updated_at=now()
 where singleton;
+-- SCANNER_R5_MIGRATION_END
 select set_config('request.jwt.claim.role','authenticated',true);
 create temporary table closure_e2e_r5_responses(label text, result jsonb);
 insert into closure_e2e_r5_responses

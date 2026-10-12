@@ -224,6 +224,15 @@ python3 scripts/check_auth_email_templates.py
 python3 scripts/test_check_auth_email_templates.py
 ```
 
+### `test_scope_closure_scanner_upgrade.sh`
+
+仅在独占、可丢弃的本地 Supabase 项目运行
+`SCOPE_CLOSURE_UPGRADE_ALLOW_RESET=isolated scripts/test_scope_closure_scanner_upgrade.sh`。
+脚本重置到固定 canonical R4 schema，复用 Scope Closure pgTAP 历史 fixture，在回滚事务内
+执行两次真实 R5 singleton 迁移并验证记录保持，断言后才恢复当前迁移。CI 复用现有
+local-contract job，不使用 hosted 凭据；这不验证原 R1 浏览器输入。
+所需证据和关联套件见 `docs/agents/repo-validation.md`。
+
 ### `test_full_schema_cutover_upgrade.sh`
 
 把本地数据库重建到全量 Schema 切换前的最后一个 migration，写入一条代表性业务数据，

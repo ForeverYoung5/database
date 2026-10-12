@@ -57,6 +57,16 @@ jobs:
           git diff --exit-code -- supabase/workspace
           test -z "$(git status --porcelain --untracked-files=all -- supabase/workspace)"
 
+      - name: Verify Scope Closure scanner admission and populated upgrade
+        env:
+          SCOPE_CLOSURE_UPGRADE_ALLOW_RESET: isolated
+        run: |
+          scripts/test_scope_closure_scanner_upgrade.sh
+          supabase test db supabase/tests/20260801_scope_closure_cutoff_main_hotfix.sql
+          supabase test db supabase/tests/20260724_initial_candidate_scope_closure_e2e.sql
+          supabase test db supabase/tests/20260722_scope_closure_release_binding_e2e.sql
+          supabase test db supabase/tests/20260722_data_product_scope_closure_and_task_feed.sql
+
       - name: Verify schema and capability contracts
         run: |
           supabase test db supabase/tests/20261006_search_request_identity.sql
