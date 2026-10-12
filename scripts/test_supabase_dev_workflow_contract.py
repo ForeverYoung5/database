@@ -122,6 +122,13 @@ def main() -> int:
     if "SCOPE_CLOSURE_UPGRADE_ALLOW_RESET: isolated" not in local_workflow:
         failures.append("scanner upgrade must use the explicitly isolated local runner")
     upgrade_script = (REPO_ROOT / "scripts/test_scope_closure_scanner_upgrade.sh").read_text()
+    for isolation_token in (
+        '${GITHUB_ACTIONS:-}', '${RUNNER_ENVIRONMENT:-}', 'github-hosted',
+        '${GITHUB_WORKSPACE:-}', '${DOCKER_HOST:-}', '${DOCKER_CONTEXT:-}',
+        'docker context inspect', 'unix://*',
+    ):
+        if isolation_token not in upgrade_script:
+            failures.append(f"scanner upgrade isolation check missing {isolation_token}")
     upgrade_order = (
         upgrade_script.find("supabase db reset --local --version 20261011151720 --no-seed"),
         upgrade_script.find('supabase test db "$fixture"'),

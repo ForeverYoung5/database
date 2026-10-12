@@ -267,8 +267,10 @@ python3 scripts/test_check_auth_email_templates.py
 
 ### `test_scope_closure_scanner_upgrade.sh`
 
-Run `SCOPE_CLOSURE_UPGRADE_ALLOW_RESET=isolated scripts/test_scope_closure_scanner_upgrade.sh`
-only against an owned disposable local Supabase project. It resets to the frozen
+The existing CI local-contract job invokes this helper with
+`SCOPE_CLOSURE_UPGRADE_ALLOW_RESET=isolated`. It also requires a matching GitHub-hosted
+workspace and a local Unix Docker context; normal local checkouts, self-hosted runners
+and overridden Docker targets are rejected before reset. It resets to the frozen
 canonical R4 schema, reuses the Scope Closure pgTAP history fixture, applies the
 actual R5 singleton migration twice inside a rollback transaction, and restores
 current migrations after the assertions. CI runs it in the existing local-contract

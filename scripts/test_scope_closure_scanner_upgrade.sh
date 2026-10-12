@@ -6,11 +6,24 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 if [[ "${1:-}" == "--help" ]]; then
-  echo "Run only against an isolated local Supabase project. Set SCOPE_CLOSURE_UPGRADE_ALLOW_RESET=isolated."
+  echo "CI-only: requires the matching GitHub-hosted workspace, local Docker and SCOPE_CLOSURE_UPGRADE_ALLOW_RESET=isolated."
   exit 0
 fi
 if [[ "${SCOPE_CLOSURE_UPGRADE_ALLOW_RESET:-}" != "isolated" ]]; then
   echo "Refusing local reset without SCOPE_CLOSURE_UPGRADE_ALLOW_RESET=isolated." >&2
+  exit 2
+fi
+if [[ "${GITHUB_ACTIONS:-}" != "true" || "${RUNNER_ENVIRONMENT:-}" != "github-hosted" || "${GITHUB_WORKSPACE:-}" != "$repo_root" ]]; then
+  echo "Refusing reset outside the matching GitHub-hosted ephemeral workspace." >&2
+  exit 2
+fi
+if [[ -n "${DOCKER_HOST:-}" || -n "${DOCKER_CONTEXT:-}" ]]; then
+  echo "Refusing overridden Docker target." >&2
+  exit 2
+fi
+docker_endpoint="$(docker context inspect --format '{{.Endpoints.docker.Host}}')"
+if [[ "$docker_endpoint" != unix://* ]]; then
+  echo "Refusing non-local Docker context." >&2
   exit 2
 fi
 

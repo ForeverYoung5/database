@@ -105,7 +105,8 @@ Worker and original consumer warm-history test. Record unexecuted gates
 explicitly when no task-owned PostgreSQL environment is available. The existing
 `local-contract` CI job now runs the four directly related Scope Closure suites
 listed below and `scripts/test_scope_closure_scanner_upgrade.sh`. The helper
-resets only its explicitly admitted isolated local project to canonical commit
+requires the matching GitHub-hosted workspace and local Unix Docker context, then
+resets its explicitly admitted isolated local project to canonical commit
 `03939b8880f983d494406f0e10b213081b9f900a` / migration `20261011151720`,
 uses the shared populated R4 fixture, and executes the actual R5 migration SQL
 twice inside its rollback transaction. It verifies R5 admission, preservation of
