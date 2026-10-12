@@ -8,9 +8,17 @@ select is(
   (select expected_validator_scanner_fingerprint
    from private.lcia_scope_closure_config
    where singleton),
-  'scope-closure-validator-scanner.v1+cutoff-readiness-r4',
-  'new closure requests use the medium-singular-warning scanner cache revision'
+  'scope-closure-validator-scanner.v1+cutoff-readiness-r5',
+  'new closure requests use the canonical LCIA metadata scanner cache revision'
 );
+
+-- Recreate native pre-upgrade r4 history inside this rollback-only test. Run A
+-- below completes through the normal lease-fenced result RPC, and run B reuses
+-- its immutable snapshot/bundle through the normal reuse/finalize RPCs.
+update private.lcia_scope_closure_config
+set expected_validator_scanner_fingerprint='scope-closure-validator-scanner.v1+cutoff-readiness-r4',
+    updated_at=now()
+where singleton;
 
 -- A minimal immutable current release.  The closure request must use this
 -- manifest, rather than any live state-code rows, as its identity universe.
@@ -169,49 +177,55 @@ select is(private.svc_lcia_scope_closure_check_record_result_v2(
   '{}'::jsonb,'[]'::jsonb,'{}'::text[],'c7220000-0000-4000-8000-000000000201'
 )->>'code','closure_snapshot_evidence_v3_required','JSON-only fake snapshot evidence cannot sign a passed certificate');
 create or replace function pg_temp.closure_e2e_record_result_v3(
-  p_source_fingerprint text default 'source-a'
+  p_source_fingerprint text default 'source-a',
+  p_request_token text default 'closure-e2e-a',
+  p_lease_token uuid default 'c7220000-0000-4000-8000-000000000101'
 )
 returns jsonb
 language sql
 as $test$
 select private.svc_lcia_scope_closure_check_record_result_v3(
-  (select id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-a'),
-  (select worker_job_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-a'),
-  'c7220000-0000-4000-8000-000000000101','passed','complete',
-  (select requested_scope_manifest from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-a'),
+  c.id, c.worker_job_id, p_lease_token, 'passed', 'complete',
+  c.requested_scope_manifest,
   jsonb_build_object(
     'schemaVersion','lcia.scope-closure-evidence.v2',
     'sourceFingerprint',p_source_fingerprint,'resolutionMapHash',repeat('e',64),
-    'closureBundleArtifactId','c7220000-0000-4000-8000-000000000203',
-    'closureBundleHash',repeat('b',64),
-    'snapshotId',(select numerical_snapshot_id from private.lcia_scope_closure_scan_executions limit 1),
-    'snapshotHash',repeat('c',64),
-    'snapshotArtifactId','c7220000-0000-4000-8000-000000000204',
-    'snapshotIndexSha256',repeat('d',64),
-    'snapshotBuildContractHash',(select snapshot_build_contract_hash from private.lca_snapshot_artifacts where id='c7220000-0000-4000-8000-000000000204'),
-    'reportArtifactManifestHash',private.lcia_scope_closure_sha256(jsonb_build_object('artifactId','c7220000-0000-4000-8000-000000000201'::uuid,'bucket','test','objectPath','reports/a.xlsx','mediaType','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','byteSize',10,'checksumSha256',repeat('a',64))),
-    'evidenceHash',private.lcia_scope_closure_sha256_text(
-      'lcia.scope-closure-evidence.v2'||chr(10)||'source-a'||chr(10)||repeat('e',64)||chr(10)
-      ||repeat('b',64)||chr(10)||'c7220000-0000-4000-8000-000000000203'||chr(10)
-      ||(select numerical_snapshot_id::text from private.lcia_scope_closure_scan_executions limit 1)||chr(10)
-      ||repeat('c',64)||chr(10)||'c7220000-0000-4000-8000-000000000204'||chr(10)||repeat('d',64)||chr(10)
-      ||(select snapshot_build_contract_hash from private.lca_snapshot_artifacts where id='c7220000-0000-4000-8000-000000000204')
-    )
+    'closureBundleArtifactId',bundle.id,
+    'closureBundleHash',bundle.checksum_sha256,
+    'snapshotId',e.numerical_snapshot_id,
+    'snapshotHash',artifact.artifact_sha256,
+    'snapshotArtifactId',artifact.id,
+    'snapshotIndexSha256',artifact.snapshot_index_sha256,
+    'snapshotBuildContractHash',artifact.snapshot_build_contract_hash,
+    'reportArtifactManifestHash',private.lcia_scope_closure_sha256(jsonb_build_object(
+      'artifactId',report.id,'bucket',report.storage_bucket,'objectPath',report.storage_path,
+      'mediaType',report.content_type,'byteSize',report.byte_size,'checksumSha256',report.checksum_sha256
+    )),
+    'evidenceHash',hash.evidence_hash
   ),
   jsonb_build_object(
     'schemaVersion','lcia.scope-closure-summary.v1',
     'scan','first',
-    'evidenceHash',private.lcia_scope_closure_sha256_text(
-      'lcia.scope-closure-evidence.v2'||chr(10)||'source-a'||chr(10)||repeat('e',64)||chr(10)
-      ||repeat('b',64)||chr(10)||'c7220000-0000-4000-8000-000000000203'||chr(10)
-      ||(select numerical_snapshot_id::text from private.lcia_scope_closure_scan_executions limit 1)||chr(10)
-      ||repeat('c',64)||chr(10)||'c7220000-0000-4000-8000-000000000204'||chr(10)||repeat('d',64)||chr(10)
-      ||(select snapshot_build_contract_hash from private.lca_snapshot_artifacts where id='c7220000-0000-4000-8000-000000000204')
-    )
+    'evidenceHash',hash.evidence_hash
   ),
-  '[]'::jsonb,'{}'::text[],'c7220000-0000-4000-8000-000000000201',
-  'c7220000-0000-4000-8000-000000000203','c7220000-0000-4000-8000-000000000204'
-);
+  '[]'::jsonb,'{}'::text[],report.id,bundle.id,complete.id
+)
+from private.lcia_scope_closure_checks c
+join private.lcia_scope_closure_scan_executions e on e.id=c.scan_execution_id
+join private.lca_snapshot_artifacts artifact on artifact.snapshot_id=e.numerical_snapshot_id
+join private.worker_job_artifacts report on report.job_id=c.worker_job_id and report.artifact_type='closure_report_xlsx'
+join private.worker_job_artifacts bundle on bundle.job_id=c.worker_job_id and bundle.artifact_type='closure_bundle'
+join private.worker_job_artifacts complete on complete.job_id=c.worker_job_id and complete.artifact_type='closure_complete_machine_result'
+cross join lateral (
+  select private.lcia_scope_closure_sha256_text(
+    'lcia.scope-closure-evidence.v2'||chr(10)||'source-a'||chr(10)||repeat('e',64)||chr(10)
+    ||bundle.checksum_sha256||chr(10)||bundle.id::text||chr(10)
+    ||e.numerical_snapshot_id::text||chr(10)||artifact.artifact_sha256||chr(10)
+    ||artifact.id::text||chr(10)||artifact.snapshot_index_sha256||chr(10)
+    ||artifact.snapshot_build_contract_hash
+  ) as evidence_hash
+) hash
+where c.request_idempotency_token=p_request_token;
 $test$;
 update private.lca_network_snapshots
 set provider_matching_rule='split_equal'
@@ -364,8 +378,250 @@ select ok((
     and new_scan.request_idempotency_token='closure-e2e-new-scanner'
 ),'scanner revision change produces a fresh request fingerprint and scan execution');
 
+-- Worker #318 warm adoption: completed passed r4 evidence already exists for
+-- the same scope/policy/frozen input. Preserve whole rows, including timestamps,
+-- locators and source hashes, while the existing command admits fresh r5 work.
+update private.worker_jobs
+set status='running', lease_token='c7220000-0000-4000-8000-000000000108',
+    lease_expires_at=now()+interval '10 minutes', started_at=now()
+where id=(select worker_job_id from private.lcia_scope_closure_checks
+          where request_idempotency_token='closure-e2e-new-scanner');
+create temporary view closure_e2e_r4_objects as
+select 'check'::text as kind, c.id::text as identity, to_jsonb(c) as content
+from private.lcia_scope_closure_checks c
+where c.request_idempotency_token in ('closure-e2e-a','closure-e2e-b','closure-e2e-new-scanner')
+union all
+select 'job', j.id::text, to_jsonb(j) from private.worker_jobs j
+where j.id in (select worker_job_id from private.lcia_scope_closure_checks
+               where request_idempotency_token in ('closure-e2e-a','closure-e2e-b','closure-e2e-new-scanner'))
+union all
+select 'scan', e.id::text, to_jsonb(e) from private.lcia_scope_closure_scan_executions e
+where e.id=(select scan_execution_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-a')
+union all
+select 'snapshot', s.id::text, to_jsonb(s) from private.lca_network_snapshots s
+where s.id=(select snapshot_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-a')
+union all
+select 'snapshot-artifact', a.id::text, to_jsonb(a) from private.lca_snapshot_artifacts a
+where a.snapshot_id=(select snapshot_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-a')
+union all
+select 'artifact', a.id::text, to_jsonb(a) from private.worker_job_artifacts a
+where a.job_id in (select worker_job_id from private.lcia_scope_closure_checks
+                  where request_idempotency_token in ('closure-e2e-a','closure-e2e-b'))
+union all
+select 'data-snapshot', s.data_snapshot_token, to_jsonb(s) from private.lcia_scope_closure_data_snapshots s
+where s.data_snapshot_token=(select data_snapshot_token from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-a')
+union all
+select 'release-source', d.dataset_type||':'||d.dataset_uuid::text||'@'||d.dataset_version, to_jsonb(d)
+from private.lca_release_dataset_versions d
+where d.release_run_id='c7220000-0000-4000-8000-000000000010';
+create temporary table closure_e2e_r4_before as select * from closure_e2e_r4_objects;
+select ok((
+  select c.status='passed' and c.scan_completeness='complete'
+     and c.expected_validator_scanner_fingerprint='scope-closure-validator-scanner.v1+cutoff-readiness-r4'
+     and e.status='completed' and e.completed_check_id=c.id
+  from private.lcia_scope_closure_checks c
+  join private.lcia_scope_closure_scan_executions e on e.id=c.scan_execution_id
+  where c.request_idempotency_token='closure-e2e-a'
+),'warm fixture contains a native completed passed r4 scan before r5 admission');
+
+update private.lcia_scope_closure_config
+set expected_validator_scanner_fingerprint='scope-closure-validator-scanner.v1+cutoff-readiness-r5',
+    updated_at=now()
+where singleton;
+select set_config('request.jwt.claim.role','authenticated',true);
+create temporary table closure_e2e_r5_responses(label text, result jsonb);
+insert into closure_e2e_r5_responses
+select label, api.cmd_lcia_scope_closure_check_request_v2(
+  '{"coverageMode":"subset","processes":[{"id":"c7220000-0000-4000-8000-000000000020","version":"01.00.000"}],"lciaMethods":[{"id":"c7220000-0000-4000-8000-000000000021","version":"01.00.000"}]}'::jsonb,
+  token, '{}'
+) from (values ('first','closure-e2e-r5-a'),('second','closure-e2e-r5-b')) requests(label,token);
+insert into closure_e2e_r5_responses values ('retry',api.cmd_lcia_scope_closure_check_request_v2(
+  '{"coverageMode":"subset","processes":[{"id":"c7220000-0000-4000-8000-000000000020","version":"01.00.000"}],"lciaMethods":[{"id":"c7220000-0000-4000-8000-000000000021","version":"01.00.000"}]}'::jsonb,
+  'closure-e2e-r5-a', '{}'
+));
+select is((select count(*) from closure_e2e_r5_responses where result->>'ok'='true'),3::bigint,
+          'normal command accepts new r5 requests and their exact retry');
+select is((select result#>>'{data,closureCheckId}' from closure_e2e_r5_responses where label='retry'),
+          (select result#>>'{data,closureCheckId}' from closure_e2e_r5_responses where label='first'),
+          'same r5 request token remains idempotent');
+select ok((
+  select old.requested_scope_hash=fresh.requested_scope_hash
+     and old.policy_fingerprint=fresh.policy_fingerprint
+     and old.data_snapshot_token=fresh.data_snapshot_token
+     and old.request_fingerprint<>fresh.request_fingerprint
+     and old.scan_execution_id<>fresh.scan_execution_id
+     and old.snapshot_id<>e.numerical_snapshot_id
+     and fresh.expected_validator_scanner_fingerprint='scope-closure-validator-scanner.v1+cutoff-readiness-r5'
+  from private.lcia_scope_closure_checks old
+  join private.lcia_scope_closure_checks fresh on true
+  join private.lcia_scope_closure_scan_executions e on e.id=fresh.scan_execution_id
+  where old.request_idempotency_token='closure-e2e-a'
+    and fresh.request_idempotency_token='closure-e2e-r5-a'
+),'same frozen input under r5 gets a new fingerprint, scan and preallocated snapshot rather than passed r4 evidence');
+select ok((
+  select a.id<>b.id and a.request_fingerprint=b.request_fingerprint
+     and a.scan_execution_id=b.scan_execution_id
+  from private.lcia_scope_closure_checks a
+  join private.lcia_scope_closure_checks b on true
+  where a.request_idempotency_token='closure-e2e-r5-a'
+    and b.request_idempotency_token='closure-e2e-r5-b'
+),'distinct r5 request tokens still share one scan execution');
+
+select set_config('request.jwt.claim.role','service_role',true);
+select is(private.svc_lcia_scope_closure_check_get_worker_input(
+  (select id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-new-scanner')
+)#>>'{data,expectedValidatorScannerFingerprint}',
+  'scope-closure-validator-scanner.v1+cutoff-readiness-r4',
+  'old in-flight worker input retains its frozen r4 revision after r5 admission');
+select is(private.svc_lcia_scope_closure_claim_scan_execution(
+  (select scan_execution_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-new-scanner'),
+  (select worker_job_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-new-scanner'),
+  'c7220000-0000-4000-8000-000000000108'
+)#>>'{data,completedCheckId}',
+  (select id::text from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-a'),
+  'old in-flight r4 work still finds its compatible completed r4 scan');
+update private.worker_jobs
+set status='running', lease_token='c7220000-0000-4000-8000-000000000109',
+    lease_expires_at=now()+interval '10 minutes', started_at=now()
+where id=(select worker_job_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-a');
+select is(private.svc_lcia_scope_closure_reuse_completed_scan(
+  (select id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-a'),
+  (select worker_job_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-a'),
+  'c7220000-0000-4000-8000-000000000109',
+  (select id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-a')
+)->>'code','scan_execution_not_reusable','r5 work cannot reuse the completed passed r4 scan');
+select is(private.svc_lcia_scope_closure_claim_scan_execution(
+  (select scan_execution_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-a'),
+  (select worker_job_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-a'),
+  'c7220000-0000-4000-8000-000000000109'
+)#>>'{data,acquired}','true','normal Worker claim acquires fresh r5 work');
+
+-- Complete the r5 scan through the same native result RPC as r4, with its own
+-- ready snapshot and artifact identities. No terminal scan/check row is cloned.
+insert into private.worker_job_artifacts(id,job_id,artifact_type,storage_bucket,storage_path,content_type,byte_size,checksum_sha256,metadata)
+select fixtures.id,c.worker_job_id,fixtures.artifact_type,'test',fixtures.path,fixtures.content_type,
+       fixtures.byte_size,fixtures.sha256,
+       jsonb_build_object('closureCheckId',c.id)
+       ||case when fixtures.artifact_type='closure_bundle'
+              then jsonb_build_object('completeMachineResultArtifactId','c7220000-0000-4000-8000-000000000211')
+              else '{}'::jsonb end
+from private.lcia_scope_closure_checks c
+cross join (values
+  ('c7220000-0000-4000-8000-000000000208'::uuid,'closure_report_xlsx','reports/r5-a.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',10,repeat('1',64)),
+  ('c7220000-0000-4000-8000-000000000210'::uuid,'closure_bundle','bundles/r5-a.json','application/json',20,repeat('2',64)),
+  ('c7220000-0000-4000-8000-000000000211'::uuid,'closure_complete_machine_result','results/r5-a.json','application/vnd.tiangong.scope-closure-manifest+json',30,repeat('5',64))
+) fixtures(id,artifact_type,path,content_type,byte_size,sha256)
+where c.request_idempotency_token='closure-e2e-r5-a';
+update private.lca_network_snapshots set status='ready',source_hash='builder-source-r5'
+where id=(select numerical_snapshot_id from private.lcia_scope_closure_scan_executions
+          where id=(select scan_execution_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-a'));
+insert into private.lca_snapshot_artifacts(
+  id,snapshot_id,artifact_url,artifact_sha256,artifact_byte_size,artifact_format,
+  process_count,flow_count,impact_count,a_nnz,b_nnz,c_nnz,status,
+  snapshot_index_sha256,snapshot_build_contract_hash,effective_scope_hash,
+  data_snapshot_token,closure_bundle_hash
+)
+select 'c7220000-0000-4000-8000-000000000209',e.numerical_snapshot_id,
+  's3://test/snapshots/r5-a.h5',repeat('3',64),100,'snapshot-hdf5:v1',
+  1,1,1,1,1,1,'ready',repeat('4',64),
+  private.lcia_scope_closure_sha256_text(
+    'lcia.numerical-snapshot-build-contract.v1'||chr(10)
+    ||private.lcia_scope_closure_sha256(c.requested_scope_manifest)||chr(10)
+    ||c.data_snapshot_token||chr(10)||repeat('2',64)||chr(10)
+    ||e.numerical_snapshot_id::text||chr(10)||'snapshot-hdf5:v1'
+  ),private.lcia_scope_closure_sha256(c.requested_scope_manifest),c.data_snapshot_token,repeat('2',64)
+from private.lcia_scope_closure_checks c
+join private.lcia_scope_closure_scan_executions e on e.id=c.scan_execution_id
+where c.request_idempotency_token='closure-e2e-r5-a';
+select is(pg_temp.closure_e2e_record_result_v3(
+  p_request_token=>'closure-e2e-r5-a',p_lease_token=>'c7220000-0000-4000-8000-000000000110'
+)->>'code','worker_job_lease_invalid','r5 completion rejects a stale lease');
+select is(pg_temp.closure_e2e_record_result_v3(
+  p_request_token=>'closure-e2e-r5-a',p_lease_token=>'c7220000-0000-4000-8000-000000000109'
+)->>'ok','true','r5 scan completes with its own lease-fenced passed certificate and artifacts');
+select ok((
+  select c.status='passed' and c.certificate_status='valid' and c.scan_completeness='complete'
+     and e.status='completed' and e.completed_check_id=c.id
+     and c.snapshot_artifact_id='c7220000-0000-4000-8000-000000000209'::uuid
+  from private.lcia_scope_closure_checks c
+  join private.lcia_scope_closure_scan_executions e on e.id=c.scan_execution_id
+  where c.request_idempotency_token='closure-e2e-r5-a'
+),'native r5 completion records complete reusable numerical evidence');
+
+select set_config('request.jwt.claim.role','authenticated',true);
+select is(api.cmd_lcia_scope_closure_check_request_v2(
+  '{"coverageMode":"subset","processes":[{"id":"c7220000-0000-4000-8000-000000000020","version":"01.00.000"}],"lciaMethods":[{"id":"c7220000-0000-4000-8000-000000000021","version":"01.00.000"}]}'::jsonb,
+  'closure-e2e-r5-after-completion','{}'
+)->>'ok','true','new r5 token after completion is accepted through the normal command');
+update private.worker_jobs
+set status='running',lease_token='c7220000-0000-4000-8000-000000000110',
+    lease_expires_at=now()+interval '10 minutes',started_at=now()
+where id=(select worker_job_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-after-completion');
+insert into private.worker_job_artifacts(id,job_id,artifact_type,storage_bucket,storage_path,content_type,byte_size,checksum_sha256)
+select 'c7220000-0000-4000-8000-000000000212',worker_job_id,'closure_report_xlsx','test',
+       'reports/r5-reused.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',11,repeat('6',64)
+from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-after-completion';
+select set_config('request.jwt.claim.role','service_role',true);
+select is(private.svc_lcia_scope_closure_claim_scan_execution(
+  (select scan_execution_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-after-completion'),
+  (select worker_job_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-after-completion'),
+  'c7220000-0000-4000-8000-000000000110'
+)#>>'{data,completedCheckId}',
+  (select id::text from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-a'),
+  'new r5 token finds the correct completed r5 scan');
+select is(private.svc_lcia_scope_closure_reuse_completed_scan(
+  (select id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-after-completion'),
+  (select worker_job_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-after-completion'),
+  'c7220000-0000-4000-8000-000000000110',
+  (select id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-a')
+)#>>'{data,reuseAvailable}','true','completed r5 evidence is normally reusable by the new r5 token');
+select is(private.svc_lcia_scope_closure_finalize_reused_scan(
+  (select id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-after-completion'),
+  (select worker_job_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-after-completion'),
+  'c7220000-0000-4000-8000-000000000111',
+  (select id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-a'),
+  'c7220000-0000-4000-8000-000000000212','{}'
+)->>'code','worker_job_lease_invalid','r5 reuse finalization rejects a stale lease');
+select is(private.svc_lcia_scope_closure_finalize_reused_scan(
+  (select id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-after-completion'),
+  (select worker_job_id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-after-completion'),
+  'c7220000-0000-4000-8000-000000000110',
+  (select id from private.lcia_scope_closure_checks where request_idempotency_token='closure-e2e-r5-a'),
+  'c7220000-0000-4000-8000-000000000212',jsonb_build_object('schemaVersion','lcia.scope-closure-summary.v1','scan','r5-reused-target')
+)->>'ok','true','normal r5 reuse finalizes with a target-owned report and certificate');
+select ok((
+  select target.status='passed' and target.certificate_status='valid'
+     and target.certificate_hash<>source.certificate_hash
+     and target.reused_from_check_id=source.id and target.scan_execution_id=source.scan_execution_id
+     and target.expected_validator_scanner_fingerprint=source.expected_validator_scanner_fingerprint
+     and target.requested_scope_hash=source.requested_scope_hash
+     and target.policy_fingerprint=source.policy_fingerprint
+     and target.data_snapshot_token=source.data_snapshot_token
+     and target.effective_scope_hash=source.effective_scope_hash
+     and target.snapshot_id=source.snapshot_id and target.snapshot_hash=source.snapshot_hash
+     and target.snapshot_artifact_id=source.snapshot_artifact_id
+     and target.snapshot_index_sha256=source.snapshot_index_sha256
+     and target.snapshot_build_contract_hash=source.snapshot_build_contract_hash
+     and target.closure_bundle_artifact_id=source.closure_bundle_artifact_id
+     and target.closure_bundle_hash=source.closure_bundle_hash
+     and target.report_artifact_id='c7220000-0000-4000-8000-000000000212'::uuid
+     and private.lcia_scope_closure_evidence_usable(target)
+  from private.lcia_scope_closure_checks source
+  join private.lcia_scope_closure_checks target on true
+  where source.request_idempotency_token='closure-e2e-r5-a'
+    and target.request_idempotency_token='closure-e2e-r5-after-completion'
+),'r5 reuse preserves exact source numerical/bundle binding and creates a distinct usable target certificate');
+select is((
+  select count(*) from (
+    (select * from closure_e2e_r4_objects except select * from closure_e2e_r4_before)
+    union all
+    (select * from closure_e2e_r4_before except select * from closure_e2e_r4_objects)
+  ) changes
+),0::bigint,'r5 admission, completion and reuse preserve every captured r4 check/job/scan/snapshot/artifact and frozen source row');
+
 -- A blocked source has complete reusable administrative evidence but no
 -- numerical snapshot.  The shared execution still owns its preallocated UUID.
+select set_config('request.jwt.claim.role','authenticated',true);
 select is(api.cmd_lcia_scope_closure_check_request_v2(
   '{"coverageMode":"global_eligible","processes":[],"lciaMethods":[{"id":"c7220000-0000-4000-8000-000000000021","version":"01.00.000"}]}'::jsonb,
   'closure-e2e-blocked-a','{}'

@@ -84,6 +84,26 @@ The local contract CI job includes Model bundle version allocation. For focused 
 
 ## Proof Matrix
 
+For the Database #834 / Worker #318 scanner r5 admission migration, run
+`supabase/tests/20260722_scope_closure_release_binding_e2e.sql` after the normal
+reset. Its warm fixture completes and reuses r4 evidence through the native
+lease-fenced service RPCs, then uses the normal request command to prove that
+unchanged scope/policy/data snapshot selects a new r5 request fingerprint, scan
+execution and numerical snapshot UUID. Exact r5 retries stay idempotent and
+distinct r5 tokens share one scan. Verify r4 worker-input/claim compatibility,
+rejection of r4 completed evidence for r5 work, and a fresh r5 claim. Complete
+that r5 scan through the lease-fenced result RPC, then admit a new r5 token and
+exercise completed-scan claim, reuse and target-report finalization. Reject
+stale completion/finalization leases and verify exact source numerical/bundle
+bindings plus a distinct usable target certificate. Whole-row comparison must
+preserve old checks, jobs, scans, snapshots, artifacts and frozen source records
+through admission, completion and reuse. Also qualify applying the additive migration to a populated canonical
+base; a clean reset alone does not establish upgrade preservation. Database
+pgTAP covers admission and durable binding, not Worker metadata production or
+Chrome preview/download acceptance; those require the matching r5-capable
+Worker and original consumer warm-history test. Record unexecuted gates
+explicitly when no task-owned PostgreSQL environment is available.
+
 | Change type | Minimum local proof | Stronger proof when risk is higher | Notes |
 | --- | --- | --- | --- |
 | `supabase/migrations/**` | `supabase db reset` succeeds | run the relevant SQL assertions under `supabase/tests/**`; inspect affected workspace objects if the migration was authored from workspace files | Record which migration and which SQL test files were exercised. |
