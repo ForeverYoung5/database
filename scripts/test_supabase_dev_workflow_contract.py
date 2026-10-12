@@ -105,6 +105,41 @@ def main() -> int:
     if not preview_workflow:
         failures.append("Preview runtime job is missing")
 
+    scope_closure_checks = (
+        "supabase test db supabase/tests/20260801_scope_closure_cutoff_main_hotfix.sql",
+        "supabase test db supabase/tests/20260724_initial_candidate_scope_closure_e2e.sql",
+        "supabase test db supabase/tests/20260722_scope_closure_release_binding_e2e.sql",
+        "supabase test db supabase/tests/20260722_data_product_scope_closure_and_task_feed.sql",
+        "scripts/test_scope_closure_scanner_upgrade.sh",
+    )
+    failures.extend(
+        f"local Scope Closure validation missing {command}"
+        for command in scope_closure_checks
+        if command not in local_workflow
+    )
+    if "continue-on-error:" in local_workflow:
+        failures.append("local contract checks must not allow failures")
+    if "SCOPE_CLOSURE_UPGRADE_ALLOW_RESET: isolated" not in local_workflow:
+        failures.append("scanner upgrade must use the explicitly isolated local runner")
+    upgrade_script = (REPO_ROOT / "scripts/test_scope_closure_scanner_upgrade.sh").read_text()
+    for isolation_token in (
+        '${GITHUB_ACTIONS:-}', '${RUNNER_ENVIRONMENT:-}', 'github-hosted',
+        '${GITHUB_WORKSPACE:-}', '${DOCKER_HOST:-}', '${DOCKER_CONTEXT:-}',
+        'docker context inspect', 'unix://*',
+    ):
+        if isolation_token not in upgrade_script:
+            failures.append(f"scanner upgrade isolation check missing {isolation_token}")
+    upgrade_order = (
+        upgrade_script.find("supabase db reset --local --version 20261011151720 --no-seed"),
+        upgrade_script.find('supabase test db "$fixture"'),
+        upgrade_script.find("supabase migration up --local"),
+    )
+    if -1 in upgrade_order or upgrade_order != tuple(sorted(upgrade_order)):
+        failures.append("scanner upgrade must verify the populated canonical base before restoring HEAD")
+    for forbidden_upgrade_token in ("--linked", "--db-url", "SUPABASE_ACCESS_TOKEN", "|| true"):
+        if forbidden_upgrade_token in upgrade_script:
+            failures.append(f"scanner upgrade must not use {forbidden_upgrade_token}")
+
     profile_required = (
         "runs-on: ubuntu-24.04-arm",
         "timeout-minutes: 25",

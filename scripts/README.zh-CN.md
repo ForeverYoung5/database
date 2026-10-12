@@ -20,9 +20,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-10-11
-lastReviewedCommit: c55ae785b5700e0b2ebc1e27a2400d6333f2452f
-lastReviewedNote: "Database #829: reviewed statement-local scope evaluation, scope-isolation tests, synthetic performance and exact-local snapshots; retained #828 enqueue-relative suggestion lifetimes and claim caps. Existing ownership, API, ACL/security barrier, budgets, branches and hosted qualification remain unchanged."
+lastReviewedAt: 2026-10-12
+lastReviewedCommit: e95456e8ddac9ee99639bd810ecbaecea5df9fe3
+lastReviewedNote: "Reviewed Database #834 isolated CI Scope Closure suites and bounded canonical-base R4-to-R5 SQL upgrade helper. Hosted credentials, persistent Dev deployment, Preview verification, schema ownership and generated-workspace boundaries are unchanged; original R1 browser acceptance remains separate."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml
@@ -223,6 +223,16 @@ Next Process/Flow 分段基准。它验证 0、1、2,000、2,001、宽过滤和�
 python3 scripts/check_auth_email_templates.py
 python3 scripts/test_check_auth_email_templates.py
 ```
+
+### `test_scope_closure_scanner_upgrade.sh`
+
+现有 CI local-contract job 以 `SCOPE_CLOSURE_UPGRADE_ALLOW_RESET=isolated` 调用；
+脚本还要求匹配的 GitHub 托管工作目录及本地 Unix Docker context，普通本地 checkout、
+self-hosted runner 和被覆盖的 Docker 目标均在 reset 前拒绝。
+脚本重置到固定 canonical R4 schema，复用 Scope Closure pgTAP 历史 fixture，在回滚事务内
+执行两次真实 R5 singleton 迁移并验证记录保持，断言后才恢复当前迁移。CI 复用现有
+local-contract job，不使用 hosted 凭据；这不验证原 R1 浏览器输入。
+所需证据和关联套件见 `docs/agents/repo-validation.md`。
 
 ### `test_full_schema_cutover_upgrade.sh`
 

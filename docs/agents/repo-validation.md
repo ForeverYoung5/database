@@ -32,9 +32,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-10-11
-lastReviewedCommit: c55ae785b5700e0b2ebc1e27a2400d6333f2452f
-lastReviewedNote: "Database #829: reviewed statement-local scope evaluation, scope-isolation tests, synthetic performance and exact-local snapshots; retained #828 enqueue-relative suggestion lifetimes and claim caps. Existing ownership, API, ACL/security barrier, budgets, branches and hosted qualification remain unchanged."
+lastReviewedAt: 2026-10-12
+lastReviewedCommit: e95456e8ddac9ee99639bd810ecbaecea5df9fe3
+lastReviewedNote: "Reviewed Database #834 isolated CI Scope Closure suites and bounded canonical-base R4-to-R5 SQL upgrade helper. Hosted credentials, persistent Dev deployment, Preview verification, schema ownership and generated-workspace boundaries are unchanged; original R1 browser acceptance remains separate."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -83,6 +83,37 @@ manager-attested-result-publication suites before hosted steps.
 The local contract CI job includes Model bundle version allocation. For focused validation, run `20261009_model_bundle_process_references.sql` with `20260611_dataset_create_version_rpc.sql` and `20260902_process_model_version.sql`. Verify exact same-bundle reference rewriting, external version preservation, singleton/array shape and child ownership after a blank rebuild and a populated upgrade.
 
 ## Proof Matrix
+
+For the Database #834 / Worker #318 scanner r5 admission migration, run
+`supabase/tests/20260722_scope_closure_release_binding_e2e.sql` after the normal
+reset. Its warm fixture completes and reuses r4 evidence through the native
+lease-fenced service RPCs, then uses the normal request command to prove that
+unchanged scope/policy/data snapshot selects a new r5 request fingerprint, scan
+execution and numerical snapshot UUID. Exact r5 retries stay idempotent and
+distinct r5 tokens share one scan. Verify r4 worker-input/claim compatibility,
+rejection of r4 completed evidence for r5 work, and a fresh r5 claim. Complete
+that r5 scan through the lease-fenced result RPC, then admit a new r5 token and
+exercise completed-scan claim, reuse and target-report finalization. Reject
+stale completion/finalization leases and verify exact source numerical/bundle
+bindings plus a distinct usable target certificate. Whole-row comparison must
+preserve old checks, jobs, scans, snapshots, artifacts and frozen source records
+through admission, completion and reuse. Also qualify applying the additive migration to a populated canonical
+base; a clean reset alone does not establish upgrade preservation. Database
+pgTAP covers admission and durable binding, not Worker metadata production or
+Chrome preview/download acceptance; those require the matching r5-capable
+Worker and original consumer warm-history test. Record unexecuted gates
+explicitly when no task-owned PostgreSQL environment is available. The existing
+`local-contract` CI job now runs the four directly related Scope Closure suites
+listed below and `scripts/test_scope_closure_scanner_upgrade.sh`. The helper
+requires the matching GitHub-hosted workspace and local Unix Docker context, then
+resets its explicitly admitted isolated local project to canonical commit
+`03939b8880f983d494406f0e10b213081b9f900a` / migration `20261011151720`,
+uses the shared populated R4 fixture, and executes the actual R5 migration SQL
+twice inside its rollback transaction. It verifies R5 admission, preservation of
+other config fields and the existing history/lease/reuse assertions before
+restoring current HEAD with local migrations. Future migrations do not enter
+the bounded R4-to-R5 assertions. This database-contract evidence does not
+qualify original R1 inputs, a hosted Preview branch, or browser acceptance.
 
 | Change type | Minimum local proof | Stronger proof when risk is higher | Notes |
 | --- | --- | --- | --- |

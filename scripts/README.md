@@ -20,9 +20,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-10-11
-lastReviewedCommit: c55ae785b5700e0b2ebc1e27a2400d6333f2452f
-lastReviewedNote: "Database #829: reviewed statement-local scope evaluation, scope-isolation tests, synthetic performance and exact-local snapshots; retained #828 enqueue-relative suggestion lifetimes and claim caps. Existing ownership, API, ACL/security barrier, budgets, branches and hosted qualification remain unchanged."
+lastReviewedAt: 2026-10-12
+lastReviewedCommit: e95456e8ddac9ee99639bd810ecbaecea5df9fe3
+lastReviewedNote: "Reviewed Database #834 isolated CI Scope Closure suites and bounded canonical-base R4-to-R5 SQL upgrade helper. Hosted credentials, persistent Dev deployment, Preview verification, schema ownership and generated-workspace boundaries are unchanged; original R1 browser acceptance remains separate."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml
@@ -264,6 +264,18 @@ a button and visible copyable link targeting the same complete
 python3 scripts/check_auth_email_templates.py
 python3 scripts/test_check_auth_email_templates.py
 ```
+
+### `test_scope_closure_scanner_upgrade.sh`
+
+The existing CI local-contract job invokes this helper with
+`SCOPE_CLOSURE_UPGRADE_ALLOW_RESET=isolated`. It also requires a matching GitHub-hosted
+workspace and a local Unix Docker context; normal local checkouts, self-hosted runners
+and overridden Docker targets are rejected before reset. It resets to the frozen
+canonical R4 schema, reuses the Scope Closure pgTAP history fixture, applies the
+actual R5 singleton migration twice inside a rollback transaction, and restores
+current migrations after the assertions. CI runs it in the existing local-contract
+job without hosted credentials. It does not validate original R1 browser inputs.
+See `docs/agents/repo-validation.md` for the required evidence and related suites.
 
 ### `test_full_schema_cutover_upgrade.sh`
 
