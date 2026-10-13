@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-14
-lastReviewedCommit: 6428ff2822fbad63c7c44a33d38224b3b7933066
-lastReviewedNote: "Reviewed Database #834 / Worker #318 internal scanner R5 admission and warm-history test contract. New requests avoid old R4 metadata while historical fingerprints, artifacts, public DTOs, scientific rules and leases remain unchanged. Worker-before-config adoption and real reset/populated-upgrade/native-consumer validation remain required; source review is not SQL execution."
+lastReviewedCommit: 79bb9823b6951f836665b903495ae23ce401ace9
+lastReviewedNote: "Reviewed Database #838 classification-aware raw Hybrid fingerprint and predicate baselines. Four private definition hashes were independently replayed and verified; the existing owners, security modes, settings, ACLs, branch counts and Portal recovery boundaries remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

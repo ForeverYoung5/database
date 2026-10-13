@@ -462,8 +462,8 @@ select ok(
 );
 
 select ok(
-  strpos(pg_get_functiondef('private.search_flows_latest_impl(text,jsonb,bigint,bigint,text,text,uuid,integer,text[])'::regprocedure), 'and f.json @> $2') > 0,
-  'flow latest PGroonga search only keeps JSON containment for non-empty filters'
+  strpos(pg_get_functiondef('private.search_flows_latest_impl(text,jsonb,bigint,bigint,text,text,uuid,integer,text[])'::regprocedure), 'and private.dataset_catalog_filter_matches(NULL, f.json, $2)') > 0,
+  'flow latest PGroonga search uses the #838 canonical matcher only for non-empty filters'
 );
 
 select ok(
@@ -497,8 +497,8 @@ select ok(
 );
 
 select ok(
-  strpos(pg_get_functiondef('private.search_processes_latest_impl(text,jsonb,bigint,bigint,text,text,uuid,integer,text,text[])'::regprocedure), 'and p.json @> $2') > 0,
-  'process latest PGroonga search only keeps JSON containment for non-empty filters'
+  strpos(pg_get_functiondef('private.search_processes_latest_impl(text,jsonb,bigint,bigint,text,text,uuid,integer,text,text[])'::regprocedure), 'and private.dataset_catalog_filter_matches(NULL, p.json, $2)') > 0,
+  'process latest PGroonga search uses the #838 canonical matcher only for non-empty filters'
 );
 
 select ok(
@@ -532,8 +532,8 @@ select ok(
 );
 
 select ok(
-  strpos(pg_get_functiondef('private.search_lifecyclemodels_latest_impl(text,jsonb,bigint,bigint,text,text,uuid,integer,text[])'::regprocedure), 'and l.json @> $2') > 0,
-  'lifecyclemodel latest PGroonga search only keeps JSON containment for non-empty filters'
+  strpos(pg_get_functiondef('private.search_lifecyclemodels_latest_impl(text,jsonb,bigint,bigint,text,text,uuid,integer,text[])'::regprocedure), 'and private.dataset_catalog_filter_matches(NULL, l.json, $2)') > 0,
+  'lifecyclemodel latest PGroonga search uses the #838 canonical matcher only for non-empty filters'
 );
 
 select ok(

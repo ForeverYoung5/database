@@ -73,18 +73,18 @@ select is(
     select (
       length(routine.prosrc) - length(replace(
         routine.prosrc,
-        'filter_condition_jsonb = ''{}''::jsonb or p.json @> filter_condition_jsonb',
+        'filter_condition_jsonb = ''{}''::jsonb or private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb)',
         ''
       ))
     ) / length(
-      'filter_condition_jsonb = ''{}''::jsonb or p.json @> filter_condition_jsonb'
+      'filter_condition_jsonb = ''{}''::jsonb or private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb)'
     )
     from pg_proc routine
     where routine.oid =
       'private.semantic_process_candidates(text,text,double precision,integer,text)'::regprocedure
   ),
   5,
-  'all five (including examples) process visibility branches can fold an empty JSON filter away'
+  'all five process/example branches retain empty-filter folding with the #838 canonical matcher'
 );
 
 select is(
@@ -92,18 +92,18 @@ select is(
     select (
       length(routine.prosrc) - length(replace(
         routine.prosrc,
-        'filter_condition_jsonb = ''{}''::jsonb or f.json @> filter_condition_jsonb',
+        'filter_condition_jsonb = ''{}''::jsonb or private.dataset_catalog_filter_matches(NULL, f.json, filter_condition_jsonb)',
         ''
       ))
     ) / length(
-      'filter_condition_jsonb = ''{}''::jsonb or f.json @> filter_condition_jsonb'
+      'filter_condition_jsonb = ''{}''::jsonb or private.dataset_catalog_filter_matches(NULL, f.json, filter_condition_jsonb)'
     )
     from pg_proc routine
     where routine.oid =
       'private.semantic_flow_candidates(text,text,double precision,integer,text)'::regprocedure
   ),
   5,
-  'all five (including examples) flow visibility branches can fold an empty JSON filter away'
+  'all five flow/example branches retain empty-filter folding with the #838 canonical matcher'
 );
 
 select is(

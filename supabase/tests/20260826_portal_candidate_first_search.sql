@@ -885,7 +885,8 @@ select extensions.is(
   (
     -- Database #636 adds authenticated ex scope to four private raw helpers.
     -- Database #793 bounds the four API facades. Private fusion/semantic bodies
-    -- remain byte-identical; retain every owner, security and ACL expectation.
+    -- change only through the reviewed Database #838 canonical filter/combined
+    -- hydration patch. Retain exact owner/security/config/ACL expectations.
     with expected(
       routine_identity,
       definition_md5,
@@ -921,25 +922,25 @@ select extensions.is(
         ),
         (
           'private.hybrid_search_flows_v2_impl(text,text,text,double precision,integer,double precision,double precision,integer,text,integer,integer,text[])',
-          '0e5bf19e87d1380c3c2371d58bc4e967', 'postgres', false,
+          '26da2fb8709c46d9e88cbc2f94be021d', 'postgres', false,
           '{statement_timeout=60s,"search_path=private, api, public, util, extensions, extensions, pg_temp"}',
           '{postgres=X/postgres,service_role=X/postgres,api_internal_executor=X/postgres}'
         ),
         (
           'private.hybrid_search_processes_v2_impl(text,text,text,double precision,integer,double precision,double precision,integer,text,integer,integer,text[])',
-          '26211c4cf9dfb3f3303eac232166ad82', 'postgres', false,
+          '25f6955d02a74ad930b9762cc71d4379', 'postgres', false,
           '{statement_timeout=60s,"search_path=private, api, public, util, extensions, extensions, pg_temp"}',
           '{postgres=X/postgres,service_role=X/postgres,api_internal_executor=X/postgres}'
         ),
         (
           'private.semantic_flow_candidates(text,text,double precision,integer,text)',
-          'e3d07471dd6bdb23e0eb73ce2e75c519', 'postgres', true,
+          '126aadbf5c4334ea264276c4955a7f5f', 'postgres', true,
           '{"search_path=private, api, public, util, extensions, extensions, pg_temp",statement_timeout=60s,plan_cache_mode=force_custom_plan,hnsw.iterative_scan=strict_order}',
           '{postgres=X/postgres,service_role=X/postgres,api_internal_executor=X/postgres}'
         ),
         (
           'private.semantic_process_candidates(text,text,double precision,integer,text)',
-          'bcc38849cd377dc7a9ceecef818c0fdd', 'postgres', true,
+          'eaa41a9990aa0f91d28557e3400362a3', 'postgres', true,
           '{"search_path=private, api, public, util, extensions, extensions, pg_temp",statement_timeout=60s,plan_cache_mode=force_custom_plan,hnsw.iterative_scan=strict_order}',
           '{postgres=X/postgres,service_role=X/postgres,api_internal_executor=X/postgres}'
         )
@@ -964,7 +965,7 @@ select extensions.is(
     ) as difference
   ),
   0::bigint,
-  'all eight legacy raw Hybrid definitions, owners, configs, and ACLs match the reviewed bounded-facade and unchanged private-kernel baseline'
+  'all eight legacy raw Hybrid definitions, owners, configs, and ACLs match the reviewed bounded-facade and classification-filter private-kernel baseline'
 );
 
 -- Prove that synchronized projection maintenance does not become a hidden
