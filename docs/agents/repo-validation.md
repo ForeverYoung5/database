@@ -1172,15 +1172,35 @@ references, all-version/public-plus-owner reads, display admission/DTO metadata,
 and owner/team/anonymous isolation. With a newer nonmatching classification,
 historical matches return matching JSON/version; omission retains latest-visible
 hydration. Existing commercial-state CHECK constraints remain unchanged.
-Generic raw catalog/UUID reads must still deny actor-owned state-120 Processes
+Explicit classification plus type/asInput/other containment must hydrate the
+latest version satisfying their full conjunction; independent Process type
+arguments and extracted Flow fields belong to that conjunction. Identity keys
+must be bound by a supported route or reject rather than broadening a request.
+Malformed asInput/flowType shapes must return `22023`. Generic raw catalog/UUID
+reads must still deny actor-owned state-120 Processes
 and OAuth clients without core-read capability; grant/owner/RLS checks are part
 of the same task suite.
 
 Preflight freezes exact predecessor bodies and replacement counts. SET/CREATE
 authority is borrowed only inside the transaction and full role memberships and
 schema ACLs restore before commit. Verify owners, ACLs, RLS principals, settings
-and candidate budgets remain. Five additive API identities must enter the exact
-capability manifest; six new private helpers remain externally closed. Update
+and candidate budgets remain. Model alone uses two invoker kernels beneath its
+NOBYPASSRLS facade; compare old/new lexical and semantic-only output under missing
+and granted OAuth core-read capability, first-party actors and an additional
+restrictive-policy canary, plus selected-team member/nonmember probes. Five additive API identities must enter the exact
+capability manifest; eight new private helpers remain externally closed. Update
 exact cutover inventory and migration-head assertions together. Deployment order
 is Database, reviewed model Hybrid Edge route, then frontend. Eligible promote
 and root integration remain required after ordinary child merge.
+
+The #838 local representative profile used 12,000 Process identities / 16,000
+versions, two classification systems and a two-level selected path. Synthetic
+JSON ranged from 2,840 to 6,940 bytes (mean 4,379), with 4 MB work_mem and 128 MB
+shared_buffers. Authenticated RPC EXPLAIN ANALYZE/BUFFERS plus nested natural
+plans measured catalog first/deep pages around 478–480 ms, UUID pages 344–361 ms,
+and display first/deep pages 935–957 ms; the catalog used its existing public
+latest-key index and no temporary spill was observed. Fixture, Auth actor and
+display rows rolled back to zero. These are one-client warm synthetic observations
+on an unconstrained shared host, not hosted/cold-cache/concurrency certification
+or a production SLA; deep/wide selector worst cases remain separate proof. No
+index was added from the unconfirmed performance hypothesis.

@@ -1324,6 +1324,14 @@ guards. `api.search_dataset_uuid_mentions_page` retains
 latest-visible then UUID-mention/filter ordering and returns complete counts
 before server pagination. Its `all` kind plus `sourceEntityKinds` supports mixed
 reads; the old bounded discovery API remains available to unchanged consumers.
+This is an intentional existing reference-search rule: if the current visible
+version no longer references a UUID, an old referencing version does not cause
+that dataset to appear. Likewise, an old classified version cannot replace a
+newer nonmatching current version in this reference route. Ordinary catalog
+`latest` instead means latest matching content; these two sets may differ.
+`datasetId` is bound only by catalog/UUID SQL, and `sourceEntityKinds` only by
+UUID SQL. Those keys are removed from content predicates only after binding;
+unbound Search/Hybrid predicates and display lists reject them with `22023`.
 
 Classification uses `classification:[{scope,code,system?,path?}]`. The private
 pure matcher normalizes both repeated container layers. A path is an ordered
@@ -1336,17 +1344,24 @@ A nonempty path ends at `code`; `elementary` matches only the Flow namespace.
 Open Data list, lexical, UUID and Hybrid keep their existing facades and apply
 the shared matcher before count/page or recall. Raw lexical/semantic readers
 also filter before bounded recall. A classification-filtered historical match
-hydrates the latest version that satisfies classification before count/page;
+hydrates the latest version that satisfies the complete combined filter before
+count/page, including separately supplied Process type or extracted Flow
+type/asInput;
 omitted or empty classification retains historical-match/latest-visible
 behavior. Matched Flow classification stays in the source residual predicate
 because flat code sidecars cannot express complete paths or repeated systems.
 Existing budgets, type/team selective routing, principals, no-classification
 paths and threshold fallback remain. No relation, index, trigger, writer or
-backfill is added. The old invoker Flow list keeps its original body and ACLs;
+backfill is added. The old invoker Flow list retains its original read/ACL/RLS behavior and gains
+only inline invalid type/input guards;
 frontend classification uses the additive catalog facade.
 
-`api.hybrid_search_lifecyclemodels_filtered` adds state/team arguments using the
-existing private foundation lexical/semantic kernel. Edge selects this facade
+`api.hybrid_search_lifecyclemodels_filtered` adds state/team arguments with two
+Model-only private invoker kernels. The facade runs as the existing NOBYPASSRLS
+API executor with `row_security=on`; lexical, semantic and hydration reads all
+retain the original Model OAuth and restrictive RLS gates. Foundation kernels
+keep their existing principals and are not used as a bypass for Model. Edge
+selects this facade
 and forwards visibility context before selected-team model Hybrid adoption.
 Legacy model wires keep their signatures. No service-role grant is added.
 

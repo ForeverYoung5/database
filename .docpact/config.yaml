@@ -1,7 +1,7 @@
 version: 1
 layout: repo
 lastReviewedAt: "2026-10-14"
-lastReviewedCommit: "f6b43322e50338501b713e8a7747809171a332d5"
+lastReviewedCommit: "d5250151ca2da18919ca415df62a654672619dc5"
 lastReviewedNote: "Reviewed Database #834 / Worker #318 internal scanner R5 admission and warm-history test contract. New requests avoid old R4 metadata while historical fingerprints, artifacts, public DTOs, scientific rules and leases remain unchanged. Worker-before-config adoption and real reset/populated-upgrade/native-consumer validation remain required; source review is not SQL execution."
 
 # Keep deterministic governance facts here.

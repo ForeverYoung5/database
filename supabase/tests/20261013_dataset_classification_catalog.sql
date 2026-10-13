@@ -256,5 +256,132 @@ select throws_ok($$select api.query_dataset_catalog('process','ex')$$,'42501',nu
 select throws_ok($$select api.query_dataset_catalog('process','all_data')$$,'42501',null,'anonymous all-data cannot read owned drafts');
 select is((select count(*) from api.search_dataset_uuid_mentions_page('process','83800000-0000-4000-8000-000000000099','my')),0::bigint,'anonymous owner UUID denied');
 reset role;
+
+-- Independent review O2–O5: regression cases match real frontend wire shapes.
+select throws_ok($$select private.dataset_catalog_filter_validate('{"asInput":"sometimes"}')$$,'22023',null,'invalid asInput is an input error, never 22P02');
+select throws_ok($$select private.dataset_catalog_filter_validate('{"asInput":1}')$$,'22023',null,'numeric asInput rejects');
+select throws_ok($$select private.dataset_catalog_filter_validate('{"flowType":["Product flow"]}')$$,'22023',null,'array flowType rejects');
+select lives_ok($$select private.dataset_catalog_filter_validate('{"asInput":"true","flowType":"Product flow"}')$$,'string true and valid flow type remain supported');
+select lives_ok($$select private.dataset_catalog_filter_validate('{"asInput":false}')$$,'boolean false remains supported');
+select throws_ok($$select private.dataset_catalog_filter_matches('process','{}','{"datasetId":"83800000-0000-4000-8000-000000000099"}')$$,'22023',null,'unbound dataset identity cannot silently broaden matching');
+select throws_ok($$select private.dataset_catalog_filter_matches('process','{}','{"sourceEntityKinds":["flow"]}')$$,'22023',null,'unbound entity-kind identity rejects');
+select throws_ok($$select api.query_dataset_catalog('process',p_filter_condition=>'{"sourceEntityKinds":["process"]}')$$,'22023',null,'catalog rejects UUID-only entity-kind key');
+select throws_ok($$select api.get_latest_flow_versions(filter_condition=>'{"asInput":"sometimes"}')$$,'22023',null,'Flow ordinary list rejects illegal input before legacy boolean cast');
+select throws_ok($$select api.get_latest_flow_versions(filter_condition=>'{"flowType":["Product flow"]}')$$,'22023',null,'Flow ordinary list rejects array type input');
+select throws_ok($$select api.search_flows('no-match',filter_condition=>'{"asInput":"sometimes"}')$$,'22023',null,'Flow legacy casts validate before even an empty scan');
+select ok((select bool_and(not prosecdef and proowner='api_internal_executor'::regrole and proconfig @> array['row_security=on']) from pg_proc where proname in ('hybrid_search_lifecyclemodels_catalog','semantic_lifecyclemodel_catalog_candidates') and pronamespace='private'::regnamespace),'Model lexical/semantic kernels retain invoker RLS at every read');
+select ok(not has_function_privilege('authenticated','private.hybrid_search_lifecyclemodels_catalog(regclass,text,text,text,double precision,integer,double precision,double precision,integer,text,integer,integer,text[],integer,uuid)','execute'),'new private Model kernel has no browser EXECUTE grant');
+
+create function pg_temp.issue838_review_document(p_kind text,p_root text,p_leaf text)
+returns jsonb language plpgsql immutable as $$
+declare root_name text; information text; document jsonb;
+begin
+ root_name:=case p_kind when 'process' then 'processDataSet' when 'flow' then 'flowDataSet' when 'contact' then 'contactDataSet' else 'lifeCycleModelDataSet' end;
+ information:=case p_kind when 'process' then 'processInformation' when 'flow' then 'flowInformation' when 'contact' then 'contactInformation' else 'lifeCycleModelInformation' end;
+ document:=pg_temp.issue838_document(p_kind);
+ return jsonb_set(document,array[root_name,information,'dataSetInformation','classificationInformation','common:classification','0','common:class'],
+  jsonb_build_array(jsonb_build_object('@level','0','@classId',p_root),jsonb_build_object('@level','1','@classId',p_leaf)));
+end;
+$$;
+set local session_replication_role=replica;
+insert into private.oauth_client_registry(client_id,client_kind,enabled) values
+ ('83800000-0000-4000-8000-000000000098','issue838_no_core',true),
+ ('83800000-0000-4000-8000-000000000097','issue838_with_core',true);
+insert into private.oauth_client_capability_grants(client_id,capability_id,allowed) values
+ ('83800000-0000-4000-8000-000000000098','NX-CORE-02',true),
+ ('83800000-0000-4000-8000-000000000097','NX-CORE-02',true),
+ ('83800000-0000-4000-8000-000000000097','DB-CORE-READ-01',true);
+do $$
+declare document jsonb; newer jsonb;
+begin
+ document:=pg_temp.issue838_review_document('flow','ComboRoot','TypeLeaf');
+ newer:=jsonb_set(document,'{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}','"Elementary flow"');
+ insert into public.flows(id,version,state_code,user_id,json,json_ordered,search_text) values
+ ('83800000-0000-4000-8000-000000000091','01.00.001',100,'83800000-0000-4000-8000-000000000001',document,document::json,array['Issue838ComboFlow']),
+ ('83800000-0000-4000-8000-000000000091','02.00.001',100,'83800000-0000-4000-8000-000000000001',newer,newer::json,array['Issue838ComboFlow']);
+ document:=pg_temp.issue838_review_document('flow','ComboRoot','InputLeaf');
+ newer:=jsonb_set(document,'{flowDataSet,flowInformation,dataSetInformation,classificationInformation,common:elementaryFlowCategorization}',
+  '{"common:category":[{"@level":"0","@catId":"Emissions","#text":"Emissions"}]}');
+ insert into public.flows(id,version,state_code,user_id,json,json_ordered,search_text) values
+ ('83800000-0000-4000-8000-000000000093','01.00.001',100,'83800000-0000-4000-8000-000000000001',document,document::json,array['Issue838ComboInput']),
+ ('83800000-0000-4000-8000-000000000093','02.00.001',100,'83800000-0000-4000-8000-000000000001',newer,newer::json,array['Issue838ComboInput']);
+ document:=pg_temp.issue838_review_document('process','ComboRoot','ProcessLeaf');
+ newer:=jsonb_set(document,'{processDataSet,modellingAndValidation,LCIMethodAndAllocation,typeOfDataSet}','"LCI result"');
+ insert into public.processes(id,version,state_code,user_id,json,json_ordered,search_text) values
+ ('83800000-0000-4000-8000-000000000092','01.00.001',100,'83800000-0000-4000-8000-000000000001',document,document::json,array['Issue838ComboProcess']),
+ ('83800000-0000-4000-8000-000000000092','02.00.001',100,'83800000-0000-4000-8000-000000000001',newer,newer::json,array['Issue838ComboProcess']);
+ document:=pg_temp.issue838_review_document('contact','ComboRoot','ResidualLeaf')||'{"label":"old-tag"}';
+ newer:=document||'{"label":"new-tag"}';
+ insert into public.contacts(id,version,state_code,user_id,json,json_ordered,search_text) values
+ ('83800000-0000-4000-8000-000000000094','01.00.001',100,'83800000-0000-4000-8000-000000000001',document,document::json,array['Issue838ComboResidual']),
+ ('83800000-0000-4000-8000-000000000094','02.00.001',100,'83800000-0000-4000-8000-000000000001',newer,newer::json,array['Issue838ComboResidual']);
+ document:=pg_temp.issue838_review_document('lifecyclemodel','ModelRlsRoot','ModelRlsLeaf');
+ insert into public.lifecyclemodels(id,version,state_code,user_id,team_id,json,json_ordered,search_text,embedding_ft) values
+ ('83800000-0000-4000-8000-000000000095','01.00.001',100,'83800000-0000-4000-8000-000000000001','83800000-0000-4000-8000-000000000003',document,document::json,array['Issue838ModelRLS'],('[1,'||repeat('0,',1022)||'0]')::extensions.vector);
+end;
+$$;
+set local session_replication_role=origin;
+select set_config('request.jwt.claims','{"sub":"83800000-0000-4000-8000-000000000001","role":"authenticated"}',true);
+select set_config('request.jwt.claim.sub','83800000-0000-4000-8000-000000000001',true);
+set local role authenticated;
+select is((select version::text from api.search_flows('Issue838ComboFlow',filter_condition=>'{"flowType":"Product flow","classification":[{"scope":"classification","code":"TypeLeaf","path":["ComboRoot","TypeLeaf"]}]}')),'01.00.001','Flow combined classification/type hydrates matching exact version');
+select is((select max(total_count) from api.search_flows('Issue838ComboFlow',filter_condition=>'{"flowType":"Product flow","classification":[{"scope":"classification","code":"TypeLeaf","path":["ComboRoot","TypeLeaf"]}]}')),1::bigint,'Flow combined filter count uses matching versions');
+select is((select version::text from api.search_flows('83800000-0000-4000-8000-000000000091',filter_condition=>'{"flowType":"Product flow","classification":[{"scope":"classification","code":"TypeLeaf","path":["ComboRoot","TypeLeaf"]}]}')),'01.00.001','Flow exact-id lexical route retains the complete combined filter');
+select is((select version::text from api.search_flows('Issue838ComboInput',filter_condition=>'{"asInput":true,"classification":[{"scope":"classification","code":"InputLeaf","path":["ComboRoot","InputLeaf"]}]}')),'01.00.001','Flow classification/asInput combination excludes newer emission version');
+select is((select version::text from api.search_processes('Issue838ComboProcess',filter_condition=>'{"classification":[{"scope":"classification","code":"ProcessLeaf","path":["ComboRoot","ProcessLeaf"]}]}',type_of_data_set_filter=>'Unit process, single operation')),'01.00.001','Process independent frontend type argument survives classification hydration');
+select is((select version::text from api.search_processes('83800000-0000-4000-8000-000000000092',filter_condition=>'{"classification":[{"scope":"classification","code":"ProcessLeaf","path":["ComboRoot","ProcessLeaf"]}]}',type_of_data_set_filter=>'Unit process, single operation')),'01.00.001','Process exact-id route rechecks independent type argument');
+select is((select max(total_count) from api.search_processes('Issue838ComboProcess',filter_condition=>'{"classification":[{"scope":"classification","code":"ProcessLeaf","path":["ComboRoot","ProcessLeaf"]}]}',type_of_data_set_filter=>'Unit process, single operation')),1::bigint,'Process independent type/classification count remains coherent');
+select is((select version::text from api.search_contacts('Issue838ComboResidual',filter_condition=>'{"label":"old-tag","classification":[{"scope":"classification","code":"ResidualLeaf","path":["ComboRoot","ResidualLeaf"]}]}',this_user_id=>'83800000-0000-4000-8000-000000000001')),'01.00.001','Foundation classifier rechecks complete residual containment');
+select is((select version::text from api.hybrid_search_contacts('Issue838ComboResidual','[1,'||repeat('0,',1022)||'0]',filter_condition=>'{"label":"old-tag","classification":[{"scope":"classification","code":"ResidualLeaf","path":["ComboRoot","ResidualLeaf"]}]}',lexical_weight=>1,semantic_weight=>0)),'01.00.001','Foundation Hybrid rechecks complete residual before latest/count');
+select is((select version::text from api.hybrid_search_flows('Issue838ComboFlow','[1,'||repeat('0,',1022)||'0]',filter_condition=>'{"flowType":"Product flow","classification":[{"scope":"classification","code":"TypeLeaf","path":["ComboRoot","TypeLeaf"]}]}',lexical_weight=>1,semantic_weight=>0)),'01.00.001','Legacy Flow Hybrid combined filter hydrates matching exact version');
+select is((select version::text from api.search_flows('Issue838ComboFlow',filter_condition=>'{"flowType":"Product flow"}')),'02.00.001','Omission of classification preserves old historical/latest-visible rule');
+select is((select version::text from api.search_processes('Issue838ComboProcess',type_of_data_set_filter=>'Unit process, single operation')),'02.00.001','Independent Process type without classification preserves old behavior');
+select throws_ok($$select api.search_processes('Issue838ComboProcess',filter_condition=>'{"datasetId":"83800000-0000-4000-8000-000000000092"}')$$,'22023',null,'unbound lexical identity key rejects rather than returning all matches');
+select throws_ok($$select api.list_dataset_display_candidates_filtered('process',p_filter_condition=>'{"datasetId":"83800000-0000-4000-8000-000000000092"}')$$,'22023',null,'display rejects unsupported datasetId before count/page');
+select throws_ok($$select api.list_displayed_datasets_filtered('process',p_filter_condition=>'{"sourceEntityKinds":["process"]}')$$,'22023',null,'display rejects unsupported sourceEntityKinds');
+reset role;
+
+create function pg_temp.issue838_model_rls_probe(p_allowed boolean,p_context text) returns setof text language plpgsql as $$
+declare lexical double precision; semantic double precision; before_count bigint; after_count bigint;
+ filter_json jsonb:='{"classification":[{"scope":"classification","code":"ModelRlsLeaf","path":["ModelRlsRoot","ModelRlsLeaf"]}]}';
+begin
+ for lexical,semantic in select * from (values(1.0::double precision,0.0::double precision),(0.0::double precision,1.0::double precision)) modes(l,s) loop
+   select count(*) into before_count from api.hybrid_search_lifecyclemodels('Issue838ModelRLS','[1,'||repeat('0,',1022)||'0]',filter_condition=>filter_json,lexical_weight=>lexical,semantic_weight=>semantic);
+   select count(*) into after_count from api.hybrid_search_lifecyclemodels_filtered('Issue838ModelRLS','[1,'||repeat('0,',1022)||'0]',filter_condition=>filter_json,lexical_weight=>lexical,semantic_weight=>semantic);
+   return next extensions.is(before_count,case when p_allowed then 1 else 0 end::bigint,p_context||': old Model gate for weights '||lexical||'/'||semantic);
+   return next extensions.is(after_count,before_count,p_context||': new Model preserves old RLS output for weights '||lexical||'/'||semantic);
+ end loop;
+end;
+$$;
+grant execute on function pg_temp.issue838_model_rls_probe(boolean,text) to authenticated;
+select set_config('request.jwt.claims','{"sub":"83800000-0000-4000-8000-000000000001","role":"authenticated","client_id":"83800000-0000-4000-8000-000000000098"}',true);
+set local role authenticated;
+select * from pg_temp.issue838_model_rls_probe(false,'OAuth missing DB-CORE-READ-01');
+reset role;
+select set_config('request.jwt.claims','{"sub":"83800000-0000-4000-8000-000000000001","role":"authenticated","client_id":"83800000-0000-4000-8000-000000000097"}',true);
+set local role authenticated;
+select * from pg_temp.issue838_model_rls_probe(true,'OAuth granted DB-CORE-READ-01');
+reset role;
+select set_config('request.jwt.claims','{"sub":"83800000-0000-4000-8000-000000000001","role":"authenticated"}',true);
+set local role authenticated;
+select * from pg_temp.issue838_model_rls_probe(true,'first-party Model actor');
+reset role;
+create policy issue838_model_future_guard on public.lifecyclemodels as restrictive for select to authenticated
+using (id<>'83800000-0000-4000-8000-000000000095'::uuid);
+set local role authenticated;
+select * from pg_temp.issue838_model_rls_probe(false,'additional restrictive Model RLS policy');
+reset role;
+drop policy issue838_model_future_guard on public.lifecyclemodels;
+set local role authenticated;
+select is((select count(*) from api.hybrid_search_lifecyclemodels_filtered('Issue838ModelRLS','[1,'||repeat('0,',1022)||'0]',filter_condition=>'{"classification":[{"scope":"classification","code":"ModelRlsLeaf","path":["ModelRlsRoot","ModelRlsLeaf"]}]}',data_source=>'te',team_id_filter=>'83800000-0000-4000-8000-000000000003',lexical_weight=>1,semantic_weight=>0)),1::bigint,'Model team member lexical admission remains valid');
+select is((select count(*) from api.hybrid_search_lifecyclemodels_filtered('Issue838ModelRLS','[1,'||repeat('0,',1022)||'0]',filter_condition=>'{"classification":[{"scope":"classification","code":"ModelRlsLeaf","path":["ModelRlsRoot","ModelRlsLeaf"]}]}',data_source=>'te',team_id_filter=>'83800000-0000-4000-8000-000000000003',lexical_weight=>0,semantic_weight=>1)),1::bigint,'Model team member semantic admission remains valid');
+reset role;
+select set_config('request.jwt.claims','{"sub":"83800000-0000-4000-8000-000000000002","role":"authenticated"}',true);
+select set_config('request.jwt.claim.sub','83800000-0000-4000-8000-000000000002',true);
+set local role authenticated;
+select is((select count(*) from api.hybrid_search_lifecyclemodels_filtered('Issue838ModelRLS','[1,'||repeat('0,',1022)||'0]',data_source=>'te',team_id_filter=>'83800000-0000-4000-8000-000000000003',lexical_weight=>1,semantic_weight=>0)),0::bigint,'Model nonmember team lexical denied');
+select is((select count(*) from api.hybrid_search_lifecyclemodels_filtered('Issue838ModelRLS','[1,'||repeat('0,',1022)||'0]',data_source=>'te',team_id_filter=>'83800000-0000-4000-8000-000000000003',lexical_weight=>0,semantic_weight=>1)),0::bigint,'Model nonmember team semantic denied');
+reset role;
+
 select * from finish();
 rollback;
