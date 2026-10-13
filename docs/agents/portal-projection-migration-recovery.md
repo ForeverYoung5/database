@@ -1,7 +1,7 @@
 ---
-lastReviewedAt: 2026-10-11
-lastReviewedCommit: 021b0c9b98efcae47fe0c52a38c80746b10eca3f
-lastReviewedNote: "Database #818: display-only license-independent capabilities and atomic derived policy reconciliation preserve exact settings, scope, support integrity, publication, legacy manifests and ACLs."
+lastReviewedAt: 2026-10-14
+lastReviewedCommit: 79bb9823b6951f836665b903495ae23ce401ace9
+lastReviewedNote: "Reviewed Database #838 classification-aware raw Hybrid fingerprint and predicate baselines. Four private definition hashes were independently replayed and verified; the existing owners, security modes, settings, ACLs, branch counts and Portal recovery boundaries remain unchanged."
 title: Portal Projection Migration Recovery
 docType: runbook
 scope: repo

@@ -20,9 +20,9 @@ checkPaths:
   - .githooks/pre-push
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-10-12
-lastReviewedCommit: e95456e8ddac9ee99639bd810ecbaecea5df9fe3
-lastReviewedNote: "Reviewed Database #834 isolated CI Scope Closure suites and bounded canonical-base R4-to-R5 SQL upgrade helper. Hosted credentials, persistent Dev deployment, Preview verification, schema ownership and generated-workspace boundaries are unchanged; original R1 browser acceptance remains separate."
+lastReviewedAt: 2026-10-14
+lastReviewedCommit: 6428ff2822fbad63c7c44a33d38224b3b7933066
+lastReviewedNote: "Reviewed Database #838 exact-local five-schema and public/api type regeneration from the isolated complete migration state. Canonical scripts and generated/stable ownership remain unchanged; hosted Dev provenance still requires later comparison."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

@@ -27,6 +27,7 @@ begin
     else null::uuid
   end;
   filter_condition_jsonb := coalesce(filter_condition, '{}'::jsonb);
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   escaped_query_terms := private.pgroonga_escape_query_terms(query_terms);
   if cardinality(escaped_query_terms) = 0 then
     escaped_query_terms := private.pgroonga_escape_query_terms(array[query_text]);
@@ -39,7 +40,7 @@ begin
         select p.id, 1.0::double precision as search_score
         from public.processes p
         where p.id = exact_query_id
-          and p.json @> filter_condition_jsonb
+          and private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb)
           and (
             (((normalized_data_source = 'tg' AND p.state_code = 100) OR (normalized_data_source = 'ex' AND p.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or p.team_id = team_id_filter))
             or (normalized_data_source = 'co' and p.state_code = 200 and (team_id_filter is null or p.team_id = team_id_filter))
@@ -65,6 +66,7 @@ begin
               or (normalized_data_source = 'my' and effective_user_id is not null and p2.user_id = effective_user_id and (state_code_filter is null or p2.state_code = state_code_filter))
               or (normalized_data_source = 'te' and team_id_filter is not null and can_read_team_filter and p2.team_id = team_id_filter and (state_code_filter is null or p2.state_code = state_code_filter))
             )
+          and (case when coalesce(filter_condition_jsonb->'classification','[]'::jsonb)='[]'::jsonb then true else (private.dataset_catalog_filter_matches(NULL,p2.json,(filter_condition_jsonb)) and (coalesce(type_of_data_set_filter,'all')='all' or p2.json #>> '{processDataSet,modellingAndValidation,LCIMethodAndAllocation,typeOfDataSet}'=type_of_data_set_filter)) end)
           order by p2.version desc, p2.modified_at desc
           limit 1
         ) latest_row on true
@@ -83,7 +85,7 @@ begin
 
   json_filter_clause := case
     when filter_condition_jsonb = '{}'::jsonb then ''
-    else 'and p.json @> $2'
+    else 'and private.dataset_catalog_filter_matches(NULL, p.json, $2)'
   end;
 
   v_sql := format($sql$
@@ -127,7 +129,8 @@ begin
             or ($5 = 'my' and $6 is not null and p2.user_id = $6 and ($8 is null or p2.state_code = $8))
             or ($5 = 'te' and $7 is not null and $9 and p2.team_id = $7 and ($8 is null or p2.state_code = $8))
           )
-        order by p2.version desc, p2.modified_at desc
+        and (case when coalesce($2->'classification','[]'::jsonb)='[]'::jsonb then true else (private.dataset_catalog_filter_matches(NULL,p2.json,($2)) and (coalesce($10,'all')='all' or p2.json #>> '{processDataSet,modellingAndValidation,LCIMethodAndAllocation,typeOfDataSet}'=$10)) end)
+          order by p2.version desc, p2.modified_at desc
         limit 1
       ) latest_row on true
     ),

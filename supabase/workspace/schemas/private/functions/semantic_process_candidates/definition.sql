@@ -16,6 +16,7 @@ declare
 begin
   query_embedding_vector := query_embedding::vector(1024);
   filter_condition_jsonb := coalesce(nullif(btrim(filter_condition), ''), '{}')::jsonb;
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   normalized_data_source := coalesce(nullif(lower(btrim(data_source)), ''), 'tg');
   normalized_match_count := greatest(coalesce(match_count, 20), 1);
   candidate_size := greatest(normalized_match_count * 10, 200);
@@ -31,7 +32,7 @@ begin
         from public.processes p
         where p.embedding_ft is not null
           and p.state_code = 100
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb))
         order by p.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -59,7 +60,7 @@ begin
         from public.processes p
         where p.embedding_ft is not null
           and p.state_code = -1
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb))
         order by p.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -87,7 +88,7 @@ begin
         from public.processes p
         where p.embedding_ft is not null
           and p.state_code = 200
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb))
         order by p.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -119,7 +120,7 @@ begin
         from public.processes p
         where p.embedding_ft is not null
           and p.user_id = effective_user_id
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb))
         order by p.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -157,7 +158,7 @@ begin
               and r.team_id = p.team_id
               and r.role::text in ('admin', 'member', 'owner')
           )
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb))
         order by p.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),

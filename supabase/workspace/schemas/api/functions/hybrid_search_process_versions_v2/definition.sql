@@ -89,7 +89,7 @@ begin
           and (state_code_filter is null or source.state_code = state_code_filter)
           and private.dataset_search_can_read_team_filter(team_id_filter, v_actor))
       )
-      and (filter_condition = '{}'::jsonb or source.json @> filter_condition)
+      and (filter_condition = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, source.json, filter_condition))
       and (
         v_process_type is null
         or source.json #>> '{processDataSet,modellingAndValidation,LCIMethodAndAllocation,typeOfDataSet}' = v_process_type

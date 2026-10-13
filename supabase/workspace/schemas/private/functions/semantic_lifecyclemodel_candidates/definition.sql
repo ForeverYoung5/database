@@ -14,6 +14,7 @@ declare
 begin
   query_embedding_vector := query_embedding::vector(1024);
   filter_condition_jsonb := coalesce(nullif(btrim(filter_condition), ''), '{}')::jsonb;
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   normalized_data_source := coalesce(nullif(lower(btrim(data_source)), ''), 'tg');
   normalized_match_count := greatest(coalesce(match_count, 20), 1);
   candidate_size := greatest(normalized_match_count * 10, 200);
@@ -29,7 +30,7 @@ begin
         from public.lifecyclemodels l
         where l.embedding_ft is not null
           and l.state_code = 100
-          and l.json @> filter_condition_jsonb
+          and private.dataset_catalog_filter_matches(NULL, l.json, filter_condition_jsonb)
         order by l.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -57,7 +58,7 @@ begin
         from public.lifecyclemodels l
         where l.embedding_ft is not null
           and l.state_code = -1
-          and l.json @> filter_condition_jsonb
+          and private.dataset_catalog_filter_matches(NULL, l.json, filter_condition_jsonb)
         order by l.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -85,7 +86,7 @@ begin
         from public.lifecyclemodels l
         where l.embedding_ft is not null
           and l.state_code = 200
-          and l.json @> filter_condition_jsonb
+          and private.dataset_catalog_filter_matches(NULL, l.json, filter_condition_jsonb)
         order by l.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -117,7 +118,7 @@ begin
         from public.lifecyclemodels l
         where l.embedding_ft is not null
           and l.user_id = effective_user_id
-          and l.json @> filter_condition_jsonb
+          and private.dataset_catalog_filter_matches(NULL, l.json, filter_condition_jsonb)
         order by l.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -155,7 +156,7 @@ begin
               and r.team_id = l.team_id
               and r.role::text in ('admin', 'member', 'owner')
           )
-          and l.json @> filter_condition_jsonb
+          and private.dataset_catalog_filter_matches(NULL, l.json, filter_condition_jsonb)
         order by l.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),

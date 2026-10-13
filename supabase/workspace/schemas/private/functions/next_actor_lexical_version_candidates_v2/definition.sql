@@ -51,7 +51,7 @@ begin
 
   if p_kind = 'process' then
     v_filter_sql := v_scope_sql || $sql$
-      and ($4::jsonb = '{}'::jsonb or source.json @> $4)
+      and ($4::jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, source.json, $4))
       and (
         $5::text is null
         or source.json #>> '{processDataSet,modellingAndValidation,LCIMethodAndAllocation,typeOfDataSet}' = $5
@@ -59,7 +59,7 @@ begin
     $sql$;
   else
     v_filter_sql := v_scope_sql || $sql$
-      and ($4::jsonb = '{}'::jsonb or source.json @> $4)
+      and ($4::jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, source.json, $4))
       and (
         pg_catalog.cardinality($6::text[]) = 0
         or source.json #>> '{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}' = any($6)

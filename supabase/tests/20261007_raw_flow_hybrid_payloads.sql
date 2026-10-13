@@ -104,7 +104,21 @@ select extensions.ok(not pg_temp.raw_793_type_gate('flow774token',f,data_source=
  'actual common/no-type strategy fallback for '||s||' '||f::text)
 from unnest(array['tg','co','my','te','ex']) s cross join
  unnest(array['{}','{"flowType":"Elementary flow"}','{"flowType":"Product flow,Elementary flow"}']::jsonb[]) f;
-select extensions.is(pg_temp.raw_793_lexical_page(false,p_source=>s,p_filter=>f),pg_temp.raw_793_lexical_page(true,p_source=>s,p_filter=>f),'full ordered lexical predecessor parity across scopes and filters')
+-- Database #838 fixes the frozen predecessor's C1 historical match returning
+-- the newer C9 payload. Only this known synthetic identity changes: its expected
+-- exact payload comes directly from the independently bound fixture version,
+-- not from the candidate matcher. All nonclassification parity stays literal.
+create function pg_temp.issue838_expected_classification_payload(p_previous jsonb,p_filter jsonb)
+returns jsonb language sql stable as $$
+ select coalesce(jsonb_agg(case
+   when p_filter @> '{"classification":[{"scope":"classification","code":"C1"}]}'::jsonb
+     and item->>'id'='77400000-0000-4000-8000-000000000001'
+   then item||jsonb_build_object('version','01.00.000','json',source.json,'modified_at',source.modified_at)
+   else item end order by ordinal),'[]'::jsonb)
+ from jsonb_array_elements(p_previous) with ordinality as rows(item,ordinal)
+ left join public.flows source on source.id='77400000-0000-4000-8000-000000000001'::uuid and source.version='01.00.000';
+$$;
+select extensions.is(pg_temp.raw_793_lexical_page(false,p_source=>s,p_filter=>f),pg_temp.issue838_expected_classification_payload(pg_temp.raw_793_lexical_page(true,p_source=>s,p_filter=>f),f),'full ordered lexical parity with classification-correct exact fixture payload')
 from unnest(array['tg','co','my','te','ex','TG','unknown',null]::text[]) s cross join unnest(array['{}','{"flowType":"Product flow"}','{"asInput":true}','{"label":"old"}','{"classification":[{"scope":"classification","code":"C1"}]}','{"classification":[{"scope":"elementary","code":"E1"}]}']::jsonb[]) f;
 select extensions.is(pg_temp.raw_793_lexical_page(false,p_size=>n,p_page=>p),pg_temp.raw_793_lexical_page(true,p_size=>n,p_page=>p),'full ordered lexical count and pagination parity') from unnest(array[1,2,99,200,800,1000]) n cross join unnest(array[1,2,100]) p;
 select extensions.is(pg_temp.raw_793_lexical_page(false,p_source=>'te',p_team=>'77400000-0000-4000-8000-000000000903'),pg_temp.raw_793_lexical_page(true,p_source=>'te',p_team=>'77400000-0000-4000-8000-000000000903'),'explicit readable team lexical parity');
@@ -112,7 +126,7 @@ select extensions.is(pg_temp.raw_793_lexical_page(false,p_filter=>'{"flowType":"
 select extensions.ok(jsonb_array_length(pg_temp.raw_793_lexical_page(false,p_filter=>'{"flowType":"Product flow"}',p_source=>'te',p_team=>'77400000-0000-4000-8000-000000000903'))>0,'selective Product readable-team parity contains an authorized row');
 select extensions.is(pg_temp.raw_793_page(false,p_source=>s),pg_temp.raw_793_page(true,p_source=>s),'complete raw Hybrid output parity for scope '||coalesce(s,'NULL'))
 from unnest(array['tg','co','my','te','ex','TG',' tg ','unknown',null]::text[]) s;
-select extensions.is(pg_temp.raw_793_page(false,p_filter=>f),pg_temp.raw_793_page(true,p_filter=>f),'filter history/latest full payload parity '||f::text)
+select extensions.is(pg_temp.raw_793_page(false,p_filter=>f),pg_temp.issue838_expected_classification_payload(pg_temp.raw_793_page(true,p_filter=>f),f),'filter history/latest full payload with classification-correct fixture '||f::text)
 from unnest(array['{}','{"flowType":"Product flow"}','{"flowType":"Elementary flow"}','{"asInput":true}','{"asInput":false}','{"label":"old"}','{"classification":[{"scope":"classification","code":"C1"}]}','{"classification":[{"scope":"elementary","code":"E1"}]}']::jsonb[]) f;
 select extensions.is(pg_temp.raw_793_page(false,p_size=>n,p_page=>p),pg_temp.raw_793_page(true,p_size=>n,p_page=>p),'page/count parity size='||n||' page='||p)
 from unnest(array[1,2,10,80,100]) n cross join unnest(array[1,2,5]) p;

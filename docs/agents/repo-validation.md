@@ -32,9 +32,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-10-12
-lastReviewedCommit: e95456e8ddac9ee99639bd810ecbaecea5df9fe3
-lastReviewedNote: "Reviewed Database #834 isolated CI Scope Closure suites and bounded canonical-base R4-to-R5 SQL upgrade helper. Hosted credentials, persistent Dev deployment, Preview verification, schema ownership and generated-workspace boundaries are unchanged; original R1 browser acceptance remains separate."
+lastReviewedAt: 2026-10-14
+lastReviewedCommit: f58da675c15a7f0c11a975e88548b8d45062fbce
+lastReviewedNote: "Reviewed Database #838 classification-aware raw Hybrid fingerprint and predicate baselines. Four private definition hashes were independently replayed and verified; the existing owners, security modes, settings, ACLs, branch counts and Portal recovery boundaries remain unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -1150,3 +1150,58 @@ continuation cursors on one rollback-only fixture, alternates variant order,
 retains nested natural plans, and covers empty/filtered/lexical/UUID/escaped/
 one-character/zero-result shapes in single- and multi-brand deployments. These
 are local synthetic warm samples, not hosted p95 or concurrent-load acceptance.
+
+## Seven-kind classification catalog qualification (Database #838)
+
+After rebuilding an explicitly owned isolated database, run
+`supabase/tests/20261013_dataset_classification_catalog.sql`, full-schema/API and
+OAuth closure, adjacent Open Data/display suites,
+`20260902_next_hybrid_versions_v1.sql`,
+`20260905_next_hybrid_filter_adaptive_v2.sql`,
+`20260910_example_dataset_scope.sql`, and
+`20261006_search_request_identity.sql`. Retain raw request-bound and
+no-classification Flow regressions. Record exact migration, image/runtime,
+commands and pgTAP results; standalone GoTrue bootstrap differences are separate
+from SQL failures. Local proof does not activate hosted APIs or prove
+production-volume latency.
+
+The local-contract CI job runs the classification catalog suite on every candidate.
+The task suite checks complete third pages/totals in schema-admissible scopes,
+lexical and semantic-only recalls, mixed UUID pages beyond 50 results, both
+repeated shapes, named/unnamed systems, ancestor paths, same-exchange exact
+references, all-version/public-plus-owner reads, display admission/DTO metadata,
+and owner/team/anonymous isolation. With a newer nonmatching classification,
+historical matches return matching JSON/version; omission retains latest-visible
+hydration. Existing commercial-state CHECK constraints remain unchanged.
+Explicit classification plus type/asInput/other containment must hydrate the
+latest version satisfying their full conjunction; independent Process type
+arguments and extracted Flow fields belong to that conjunction. Identity keys
+must be bound by a supported route or reject rather than broadening a request.
+Malformed asInput/flowType shapes must return `22023`. Generic raw catalog/UUID
+reads must still deny actor-owned state-120 Processes
+and OAuth clients without core-read capability; grant/owner/RLS checks are part
+of the same task suite.
+
+Preflight freezes exact predecessor bodies and replacement counts. SET/CREATE
+authority is borrowed only inside the transaction and full role memberships and
+schema ACLs restore before commit. Verify owners, ACLs, RLS principals, settings
+and candidate budgets remain. Model alone uses two invoker kernels beneath its
+NOBYPASSRLS facade; compare old/new lexical and semantic-only output under missing
+and granted OAuth core-read capability, first-party actors and an additional
+restrictive-policy canary, plus selected-team member/nonmember probes. Five additive API identities must enter the exact
+capability manifest; eight new private helpers remain externally closed. Update
+exact cutover inventory and migration-head assertions together. Deployment order
+is Database, reviewed model Hybrid Edge route, then frontend. Eligible promote
+and root integration remain required after ordinary child merge.
+
+The #838 local representative profile used 12,000 Process identities / 16,000
+versions, two classification systems and a two-level selected path. Synthetic
+JSON ranged from 2,840 to 6,940 bytes (mean 4,379), with 4 MB work_mem and 128 MB
+shared_buffers. Authenticated RPC EXPLAIN ANALYZE/BUFFERS plus nested natural
+plans measured catalog first/deep pages around 478–480 ms, UUID pages 344–361 ms,
+and display first/deep pages 935–957 ms; the catalog used its existing public
+latest-key index and no temporary spill was observed. Fixture, Auth actor and
+display rows rolled back to zero. These are one-client warm synthetic observations
+on an unconstrained shared host, not hosted/cold-cache/concurrency certification
+or a production SLA; deep/wide selector worst cases remain separate proof. No
+index was added from the unconfirmed performance hypothesis.

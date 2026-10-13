@@ -49,7 +49,7 @@ begin
       where %s
         and (($4 is not null and source.id=$4)
           or ($4 is null and source.search_text operator(extensions.&@~|) $1))
-        and ($2='{}'::jsonb or source.json @> $2)
+        and ($2='{}'::jsonb or private.dataset_catalog_filter_matches(NULL, source.json, $2))
         and ($5 is null or source.json #>> '{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}' = any($5))
         and (not coalesce($6,false) or not (
           source.json @> '{"flowDataSet":{"flowInformation":{"dataSetInformation":{"classificationInformation":{"common:elementaryFlowCategorization":{"common:category":[{"#text":"Emissions","@level":"0"}]}}}}}}'::jsonb

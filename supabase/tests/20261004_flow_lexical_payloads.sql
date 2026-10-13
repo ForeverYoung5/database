@@ -14,7 +14,11 @@ select extensions.is(pg_temp.flow_774_page(p_size=>1,p_page=>3),'[]'::jsonb,'pag
 select extensions.is(pg_temp.flow_774_page(p_filter=>'{"flowType":"Product flow"}'),pg_temp.flow_774_page(),'type matches history while hydration still selects latest visible');
 select extensions.is(pg_temp.flow_774_page(p_filter=>'{"asInput":false}'),pg_temp.flow_774_page(),'false asInput does not require content filtering');
 select extensions.is(pg_temp.flow_774_page(p_filter=>'{"asInput":true}')->0->'json'->>'label','second','asInput excludes only the historical emission match');
-select extensions.is(pg_temp.flow_774_page(p_filter=>'{"classification":[{"scope":"classification","code":"C1"}]}')->0->'json'->>'label','latest','object classification filter preserves history/latest semantics');
+-- #838: the fixture's newer version is C9, so an explicit C1 filter must return
+-- its matching 01.00.000 body. No-classification history/latest assertions above stay unchanged.
+select extensions.is(pg_temp.flow_774_page(p_filter=>'{"classification":[{"scope":"classification","code":"C1"}]}')->0->'json'->>'label','old','explicit classification hydrates the latest matching body rather than newer C9 content');
+select extensions.is(pg_temp.flow_774_page(p_filter=>'{"classification":[{"scope":"classification","code":"C1"}]}')->0->>'version','01.00.000','explicit classification preserves the matching historical exact version');
+select extensions.is(pg_temp.flow_774_page(p_filter=>'{"classification":[{"scope":"classification","code":"C1"}]}')->0->'json' #>> '{flowDataSet,flowInformation,dataSetInformation,classificationInformation,common:classification,common:class,@classId}','C1','returned classification metadata satisfies the selected code');
 select extensions.is(jsonb_array_length(pg_temp.flow_774_page(p_filter=>'{"classification":[{"scope":"elementary","code":"E1"}]}')),2,'array elementary category filtering is retained');
 select extensions.is(pg_temp.flow_774_page(p_filter=>'{"label":"old"}')->0->'json'->>'label','latest','residual JSON filters retain historical matching');
 select extensions.is(pg_temp.flow_774_page(p_query=>'77400000-0000-4000-8000-000000000001')->0->'json'->>'label','latest','UUID branch keeps exact identity/latest hydration');

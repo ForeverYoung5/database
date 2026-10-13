@@ -99,9 +99,10 @@ begin
     else null::uuid
   end;
   filter_condition_jsonb := coalesce(filter_condition, '{}'::jsonb);
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   json_filter_clause := case
     when filter_condition_jsonb = '{}'::jsonb then ''
-    else 'and d.json @> $8'
+    else 'and private.dataset_catalog_filter_matches(NULL, d.json, $8)'
   end;
 
   if exact_query_id is not null then
@@ -132,6 +133,7 @@ begin
               or ($4 = 'my' and $5 is not null and d2.user_id = $5 and ($7 is null or d2.state_code = $7))
               or ($4 = 'te' and $6 is not null and d2.team_id = $6 and ($7 is null or d2.state_code = $7))
             )
+          and (case when coalesce($8->'classification','[]'::jsonb)='[]'::jsonb then true else (private.dataset_catalog_filter_matches(NULL,d2.json,($8))) end)
           order by d2.version desc, d2.modified_at desc
           limit 1
         ) latest_row on true
@@ -156,7 +158,7 @@ begin
 
   json_filter_clause := case
     when filter_condition_jsonb = '{}'::jsonb then ''
-    else 'and d.json @> $2'
+    else 'and private.dataset_catalog_filter_matches(NULL, d.json, $2)'
   end;
 
   v_sql := format($sql$
@@ -195,7 +197,8 @@ begin
             or ($5 = 'my' and $6 is not null and d2.user_id = $6 and ($8 is null or d2.state_code = $8))
             or ($5 = 'te' and $7 is not null and d2.team_id = $7 and ($8 is null or d2.state_code = $8))
           )
-        order by d2.version desc, d2.modified_at desc
+        and (case when coalesce($2->'classification','[]'::jsonb)='[]'::jsonb then true else (private.dataset_catalog_filter_matches(NULL,d2.json,($2))) end)
+          order by d2.version desc, d2.modified_at desc
         limit 1
       ) latest_row on true
     ),
@@ -18708,6 +18711,14 @@ BEGIN
     ELSE NULL::uuid
   END;
   filter_condition_jsonb := coalesce(filter_condition, '{}'::jsonb);
+  -- Preserve this raw invoker's RLS/ACL; validate before boolean casts.
+  if filter_condition_jsonb ? 'flowType' and jsonb_typeof(filter_condition_jsonb->'flowType') is distinct from 'string' then
+    raise exception using errcode='22023',message='flowType must be a string';
+  end if;
+  if filter_condition_jsonb ? 'asInput' and not (
+    jsonb_typeof(filter_condition_jsonb->'asInput')='boolean'
+    or (jsonb_typeof(filter_condition_jsonb->'asInput')='string' and lower(btrim(filter_condition_jsonb->>'asInput')) in ('true','false'))
+  ) then raise exception using errcode='22023',message='asInput must be boolean or true/false string'; end if;
 
   flow_type := nullif(btrim(filter_condition_jsonb->>'flowType'), '');
   IF flow_type IS NOT NULL THEN
@@ -20677,7 +20688,12 @@ begin
     from pg_catalog.jsonb_array_elements(v_classification) as selected(item);
   end if;
 
-  v_residual := v_filter - 'flowType' - 'asInput' - 'classification';
+  -- Multi-system/path predicates run against each source before recall.
+  -- The flat code sidecar cannot represent a complete system/path selector.
+  v_classification_codes := '{}'::text[];
+  v_elementary_codes := '{}'::text[];
+  v_residual := v_filter - 'flowType' - 'asInput';
+  perform private.dataset_catalog_filter_validate(v_filter);
 
   if v_source in ('my', 'te', 'ex') and v_actor is null then return; end if;
   if v_source = 'te' and (
@@ -20729,7 +20745,7 @@ begin
           and (state_code_filter is null or source.state_code = state_code_filter)
           and private.dataset_search_can_read_team_filter(team_id_filter, v_actor))
       )
-      and (v_residual = '{}'::jsonb or source.json @> v_residual)
+      and (v_residual = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, source.json, v_residual))
       and (
         pg_catalog.cardinality(v_flow_types) = 0
         or source.json #>> '{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}' = any(v_flow_types)
@@ -21019,6 +21035,28 @@ ALTER FUNCTION "api"."hybrid_search_lifecyclemodels"("query_text" "text", "query
 
 COMMENT ON FUNCTION "api"."hybrid_search_lifecyclemodels"("query_text" "text", "query_embedding" "text", "filter_condition" "jsonb", "match_threshold" double precision, "match_count" integer, "lexical_weight" double precision, "semantic_weight" double precision, "rrf_k" integer, "data_source" "text", "page_size" integer, "page_current" integer, "query_terms" "text"[]) IS 'Canonical Release 1 Search RPC. Compatibility entrypoint api.hybrid_search_lifecyclemodels_v2(text,text,text,double precision,integer,double precision,double precision,integer,text,integer,integer,text[]) delegates to the same private implementation; lexical reads remain on extracted_md until Database B.';
 
+
+
+CREATE OR REPLACE FUNCTION "api"."hybrid_search_lifecyclemodels_filtered"("query_text" "text", "query_embedding" "text", "filter_condition" "jsonb" DEFAULT '{}'::"jsonb", "match_threshold" double precision DEFAULT 0.5, "match_count" integer DEFAULT 20, "lexical_weight" double precision DEFAULT 0.5, "semantic_weight" double precision DEFAULT 0.5, "rrf_k" integer DEFAULT 10, "data_source" "text" DEFAULT 'tg'::"text", "page_size" integer DEFAULT 10, "page_current" integer DEFAULT 1, "query_terms" "text"[] DEFAULT NULL::"text"[], "state_code_filter" integer DEFAULT NULL::integer, "team_id_filter" "uuid" DEFAULT NULL::"uuid") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'api', 'private', 'public', 'util', 'extensions', 'pg_temp'
+    SET "row_security" TO 'on'
+    SET "statement_timeout" TO '60s'
+    AS $$
+begin
+  if page_size>100 or match_count>100 or page_size<1 or page_current<1
+     or (greatest(coalesce(page_current::bigint,1),1)-1)>2147483647::bigint/greatest(coalesce(page_size::bigint,10),1) then
+    raise exception using errcode='22023',message='invalid bounded model Hybrid pagination';
+  end if;
+  perform private.dataset_catalog_filter_validate(filter_condition);
+  return query select * from private.hybrid_search_lifecyclemodels_catalog('public.lifecyclemodels'::regclass,
+    query_text,query_embedding,filter_condition::text,match_threshold,match_count,lexical_weight,semantic_weight,
+    rrf_k,data_source,page_size,page_current,query_terms,state_code_filter,team_id_filter);
+end;
+$$;
+
+
+ALTER FUNCTION "api"."hybrid_search_lifecyclemodels_filtered"("query_text" "text", "query_embedding" "text", "filter_condition" "jsonb", "match_threshold" double precision, "match_count" integer, "lexical_weight" double precision, "semantic_weight" double precision, "rrf_k" integer, "data_source" "text", "page_size" integer, "page_current" integer, "query_terms" "text"[], "state_code_filter" integer, "team_id_filter" "uuid") OWNER TO "api_internal_executor";
 
 
 CREATE OR REPLACE FUNCTION "api"."hybrid_search_lifecyclemodels_v2"("query_text" "text", "query_embedding" "text", "filter_condition" "text" DEFAULT ''::"text", "match_threshold" double precision DEFAULT 0.5, "match_count" integer DEFAULT 20, "lexical_weight" double precision DEFAULT 0.5, "semantic_weight" double precision DEFAULT 0.5, "rrf_k" integer DEFAULT 10, "data_source" "text" DEFAULT 'tg'::"text", "page_size" integer DEFAULT 10, "page_current" integer DEFAULT 1, "query_terms" "text"[] DEFAULT NULL::"text"[]) RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
@@ -21397,7 +21435,7 @@ begin
           and (state_code_filter is null or source.state_code = state_code_filter)
           and private.dataset_search_can_read_team_filter(team_id_filter, v_actor))
       )
-      and (filter_condition = '{}'::jsonb or source.json @> filter_condition)
+      and (filter_condition = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, source.json, filter_condition))
       and (
         v_process_type is null
         or source.json #>> '{processDataSet,modellingAndValidation,LCIMethodAndAllocation,typeOfDataSet}' = v_process_type
@@ -21975,6 +22013,18 @@ $$;
 ALTER FUNCTION "api"."list_dataset_display_candidates"("p_dataset_kind" "text", "p_visibility" "text", "p_query" "text", "p_page_size" integer, "p_page" integer) OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "api"."list_dataset_display_candidates_filtered"("p_dataset_kind" "text" DEFAULT 'all'::"text", "p_visibility" "text" DEFAULT 'all'::"text", "p_query" "text" DEFAULT ''::"text", "p_page_size" integer DEFAULT 50, "p_page" integer DEFAULT 1, "p_filter_condition" "jsonb" DEFAULT '{}'::"jsonb") RETURNS "jsonb"
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    SET "statement_timeout" TO '20s'
+    AS $$
+ select private.dataset_display_list_filtered(p_dataset_kind,p_visibility,p_query,p_page_size,p_page,true,p_filter_condition);
+$$;
+
+
+ALTER FUNCTION "api"."list_dataset_display_candidates_filtered"("p_dataset_kind" "text", "p_visibility" "text", "p_query" "text", "p_page_size" integer, "p_page" integer, "p_filter_condition" "jsonb") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "api"."list_displayed_datasets"("p_dataset_kind" "text" DEFAULT 'all'::"text", "p_query" "text" DEFAULT ''::"text", "p_page_size" integer DEFAULT 20, "p_page" integer DEFAULT 1) RETURNS "jsonb"
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
@@ -21985,6 +22035,18 @@ $$;
 
 
 ALTER FUNCTION "api"."list_displayed_datasets"("p_dataset_kind" "text", "p_query" "text", "p_page_size" integer, "p_page" integer) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "api"."list_displayed_datasets_filtered"("p_dataset_kind" "text" DEFAULT 'all'::"text", "p_query" "text" DEFAULT ''::"text", "p_page_size" integer DEFAULT 50, "p_page" integer DEFAULT 1, "p_filter_condition" "jsonb" DEFAULT '{}'::"jsonb") RETURNS "jsonb"
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    SET "statement_timeout" TO '20s'
+    AS $$
+ select private.dataset_display_list_filtered(p_dataset_kind,'visible',p_query,p_page_size,p_page,false,p_filter_condition);
+$$;
+
+
+ALTER FUNCTION "api"."list_displayed_datasets_filtered"("p_dataset_kind" "text", "p_query" "text", "p_page_size" integer, "p_page" integer, "p_filter_condition" "jsonb") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "api"."list_lcia_result_sets"("p_limit" integer DEFAULT 100) RETURNS "jsonb"
@@ -29940,6 +30002,78 @@ $$;
 ALTER FUNCTION "api"."qry_team_list"("p_mode" "text", "p_keyword" "text", "p_page" integer, "p_page_size" integer) OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "api"."query_dataset_catalog"("p_dataset_kind" "text", "p_data_source" "text" DEFAULT 'tg'::"text", "p_filter_condition" "jsonb" DEFAULT '{}'::"jsonb", "p_state_code" integer DEFAULT NULL::integer, "p_team_id" "uuid" DEFAULT NULL::"uuid", "p_page_size" integer DEFAULT 50, "p_page_current" integer DEFAULT 1, "p_sort_by" "text" DEFAULT 'modified_at'::"text", "p_sort_direction" "text" DEFAULT 'desc'::"text", "p_owner_draft_only" boolean DEFAULT false, "p_version_scope" "text" DEFAULT 'latest'::"text") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "created_at" timestamp with time zone, "state_code" integer, "team_id" "uuid", "model_id" "uuid", "model_version" character, "total_count" bigint)
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'pg_catalog', 'api', 'private', 'public', 'extensions', 'pg_temp'
+    SET "row_security" TO 'on'
+    SET "statement_timeout" TO '20s'
+    AS $_$
+declare
+  kind text := lower(btrim(p_dataset_kind)); source text := lower(btrim(p_data_source));
+  actor uuid := private.dataset_search_effective_user_id('');
+  team_allowed boolean := private.dataset_search_can_read_team_filter(p_team_id,actor);
+  relation regclass; model_select text := 'null::uuid as model_id,null::character(9) as model_version';
+  filter_json jsonb := coalesce(p_filter_condition,'{}'::jsonb); offset_rows bigint;
+  selection text; sql_query text;
+begin
+  relation := case kind when 'process' then 'public.processes'::regclass when 'flow' then 'public.flows'::regclass
+    when 'lifecyclemodel' then 'public.lifecyclemodels'::regclass when 'contact' then 'public.contacts'::regclass
+    when 'source' then 'public.sources'::regclass when 'unitgroup' then 'public.unitgroups'::regclass
+    when 'flowproperty' then 'public.flowproperties'::regclass else null end;
+  if relation is null or source not in ('tg','co','my','te','ex','all_data') or source is null then
+    raise exception using errcode='22023',message='unsupported dataset kind or data source';
+  end if;
+  if p_page_size is null or p_page_size not between 1 and 100 or p_page_current is null or p_page_current < 1 then
+    raise exception using errcode='22023',message='invalid dataset pagination';
+  end if;
+  offset_rows := (p_page_current::bigint-1)*p_page_size;
+  if offset_rows > 2147483647 then raise exception using errcode='22023',message='dataset page offset is too large'; end if;
+  if p_version_scope is null or p_version_scope not in ('latest','all') then
+    raise exception using errcode='22023',message='version scope must be latest or all';
+  end if;
+  if p_sort_by is null or p_sort_by not in ('id','version','created_at','modified_at')
+    or p_sort_direction is null or p_sort_direction not in ('asc','desc') then
+    raise exception using errcode='22023',message='invalid dataset sort';
+  end if;
+  perform private.dataset_catalog_filter_validate(filter_json);
+  if filter_json ? 'sourceEntityKinds' then raise exception using errcode='22023',message='sourceEntityKinds requires the UUID route'; end if;
+  if kind not in ('flow','all') and exists(select 1 from jsonb_array_elements(coalesce(filter_json->'classification','[]'::jsonb)) selected where selected->>'scope'='elementary') then
+    raise exception using errcode='22023',message='elementary classification requires Flow data';
+  end if;
+  if (source in ('my','te','ex','all_data') or p_owner_draft_only) and actor is null then return; end if;
+  if source='te' and (p_team_id is null or not team_allowed) then return; end if;
+  if kind='process' then model_select := 'd.model_id,d.model_version'; end if;
+  selection := case p_version_scope when 'all' then 'select * from matching' else
+    'select distinct on (id) * from matching order by id,version desc,modified_at desc' end;
+  sql_query := format($query$
+    with matching as (
+      select d.id,d.json,d.version,d.modified_at,d.created_at,d.state_code,d.team_id,%2$s
+      from %1$s d
+      where (
+        ($7 and (d.state_code=100 or (d.user_id=$2 and d.state_code=0)))
+        or (not $7 and (
+          ($1='tg' and d.state_code=100 and ($3 is null or d.team_id=$3))
+          or ($1='co' and d.state_code=200 and ($3 is null or d.team_id=$3))
+          or ($1='my' and d.user_id=$2 and ($4 is null or d.state_code=$4))
+          or ($1='all_data' and (d.state_code=100 or d.user_id=$2) and ($4 is null or d.state_code=$4))
+          or ($1='te' and $5 and d.team_id=$3 and ($4 is null or d.state_code=$4))
+          or ($1='ex' and d.state_code=-1 and $2 is not null and ($3 is null or d.team_id=$3))
+        )))
+        and (not $6 ? 'datasetId' or d.id=($6->>'datasetId')::uuid)
+        and private.dataset_catalog_filter_matches(%3$L,d.json,$6 - 'datasetId')
+    ), selected as (%4$s), counted as (
+      select selected.*,count(*) over()::bigint as total_count from selected
+    ) select id,json,version,modified_at,created_at,state_code,team_id,model_id,model_version,total_count
+      from counted order by %5$I %6$s nulls last,id,version desc limit $8 offset $9
+  $query$,relation,model_select,kind,selection,p_sort_by,p_sort_direction);
+  return query execute sql_query using source,actor,p_team_id,p_state_code,team_allowed,filter_json,p_owner_draft_only,p_page_size,offset_rows;
+end;
+$_$;
+
+
+ALTER FUNCTION "api"."query_dataset_catalog"("p_dataset_kind" "text", "p_data_source" "text", "p_filter_condition" "jsonb", "p_state_code" integer, "p_team_id" "uuid", "p_page_size" integer, "p_page_current" integer, "p_sort_by" "text", "p_sort_direction" "text", "p_owner_draft_only" boolean, "p_version_scope" "text") OWNER TO "api_internal_executor";
+
+
 CREATE OR REPLACE FUNCTION "api"."search_contacts"("query_text" "text", "filter_condition" "jsonb" DEFAULT '{}'::"jsonb", "page_size" integer DEFAULT 10, "page_current" integer DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer) RETURNS TABLE("rank" bigint, "id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -30038,6 +30172,89 @@ $$;
 
 
 ALTER FUNCTION "api"."search_dataset_json_uuid_mentions"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer) OWNER TO "api_internal_executor";
+
+
+CREATE OR REPLACE FUNCTION "api"."search_dataset_uuid_mentions_page"("p_dataset_kind" "text", "p_uuid" "uuid", "p_data_source" "text" DEFAULT 'tg'::"text", "p_filter_condition" "jsonb" DEFAULT '{}'::"jsonb", "p_state_code" integer DEFAULT NULL::integer, "p_team_id" "uuid" DEFAULT NULL::"uuid", "p_page_size" integer DEFAULT 50, "p_page_current" integer DEFAULT 1, "p_sort_by" "text" DEFAULT 'modified_at'::"text", "p_sort_direction" "text" DEFAULT 'desc'::"text", "p_owner_draft_only" boolean DEFAULT false, "p_version_scope" "text" DEFAULT 'latest'::"text") RETURNS TABLE("rank" bigint, "source_entity_kind" "text", "source_id" "uuid", "source_version" character, "source_name" "text", "source_modified_at" timestamp with time zone, "source_team_id" "uuid", "source_json" "jsonb", "matched_by" "text", "matched_entity_table" "text", "total_count" bigint)
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'pg_catalog', 'api', 'private', 'public', 'extensions', 'pg_temp'
+    SET "row_security" TO 'on'
+    SET "statement_timeout" TO '20s'
+    AS $_$
+declare
+  kind text := lower(btrim(p_dataset_kind)); source text := lower(btrim(p_data_source));
+  actor uuid := private.dataset_search_effective_user_id('');
+  team_allowed boolean := private.dataset_search_can_read_team_filter(p_team_id,actor);
+  relation regclass; filter_json jsonb := coalesce(p_filter_condition,'{}'::jsonb); offset_rows bigint;
+  selection text; sql_query text; source_sql text;
+begin
+  relation := case kind when 'process' then 'public.processes'::regclass when 'flow' then 'public.flows'::regclass
+    when 'lifecyclemodel' then 'public.lifecyclemodels'::regclass when 'contact' then 'public.contacts'::regclass
+    when 'source' then 'public.sources'::regclass when 'unitgroup' then 'public.unitgroups'::regclass
+    when 'flowproperty' then 'public.flowproperties'::regclass else null end;
+  if kind is null or (relation is null and kind <> 'all') or source not in ('tg','co','my','te','ex','all_data') or source is null or p_uuid is null then
+    raise exception using errcode='22023',message='unsupported UUID mention query';
+  end if;
+  if p_page_size is null or p_page_size not between 1 and 100 or p_page_current is null or p_page_current<1 then
+    raise exception using errcode='22023',message='invalid dataset pagination';
+  end if;
+  offset_rows := (p_page_current::bigint-1)*p_page_size;
+  if offset_rows>2147483647 then raise exception using errcode='22023',message='dataset page offset is too large'; end if;
+  if p_version_scope is null or p_version_scope not in ('latest','all') then
+    raise exception using errcode='22023',message='version scope must be latest or all';
+  end if;
+  if p_sort_by is null or p_sort_by not in ('id','version','created_at','modified_at')
+    or p_sort_direction is null or p_sort_direction not in ('asc','desc') then
+    raise exception using errcode='22023',message='invalid dataset sort';
+  end if;
+  perform private.dataset_catalog_filter_validate(filter_json);
+  if kind not in ('flow','all') and exists(select 1 from jsonb_array_elements(coalesce(filter_json->'classification','[]'::jsonb)) selected where selected->>'scope'='elementary') then
+    raise exception using errcode='22023',message='elementary classification requires Flow data';
+  end if;
+  if (source in ('my','te','ex','all_data') or p_owner_draft_only) and actor is null then return; end if;
+  if source='te' and (p_team_id is null or not team_allowed) then return; end if;
+  selection := case p_version_scope when 'all' then 'select * from visible' else
+    'select distinct on (source_kind,id) * from visible order by source_kind,id,version desc,modified_at desc' end;
+  -- Enumerate a fixed allowlist, never caller-supplied relation text. Each branch
+  -- projects only common fields so different table layouts remain compatible.
+  if kind = 'all' then
+    select string_agg(format('select %L::text as source_kind,id,json,version,modified_at,created_at,team_id,user_id,state_code from public.%I',entry.kind,entry.table_name),' union all ' order by entry.position)
+    into source_sql from (values ('process','processes',1),('flow','flows',2),('lifecyclemodel','lifecyclemodels',3),
+      ('source','sources',4),('contact','contacts',5),('unitgroup','unitgroups',6),('flowproperty','flowproperties',7)) entry(kind,table_name,position);
+  else
+    source_sql := format('select %L::text as source_kind,id,json,version,modified_at,created_at,team_id,user_id,state_code from %s',kind,relation);
+  end if;
+  sql_query := format($query$
+    with visible as (
+      select d.source_kind,d.id,d.json,d.version,d.modified_at,d.created_at,d.team_id from (%1$s) d
+      where (
+        ($7 and (d.state_code=100 or (d.user_id=$2 and d.state_code=0)))
+        or (not $7 and (
+          ($1='tg' and d.state_code=100 and ($3 is null or d.team_id=$3))
+          or ($1='co' and d.state_code=200 and ($3 is null or d.team_id=$3))
+          or ($1='my' and d.user_id=$2 and ($4 is null or d.state_code=$4))
+          or ($1='all_data' and (d.state_code=100 or d.user_id=$2) and ($4 is null or d.state_code=$4))
+          or ($1='te' and $5 and d.team_id=$3 and ($4 is null or d.state_code=$4))
+          or ($1='ex' and d.state_code=-1 and $2 is not null and ($3 is null or d.team_id=$3))
+        ))) and (not $6 ? 'datasetId' or d.id=($6->>'datasetId')::uuid)
+        and (not $6 ? 'sourceEntityKinds' or $6->'sourceEntityKinds' ? d.source_kind)
+    ), latest as (%2$s), matched as (
+      select latest.* from latest where json::text ilike $8
+        and private.dataset_catalog_filter_matches(source_kind,json,$6 - 'datasetId' - 'sourceEntityKinds')
+    ), counted as (
+      select matched.*,count(*) over()::bigint as total_count,
+        row_number() over(order by case source_kind when 'process' then 1 when 'flow' then 2 when 'lifecyclemodel' then 3 when 'source' then 4 when 'contact' then 5 when 'unitgroup' then 6 else 7 end,%4$I %5$s nulls last,id,version desc)::bigint as rank from matched
+    ) select rank,source_kind,id,version,private.dataset_json_display_name(source_kind,json),
+      modified_at,team_id,json,'json_uuid_scan'::text,
+      case source_kind when 'process' then 'public.processes' when 'flow' then 'public.flows' when 'lifecyclemodel' then 'public.lifecyclemodels' when 'source' then 'public.sources' when 'contact' then 'public.contacts' when 'unitgroup' then 'public.unitgroups' else 'public.flowproperties' end,total_count
+      from counted order by rank limit $9 offset $10
+  $query$,source_sql,selection,kind,p_sort_by,p_sort_direction);
+  return query execute sql_query using source,actor,p_team_id,p_state_code,team_allowed,filter_json,p_owner_draft_only,
+    '%'||p_uuid::text||'%',p_page_size,offset_rows;
+end;
+$_$;
+
+
+ALTER FUNCTION "api"."search_dataset_uuid_mentions_page"("p_dataset_kind" "text", "p_uuid" "uuid", "p_data_source" "text", "p_filter_condition" "jsonb", "p_state_code" integer, "p_team_id" "uuid", "p_page_size" integer, "p_page_current" integer, "p_sort_by" "text", "p_sort_direction" "text", "p_owner_draft_only" boolean, "p_version_scope" "text") OWNER TO "api_internal_executor";
 
 
 CREATE OR REPLACE FUNCTION "api"."search_flowproperties"("query_text" "text", "filter_condition" "jsonb" DEFAULT '{}'::"jsonb", "page_size" integer DEFAULT 10, "page_current" integer DEFAULT 1, "data_source" "text" DEFAULT 'tg'::"text", "this_user_id" "text" DEFAULT ''::"text", "team_id_filter" "uuid" DEFAULT NULL::"uuid", "state_code_filter" integer DEFAULT NULL::integer) RETURNS TABLE("rank" bigint, "id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
@@ -46375,6 +46592,236 @@ $$;
 ALTER FUNCTION "private"."dataset_alias_v2_replace_fu_text"("p_before" "jsonb", "p_functional_unit" "jsonb") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "private"."dataset_catalog_classification_matches"("p_kind" "text", "p_json" "jsonb", "p_selectors" "jsonb") RETURNS boolean
+    LANGUAGE "plpgsql" IMMUTABLE PARALLEL SAFE
+    SET "search_path" TO 'pg_catalog', 'pg_temp'
+    AS $_$
+declare
+  information jsonb; containers jsonb; container jsonb; nodes jsonb;
+  selected jsonb; node jsonb; code_key text; selected_path jsonb;
+  system_name text; actual_path text[]; expected_path text[]; actual_levels integer[];
+begin
+  if p_selectors is null or p_selectors = '[]'::jsonb then return true; end if;
+  information := case p_kind
+    when 'process' then p_json #> '{processDataSet,processInformation,dataSetInformation,classificationInformation}'
+    when 'flow' then p_json #> '{flowDataSet,flowInformation,dataSetInformation,classificationInformation}'
+    when 'lifecyclemodel' then p_json #> '{lifeCycleModelDataSet,lifeCycleModelInformation,dataSetInformation,classificationInformation}'
+    when 'contact' then p_json #> '{contactDataSet,contactInformation,dataSetInformation,classificationInformation}'
+    when 'source' then p_json #> '{sourceDataSet,sourceInformation,dataSetInformation,classificationInformation}'
+    when 'unitgroup' then p_json #> '{unitGroupDataSet,unitGroupInformation,dataSetInformation,classificationInformation}'
+    when 'flowproperty' then p_json #> '{flowPropertyDataSet,flowPropertiesInformation,dataSetInformation,classificationInformation}'
+    else null end;
+  for selected in select value from jsonb_array_elements(p_selectors) loop
+    if selected->>'scope' = 'elementary' then
+      if p_kind <> 'flow' then continue; end if;
+      containers := information->'common:elementaryFlowCategorization';
+      code_key := '@catId';
+    else
+      containers := information->'common:classification';
+      code_key := '@classId';
+    end if;
+    for container in select value from jsonb_array_elements(case jsonb_typeof(containers)
+      when 'object' then jsonb_build_array(containers) when 'array' then containers else '[]'::jsonb end) loop
+      system_name := nullif(btrim(container->>'@name'),'');
+      if selected ? 'system' and system_name is distinct from btrim(selected->>'system') then continue; end if;
+      nodes := container->(case when selected->>'scope'='elementary' then 'common:category' else 'common:class' end);
+      nodes := case jsonb_typeof(nodes) when 'object' then jsonb_build_array(nodes) when 'array' then nodes else '[]'::jsonb end;
+      if selected ? 'path' then
+        select array_agg(btrim(value) order by ordinal) into expected_path
+          from jsonb_array_elements_text(selected->'path') with ordinality as path(value,ordinal);
+        -- A path is an ordered ancestor prefix from level zero in this very
+        -- container. Duplicate or missing levels fail rather than cross-match.
+        select array_agg(btrim(entry.item->>code_key) order by entry.level),array_agg(entry.level order by entry.level) into actual_path,actual_levels
+        from (
+          select item, case when item->>'@level' ~ '^[0-9]{1,2}$'
+            then (item->>'@level')::integer else (ordinal-1)::integer end as level
+          from jsonb_array_elements(nodes) with ordinality as classes(item,ordinal)
+        ) entry where entry.level < cardinality(expected_path);
+        if actual_path = expected_path and actual_levels = array(select generate_series(0,cardinality(expected_path)-1)) then return true; end if;
+      elsif exists (select 1 from jsonb_array_elements(nodes) item
+        where btrim(item->>code_key) = btrim(selected->>'code')) then return true;
+      end if;
+    end loop;
+  end loop;
+  return false;
+end;
+$_$;
+
+
+ALTER FUNCTION "private"."dataset_catalog_classification_matches"("p_kind" "text", "p_json" "jsonb", "p_selectors" "jsonb") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_catalog_display_metadata"("p_kind" "text", "p_json" "jsonb") RETURNS "jsonb"
+    LANGUAGE "sql" IMMUTABLE PARALLEL SAFE
+    SET "search_path" TO ''
+    AS $$
+  select pg_catalog.jsonb_build_object(
+    'location',case p_kind
+      when 'process' then p_json #>> '{processDataSet,processInformation,geography,locationOfOperationSupplyOrProduction,@location}'
+      when 'flow' then p_json #>> '{flowDataSet,flowInformation,geography,locationOfSupply,@location}'
+      when 'lifecyclemodel' then p_json #>> '{lifeCycleModelDataSet,lifeCycleModelInformation,geography,locationOfOperationSupplyOrProduction,@location}' else null end,
+    'reference_year',case p_kind
+      when 'process' then p_json #>> '{processDataSet,processInformation,time,common:referenceYear}'
+      when 'flow' then p_json #>> '{flowDataSet,flowInformation,time,common:referenceYear}'
+      when 'lifecyclemodel' then p_json #>> '{lifeCycleModelDataSet,lifeCycleModelInformation,time,common:referenceYear}' else null end,
+    'type_of_data_set',case p_kind
+      when 'process' then p_json #>> '{processDataSet,modellingAndValidation,LCIMethodAndAllocation,typeOfDataSet}'
+      when 'flow' then p_json #>> '{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}' else null end
+  );
+$$;
+
+
+ALTER FUNCTION "private"."dataset_catalog_display_metadata"("p_kind" "text", "p_json" "jsonb") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_catalog_filter_matches"("p_kind" "text", "p_json" "jsonb", "p_filter" "jsonb") RETURNS boolean
+    LANGUAGE "plpgsql" IMMUTABLE PARALLEL SAFE
+    SET "search_path" TO 'pg_catalog', 'pg_temp'
+    AS $$
+declare
+  filter_json jsonb := coalesce(p_filter,'{}'::jsonb);
+  type_filter text; flow_reference jsonb; exchanges jsonb;
+begin
+  p_kind := coalesce(p_kind, case when p_json ? 'processDataSet' then 'process' when p_json ? 'flowDataSet' then 'flow' when p_json ? 'lifeCycleModelDataSet' then 'lifecyclemodel' when p_json ? 'contactDataSet' then 'contact' when p_json ? 'sourceDataSet' then 'source' when p_json ? 'unitGroupDataSet' then 'unitgroup' when p_json ? 'flowPropertyDataSet' then 'flowproperty' else null end);
+  perform private.dataset_catalog_filter_validate(filter_json);
+  if filter_json ?| array['datasetId','sourceEntityKinds'] then
+    raise exception using errcode='22023',message='identity filters require an explicitly bound catalog or UUID route';
+  end if;
+  if not private.dataset_catalog_classification_matches(p_kind,p_json,filter_json->'classification') then return false; end if;
+  filter_json := filter_json - 'classification';
+  flow_reference := filter_json->'flowReference';
+  filter_json := filter_json - 'flowReference';
+  if flow_reference is not null then
+    if p_kind <> 'process' then return false; end if;
+    exchanges := p_json #> '{processDataSet,exchanges,exchange}';
+    if not exists (
+      select 1 from jsonb_array_elements(case jsonb_typeof(exchanges)
+        when 'object' then jsonb_build_array(exchanges) when 'array' then exchanges else '[]'::jsonb end) exchange
+      where lower(exchange->'referenceToFlowDataSet'->>'@refObjectId') = lower(flow_reference->>'id')
+        and (not flow_reference ? 'version' or exchange->'referenceToFlowDataSet'->>'@version'=flow_reference->>'version')
+        and (not flow_reference ? 'direction' or lower(exchange->>'exchangeDirection')=lower(flow_reference->>'direction'))
+    ) then return false; end if;
+  end if;
+  if p_kind = 'process' then
+    type_filter := nullif(btrim(filter_json->>'typeOfDataSet'),'');
+    filter_json := filter_json - 'typeOfDataSet';
+    if type_filter is not null and type_filter <> 'all'
+      and p_json #>> '{processDataSet,modellingAndValidation,LCIMethodAndAllocation,typeOfDataSet}' is distinct from type_filter then return false; end if;
+  elsif p_kind='flow' then
+    type_filter := nullif(btrim(filter_json->>'flowType'),'');
+    filter_json := filter_json - 'flowType';
+    if type_filter is not null and not coalesce(p_json #>> '{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}' = any(string_to_array(type_filter,',')),false) then return false; end if;
+    if coalesce(filter_json->>'asInput','false')::boolean and p_json @> '{"flowDataSet":{"flowInformation":{"dataSetInformation":{"classificationInformation":{"common:elementaryFlowCategorization":{"common:category":[{"#text":"Emissions","@level":"0"}]}}}}}}'::jsonb then return false; end if;
+    filter_json := filter_json - 'asInput';
+  end if;
+  return coalesce(p_json @> filter_json,false);
+end;
+$$;
+
+
+ALTER FUNCTION "private"."dataset_catalog_filter_matches"("p_kind" "text", "p_json" "jsonb", "p_filter" "jsonb") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_catalog_filter_validate"("p_filter" "jsonb") RETURNS "void"
+    LANGUAGE "plpgsql" IMMUTABLE
+    SET "search_path" TO 'pg_catalog', 'pg_temp'
+    AS $_$
+declare selected jsonb; part jsonb;
+begin
+  if p_filter is null then return; end if;
+  if jsonb_typeof(p_filter) <> 'object' then
+    raise exception using errcode='22023', message='dataset filter must be an object';
+  end if;
+  if p_filter ? 'flowType' and jsonb_typeof(p_filter->'flowType') is distinct from 'string' then
+    raise exception using errcode='22023',message='flowType must be a string';
+  end if;
+  if p_filter ? 'asInput' and not (
+    jsonb_typeof(p_filter->'asInput')='boolean'
+    or (jsonb_typeof(p_filter->'asInput')='string' and lower(btrim(p_filter->>'asInput')) in ('true','false'))
+  ) then
+    raise exception using errcode='22023',message='asInput must be boolean or true/false string';
+  end if;
+  if p_filter ? 'classification' then
+    if jsonb_typeof(p_filter->'classification') <> 'array'
+       or jsonb_array_length(p_filter->'classification') > 50 then
+      raise exception using errcode='22023', message='classification must be an array of at most 50 selectors';
+    end if;
+    for selected in select value from jsonb_array_elements(p_filter->'classification') loop
+      if jsonb_typeof(selected) <> 'object'
+         or coalesce(selected->>'scope','') not in ('classification','elementary')
+         or jsonb_typeof(selected->'code') <> 'string'
+         or coalesce(btrim(selected->>'code'),'') = ''
+         or length(selected->>'code') > 200 then
+        raise exception using errcode='22023', message='invalid classification selector';
+      end if;
+      if selected ? 'system' and (jsonb_typeof(selected->'system') <> 'string'
+         or coalesce(btrim(selected->>'system'),'') = '' or length(selected->>'system') > 200) then
+        raise exception using errcode='22023', message='invalid classification system';
+      end if;
+      if selected ? 'path' then
+        if jsonb_typeof(selected->'path') <> 'array'
+           or jsonb_array_length(selected->'path') not between 1 and 20 then
+          raise exception using errcode='22023', message='classification path must contain 1 to 20 codes';
+        end if;
+        for part in select value from jsonb_array_elements(selected->'path') loop
+          if jsonb_typeof(part) <> 'string' or btrim(part #>> '{}') = '' or length(part #>> '{}') > 200 then
+            raise exception using errcode='22023', message='invalid classification path code';
+          end if;
+        end loop;
+        if btrim(selected->>'code') <> btrim(selected->'path'->>-1) then
+          raise exception using errcode='22023', message='classification code must be the final path code';
+        end if;
+      end if;
+    end loop;
+  end if;
+  if p_filter ? 'sourceEntityKinds' then
+    if jsonb_typeof(p_filter->'sourceEntityKinds') <> 'array' or jsonb_array_length(p_filter->'sourceEntityKinds') not between 1 and 7
+      or exists(select 1 from jsonb_array_elements(p_filter->'sourceEntityKinds') item
+        where jsonb_typeof(item) <> 'string' or (item #>> '{}') not in ('process','flow','lifecyclemodel','contact','source','unitgroup','flowproperty')) then
+      raise exception using errcode='22023',message='invalid source entity kinds';
+    end if;
+  end if;
+  if p_filter ? 'datasetId' and (jsonb_typeof(p_filter->'datasetId') <> 'string'
+     or coalesce(p_filter->>'datasetId','') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') then
+    raise exception using errcode='22023', message='datasetId must be a UUID';
+  end if;
+  if p_filter ? 'flowReference' then
+    if jsonb_typeof(p_filter->'flowReference') <> 'object'
+       or coalesce(p_filter->'flowReference'->>'id','') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+       or (p_filter->'flowReference' ? 'version' and
+           (jsonb_typeof(p_filter->'flowReference'->'version') <> 'string'
+            or coalesce(p_filter->'flowReference'->>'version','') !~ '^[0-9]{2}\.[0-9]{2}\.[0-9]{3}$'))
+       or (p_filter->'flowReference' ? 'direction' and
+           lower(coalesce(p_filter->'flowReference'->>'direction','')) not in ('input','output')) then
+      raise exception using errcode='22023', message='invalid flow reference filter';
+    end if;
+  end if;
+end;
+$_$;
+
+
+ALTER FUNCTION "private"."dataset_catalog_filter_validate"("p_filter" "jsonb") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_catalog_source_json"("p_kind" "text", "p_id" "uuid", "p_version" "text") RETURNS "jsonb"
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $_$
+declare relation text; source_json jsonb;
+begin
+  relation := case p_kind when 'process' then 'processes' when 'flow' then 'flows' when 'lifecyclemodel' then 'lifecyclemodels'
+    when 'contact' then 'contacts' when 'source' then 'sources' when 'unitgroup' then 'unitgroups' when 'flowproperty' then 'flowproperties' else null end;
+  if relation is null then raise exception using errcode='22023',message='unsupported source kind'; end if;
+  execute pg_catalog.format('select json from public.%I where id=$1 and version=$2::character(9)',relation)
+    into source_json using p_id,p_version;
+  return source_json;
+end;
+$_$;
+
+
+ALTER FUNCTION "private"."dataset_catalog_source_json"("p_kind" "text", "p_id" "uuid", "p_version" "text") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "private"."dataset_derivative_http_body_candidate_ids"("p_body" "bytea") RETURNS "text"[]
     LANGUAGE "plpgsql" STABLE
     SET "search_path" TO ''
@@ -46534,6 +46981,63 @@ end; $_$;
 
 
 ALTER FUNCTION "private"."dataset_display_list"("p_kind" "text", "p_visibility" "text", "p_query" "text", "p_page_size" integer, "p_page" integer, "p_candidates" boolean) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "private"."dataset_display_list_filtered"("p_kind" "text", "p_visibility" "text", "p_query" "text", "p_page_size" integer, "p_page" integer, "p_candidates" boolean, "p_filter_condition" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    SET "statement_timeout" TO '20s'
+    AS $_$
+declare result_json jsonb; filter_json jsonb := coalesce(p_filter_condition,'{}'::jsonb); search_sql text := ''; filter_sql text := '';
+begin
+  if auth.uid() is null then raise exception using errcode='28000',message='authentication required'; end if;
+  if p_candidates then perform private.dataset_display_require_manager(); end if;
+  if p_kind is null or p_kind not in ('all','lifecyclemodel','process','flow','flowproperty','unitgroup','source','contact')
+    or p_visibility is null or p_visibility not in ('all','visible','hidden')
+    or p_query is null or pg_catalog.octet_length(p_query)>512
+    or p_page_size is null or p_page_size not between 1 and 100
+    or p_page is null or p_page not between 1 and 1000000 then
+    raise exception using errcode='22023',message='invalid display list filters or pagination';
+  end if;
+  perform private.dataset_catalog_filter_validate(filter_json);
+  if filter_json ?| array['datasetId','sourceEntityKinds'] then raise exception using errcode='22023',message='display lists do not accept identity filters'; end if;
+  if p_kind='all' and pg_catalog.jsonb_array_length(coalesce(filter_json->'classification','[]'::jsonb))>0 then
+    raise exception using errcode='22023',message='select a dataset kind before classification';
+  end if;
+  if p_query<>'' then
+    search_sql := ' and (strpos(lower(coalesce(c.name::text,'''')),lower($3))>0 or strpos(c.dataset_id::text,lower($3))>0)';
+  end if;
+  if filter_json<>'{}'::jsonb and filter_json<>'{"classification":[]}'::jsonb then
+    filter_sql := ' and private.dataset_catalog_filter_matches(c.dataset_kind,private.dataset_catalog_source_json(c.dataset_kind,c.dataset_id,c.dataset_version),$7)';
+  end if;
+  execute $query$
+    with eligible as materialized (
+      select c.dataset_kind,c.dataset_id,c.dataset_version,coalesce(s.is_visible,false) as is_visible
+      from private.dataset_display_catalog c
+      left join private.dataset_display_settings s using(dataset_kind,dataset_id,dataset_version)
+      where ($1='all' or c.dataset_kind=$1) and ($6 or s.is_visible)
+        and ($2='all' or ($2='visible' and s.is_visible) or ($2='hidden' and not coalesce(s.is_visible,false)))
+    $query$||search_sql||filter_sql||$query$
+    ), page as materialized (
+      select * from eligible order by dataset_kind,dataset_id,dataset_version desc limit $4 offset ($5::bigint-1)*$4
+    ), hydrated as (
+      select page.*,case when octet_length(c.name::text)<=16384 then c.name else null end as name,
+        private.dataset_catalog_display_metadata(page.dataset_kind,
+          private.dataset_catalog_source_json(page.dataset_kind,page.dataset_id,page.dataset_version)) as metadata
+      from page cross join lateral (
+        select source.name from private.dataset_display_catalog source
+        where source.dataset_kind=page.dataset_kind and source.dataset_id=page.dataset_id and source.dataset_version=page.dataset_version offset 0
+      ) c
+    ) select jsonb_build_object('data',coalesce((select jsonb_agg(
+      (case when $6 then to_jsonb(hydrated)-'metadata' else to_jsonb(hydrated)-'metadata'-'is_visible' end)||hydrated.metadata
+      order by dataset_kind,dataset_id,dataset_version desc) from hydrated),'[]'::jsonb),'total',(select count(*) from eligible))
+  $query$ into result_json using p_kind,p_visibility,p_query,p_page_size,p_page,p_candidates,filter_json;
+  return result_json;
+end;
+$_$;
+
+
+ALTER FUNCTION "private"."dataset_display_list_filtered"("p_kind" "text", "p_visibility" "text", "p_query" "text", "p_page_size" integer, "p_page" integer, "p_candidates" boolean, "p_filter_condition" "jsonb") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "private"."dataset_display_require_manager"() RETURNS "void"
@@ -64266,6 +64770,7 @@ begin
   candidate_limit := greatest(coalesce(match_count, 20), coalesce(page_size, 10)) * 10;
   semantic_match_count := greatest(coalesce(match_count, 20), coalesce(page_size, 10));
   filter_condition_jsonb := coalesce(nullif(btrim(filter_condition), ''), '{}')::jsonb;
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   text_weight := coalesce(lexical_weight, 0);
 
   return query
@@ -64326,7 +64831,7 @@ begin
               and r.role::text in ('admin', 'member', 'owner')
           )
         )
-      )
+      ) and (case when coalesce((coalesce(nullif(btrim(filter_condition),''),'{}')::jsonb)->'classification','[]'::jsonb)='[]'::jsonb then true else private.dataset_catalog_filter_matches(NULL,f.json,(coalesce(nullif(btrim(filter_condition),''),'{}')::jsonb)) end)
     ),
     latest_rows as (
       select distinct on (visible_rows.id)
@@ -64366,6 +64871,193 @@ COMMENT ON FUNCTION "private"."hybrid_search_flows_v2_impl"("query_text" "text",
 
 
 
+CREATE OR REPLACE FUNCTION "private"."hybrid_search_lifecyclemodels_catalog"("p_table" "regclass", "query_text" "text", "query_embedding" "text", "filter_condition" "text" DEFAULT ''::"text", "match_threshold" double precision DEFAULT 0.5, "match_count" integer DEFAULT 20, "lexical_weight" double precision DEFAULT 0.5, "semantic_weight" double precision DEFAULT 0.5, "rrf_k" integer DEFAULT 10, "data_source" "text" DEFAULT 'tg'::"text", "page_size" integer DEFAULT 10, "page_current" integer DEFAULT 1, "query_terms" "text"[] DEFAULT NULL::"text"[], "state_code_filter" integer DEFAULT NULL::integer, "team_id_filter" "uuid" DEFAULT NULL::"uuid") RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
+    LANGUAGE "plpgsql"
+    SET "row_security" TO 'on'
+    SET "search_path" TO 'private', 'api', 'public', 'util', 'extensions', 'extensions', 'pg_temp'
+    SET "statement_timeout" TO '60s'
+    SET "plan_cache_mode" TO 'force_custom_plan'
+    AS $_$
+declare
+  normalized_data_source text;
+  normalized_match_count integer;
+  semantic_match_count integer;
+  normalized_page_size integer;
+  normalized_page_current integer;
+  candidate_limit integer;
+  normalized_rrf_k integer;
+  filter_condition_jsonb jsonb;
+  escaped_query_terms text[];
+  effective_user_id uuid;
+  can_read_team_filter boolean;
+  visibility_clause text;
+  json_filter_clause text;
+  text_match_clause text;
+  text_weight double precision;
+  hybrid_sql text;
+begin
+  if p_table is distinct from 'public.lifecyclemodels'::regclass then
+    raise exception 'unsupported hybrid dataset table: %', p_table;
+  end if;
+
+  normalized_data_source := coalesce(nullif(lower(btrim(data_source)), ''), 'tg');
+  normalized_match_count := least(greatest(coalesce(match_count, 20), 1), 200);
+  normalized_page_size := least(greatest(coalesce(page_size, 10), 1), 200);
+  normalized_page_current := greatest(coalesce(page_current, 1), 1);
+  semantic_match_count := greatest(normalized_match_count, normalized_page_size);
+  candidate_limit := least(greatest(normalized_match_count, normalized_page_size) * 10, 5000);
+  normalized_rrf_k := greatest(coalesce(rrf_k, 10), 1);
+  filter_condition_jsonb := coalesce(nullif(btrim(filter_condition), ''), '{}')::jsonb;
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
+  escaped_query_terms := private.pgroonga_escape_query_terms(query_terms);
+  if cardinality(escaped_query_terms) = 0 then
+    escaped_query_terms := private.pgroonga_escape_query_terms(array[query_text]);
+  end if;
+  effective_user_id := private.dataset_search_effective_user_id('');
+  can_read_team_filter := private.dataset_search_can_read_team_filter(
+    team_id_filter,
+    effective_user_id
+  );
+  text_weight := coalesce(lexical_weight, 0);
+
+  if normalized_data_source = 'tg' then
+    visibility_clause := 'd.state_code = 100 and ($5::uuid is null or d.team_id = $5)';
+  elsif normalized_data_source = 'ex' then
+    if auth.uid() is null then return; end if;
+    visibility_clause := 'd.state_code = -1 and ($5::uuid is null or d.team_id = $5)';
+  elsif normalized_data_source = 'co' then
+    visibility_clause := 'd.state_code = 200 and ($5::uuid is null or d.team_id = $5)';
+  elsif normalized_data_source = 'my' then
+    if effective_user_id is null then
+      return;
+    end if;
+    visibility_clause := 'd.user_id = $4 and ($6::integer is null or d.state_code = $6)';
+  elsif normalized_data_source = 'te' then
+    if team_id_filter is null or not can_read_team_filter then
+      return;
+    end if;
+    visibility_clause := 'd.team_id = $5 and ($6::integer is null or d.state_code = $6)';
+  else
+    return;
+  end if;
+
+  json_filter_clause := case
+    when filter_condition_jsonb = '{}'::jsonb then ''
+    else 'and private.dataset_catalog_filter_matches(NULL, d.json, $2)'
+  end;
+  text_match_clause := case
+    when cardinality(escaped_query_terms) = 0 then 'false'
+    else 'd.search_text &@~| $1'
+  end;
+
+  hybrid_sql := format(
+    $sql$
+      with text_rows as materialized (
+        select
+          d.id,
+          pgroonga_score(d.tableoid, d.ctid) as search_score
+        from %1$s d
+        where %2$s
+          and %3$s
+          %4$s
+      ),
+      text_scores as (
+        select text_rows.id, max(text_rows.search_score) as search_score
+        from text_rows
+        group by text_rows.id
+      ),
+      text_matches as materialized (
+        select
+          rank() over (
+            order by text_scores.search_score desc, text_scores.id
+          )::bigint as text_rank,
+          text_scores.id as text_id
+        from text_scores
+        order by text_scores.search_score desc, text_scores.id
+        limit $7
+      ),
+      semantic as materialized (
+        select
+          candidate.rank as semantic_rank,
+          candidate.id as semantic_id
+        from private.semantic_lifecyclemodel_catalog_candidates(
+          $8, $9, $10, $11, $12, $3, $6, $5
+        ) candidate
+      ),
+      fused_raw as (
+        select
+          coalesce(text_matches.text_id, semantic.semantic_id) as id,
+          coalesce(
+            1.0 / ($13 + text_matches.text_rank),
+            0.0
+          ) * $14
+          + coalesce(
+            1.0 / ($13 + semantic.semantic_rank),
+            0.0
+          ) * $15 as score
+        from text_matches
+        full outer join semantic
+          on text_matches.text_id = semantic.semantic_id
+      ),
+      fused as (
+        select fused_raw.id, sum(fused_raw.score) as score
+        from fused_raw
+        where fused_raw.id is not null
+        group by fused_raw.id
+      ),
+      visible_rows as (
+        select d.*, fused.score
+        from %1$s d
+        join fused on fused.id = d.id
+        where %3$s and (case when coalesce($2->'classification','[]'::jsonb)='[]'::jsonb then true else private.dataset_catalog_filter_matches(NULL,d.json,$2) end)
+      ),
+      latest_rows as (
+        select distinct on (visible_rows.id)
+          visible_rows.id,
+          visible_rows.json,
+          visible_rows.version,
+          visible_rows.modified_at,
+          visible_rows.team_id,
+          visible_rows.score
+        from visible_rows
+        order by visible_rows.id, visible_rows.version desc, visible_rows.modified_at desc
+      ),
+      counted_rows as (
+        select latest_rows.*, count(*) over()::bigint as total_count
+        from latest_rows
+      )
+      select
+        counted_rows.id,
+        counted_rows.json,
+        counted_rows.version,
+        counted_rows.modified_at,
+        counted_rows.team_id,
+        counted_rows.total_count
+      from counted_rows
+      order by counted_rows.score desc, counted_rows.modified_at desc, counted_rows.id
+      limit $16
+      offset ($17 - 1) * $16
+    $sql$,
+    p_table,
+    text_match_clause,
+    visibility_clause,
+    json_filter_clause
+  );
+
+  return query execute hybrid_sql
+    using escaped_query_terms, filter_condition_jsonb, normalized_data_source,
+          effective_user_id, team_id_filter, state_code_filter, candidate_limit,
+          p_table, query_embedding, filter_condition, match_threshold,
+          semantic_match_count, normalized_rrf_k, text_weight,
+          coalesce(semantic_weight, 0), normalized_page_size,
+          normalized_page_current;
+end;
+$_$;
+
+
+ALTER FUNCTION "private"."hybrid_search_lifecyclemodels_catalog"("p_table" "regclass", "query_text" "text", "query_embedding" "text", "filter_condition" "text", "match_threshold" double precision, "match_count" integer, "lexical_weight" double precision, "semantic_weight" double precision, "rrf_k" integer, "data_source" "text", "page_size" integer, "page_current" integer, "query_terms" "text"[], "state_code_filter" integer, "team_id_filter" "uuid") OWNER TO "api_internal_executor";
+
+
 CREATE OR REPLACE FUNCTION "private"."hybrid_search_lifecyclemodels_v2_impl"("query_text" "text", "query_embedding" "text", "filter_condition" "text" DEFAULT ''::"text", "match_threshold" double precision DEFAULT 0.5, "match_count" integer DEFAULT 20, "lexical_weight" double precision DEFAULT 0.5, "semantic_weight" double precision DEFAULT 0.5, "rrf_k" integer DEFAULT 10, "data_source" "text" DEFAULT 'tg'::"text", "page_size" integer DEFAULT 10, "page_current" integer DEFAULT 1, "query_terms" "text"[] DEFAULT NULL::"text"[]) RETURNS TABLE("id" "uuid", "json" "jsonb", "version" character, "modified_at" timestamp with time zone, "team_id" "uuid", "total_count" bigint)
     LANGUAGE "plpgsql"
     SET "statement_timeout" TO '60s'
@@ -64380,6 +65072,7 @@ begin
   candidate_limit := greatest(coalesce(match_count, 20), coalesce(page_size, 10)) * 10;
   semantic_match_count := greatest(coalesce(match_count, 20), coalesce(page_size, 10));
   filter_condition_jsonb := coalesce(nullif(btrim(filter_condition), ''), '{}')::jsonb;
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   text_weight := coalesce(lexical_weight, 0);
 
   return query
@@ -64440,7 +65133,7 @@ begin
               and r.role::text in ('admin', 'member', 'owner')
           )
         )
-      )
+      ) and (case when coalesce((coalesce(nullif(btrim(filter_condition),''),'{}')::jsonb)->'classification','[]'::jsonb)='[]'::jsonb then true else private.dataset_catalog_filter_matches(NULL,l.json,(coalesce(nullif(btrim(filter_condition),''),'{}')::jsonb)) end)
     ),
     latest_rows as (
       select distinct on (visible_rows.id)
@@ -64494,6 +65187,7 @@ begin
   candidate_limit := greatest(coalesce(match_count, 20), coalesce(page_size, 10)) * 10;
   semantic_match_count := greatest(coalesce(match_count, 20), coalesce(page_size, 10));
   filter_condition_jsonb := coalesce(nullif(btrim(filter_condition), ''), '{}')::jsonb;
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   text_weight := coalesce(lexical_weight, 0);
 
   return query
@@ -64555,7 +65249,7 @@ begin
               and r.role::text in ('admin', 'member', 'owner')
           )
         )
-      )
+      ) and (case when coalesce((coalesce(nullif(btrim(filter_condition),''),'{}')::jsonb)->'classification','[]'::jsonb)='[]'::jsonb then true else private.dataset_catalog_filter_matches(NULL,p.json,(coalesce(nullif(btrim(filter_condition),''),'{}')::jsonb)) end)
     ),
     latest_rows as (
       select distinct on (visible_rows.id)
@@ -64638,6 +65332,7 @@ begin
   candidate_limit := least(greatest(normalized_match_count, normalized_page_size) * 10, 5000);
   normalized_rrf_k := greatest(coalesce(rrf_k, 10), 1);
   filter_condition_jsonb := coalesce(nullif(btrim(filter_condition), ''), '{}')::jsonb;
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   escaped_query_terms := private.pgroonga_escape_query_terms(query_terms);
   if cardinality(escaped_query_terms) = 0 then
     escaped_query_terms := private.pgroonga_escape_query_terms(array[query_text]);
@@ -64672,7 +65367,7 @@ begin
 
   json_filter_clause := case
     when filter_condition_jsonb = '{}'::jsonb then ''
-    else 'and d.json @> $2'
+    else 'and private.dataset_catalog_filter_matches(NULL, d.json, $2)'
   end;
   text_match_clause := case
     when cardinality(escaped_query_terms) = 0 then 'false'
@@ -64738,7 +65433,7 @@ begin
         select d.*, fused.score
         from %1$s d
         join fused on fused.id = d.id
-        where %3$s
+        where %3$s and (case when coalesce($2->'classification','[]'::jsonb)='[]'::jsonb then true else private.dataset_catalog_filter_matches(NULL,d.json,$2) end)
       ),
       latest_rows as (
         select distinct on (visible_rows.id)
@@ -67066,7 +67761,7 @@ begin
       where %s
         and (($4 is not null and source.id=$4)
           or ($4 is null and source.search_text operator(extensions.&@~|) $1))
-        and ($2='{}'::jsonb or source.json @> $2)
+        and ($2='{}'::jsonb or private.dataset_catalog_filter_matches(NULL, source.json, $2))
         and ($5 is null or source.json #>> '{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}' = any($5))
         and (not coalesce($6,false) or not (
           source.json @> '{"flowDataSet":{"flowInformation":{"dataSetInformation":{"classificationInformation":{"common:elementaryFlowCategorization":{"common:category":[{"#text":"Emissions","@level":"0"}]}}}}}}'::jsonb
@@ -67274,7 +67969,7 @@ begin
 
   if p_kind = 'process' then
     v_filter_sql := v_scope_sql || $sql$
-      and ($4::jsonb = '{}'::jsonb or source.json @> $4)
+      and ($4::jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, source.json, $4))
       and (
         $5::text is null
         or source.json #>> '{processDataSet,modellingAndValidation,LCIMethodAndAllocation,typeOfDataSet}' = $5
@@ -67282,7 +67977,7 @@ begin
     $sql$;
   else
     v_filter_sql := v_scope_sql || $sql$
-      and ($4::jsonb = '{}'::jsonb or source.json @> $4)
+      and ($4::jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, source.json, $4))
       and (
         pg_catalog.cardinality($6::text[]) = 0
         or source.json #>> '{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}' = any($6)
@@ -67407,7 +68102,7 @@ begin
   if p_kind = 'process' then
     v_filter_sql := v_scope_sql || $sql$
       and source.embedding_ft is not null
-      and ($4::jsonb = '{}'::jsonb or source.json @> $4)
+      and ($4::jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, source.json, $4))
       and (
         $5::text is null
         or source.json #>> '{processDataSet,modellingAndValidation,LCIMethodAndAllocation,typeOfDataSet}' = $5
@@ -67416,7 +68111,7 @@ begin
   else
     v_filter_sql := v_scope_sql || $sql$
       and source.embedding_ft is not null
-      and ($4::jsonb = '{}'::jsonb or source.json @> $4)
+      and ($4::jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, source.json, $4))
       and (
         pg_catalog.cardinality($6::text[]) = 0
         or source.json #>> '{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}' = any($6)
@@ -67719,7 +68414,7 @@ begin
     v_filter_sql := $sql$
       source.state_code = $1
       and ($2::uuid is null or source.team_id = $2)
-      and ($3::jsonb = '{}'::jsonb or source.json @> $3)
+      and ($3::jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, source.json, $3))
       and (
         $4::text is null
         or source.json #>> '{processDataSet,modellingAndValidation,LCIMethodAndAllocation,typeOfDataSet}' = $4
@@ -67729,7 +68424,7 @@ begin
     v_filter_sql := $sql$
       source.state_code = $1
       and ($2::uuid is null or source.team_id = $2)
-      and ($3::jsonb = '{}'::jsonb or source.json @> $3)
+      and ($3::jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, source.json, $3))
       and (
         pg_catalog.cardinality($5::text[]) = 0
         or source.json #>> '{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}' = any($5)
@@ -67848,7 +68543,7 @@ begin
     source.embedding_ft is not null
     and source.state_code = $1
     and ($2::uuid is null or source.team_id = $2)
-    and ($3::jsonb = '{}'::jsonb or source.json @> $3)
+    and ($3::jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, source.json, $3))
   $sql$;
 
   if p_kind = 'process' then
@@ -67856,7 +68551,7 @@ begin
       source.embedding_ft is not null
       and source.state_code = $1
       and ($2::uuid is null or source.team_id = $2)
-      and ($3::jsonb = '{}'::jsonb or source.json @> $3)
+      and ($3::jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, source.json, $3))
       and (
         $4::text is null
         or source.json #>> '{processDataSet,modellingAndValidation,LCIMethodAndAllocation,typeOfDataSet}' = $4
@@ -67874,7 +68569,7 @@ begin
       source.embedding_ft is not null
       and source.state_code = $1
       and ($2::uuid is null or source.team_id = $2)
-      and ($3::jsonb = '{}'::jsonb or source.json @> $3)
+      and ($3::jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, source.json, $3))
       and (
         pg_catalog.cardinality($5::text[]) = 0
         or source.json #>> '{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}' = any($5)
@@ -68102,91 +68797,9 @@ ALTER FUNCTION "private"."oauth_client_has_capability"("p_capability_id" "text")
 
 
 CREATE OR REPLACE FUNCTION "private"."open_data_catalog_filter_matches"("p_dataset_kind" "text", "p_json" "jsonb", "p_filter_condition" "jsonb") RETURNS boolean
-    LANGUAGE "plpgsql" IMMUTABLE PARALLEL SAFE
+    LANGUAGE "sql" IMMUTABLE PARALLEL SAFE
     SET "search_path" TO 'pg_catalog', 'pg_temp'
-    AS $$
-declare
-  v_filter jsonb := coalesce(p_filter_condition, '{}'::jsonb);
-  v_type_filter text;
-  v_type_filters text[];
-  v_as_input boolean;
-  v_classification_filter jsonb := '[]'::jsonb;
-begin
-  if p_dataset_kind = 'process' then
-    v_type_filter := nullif(btrim(v_filter ->> 'typeOfDataSet'), '');
-    v_filter := v_filter - 'typeOfDataSet';
-    return p_json @> v_filter
-      and (
-        v_type_filter is null
-        or v_type_filter = 'all'
-        or p_json #>> '{processDataSet,modellingAndValidation,LCIMethodAndAllocation,typeOfDataSet}' = v_type_filter
-      );
-  end if;
-
-  if p_dataset_kind <> 'flow' then
-    return p_json @> v_filter;
-  end if;
-
-  v_type_filter := nullif(btrim(v_filter ->> 'flowType'), '');
-  v_type_filters := case when v_type_filter is null then null else string_to_array(v_type_filter, ',') end;
-  v_filter := v_filter - 'flowType';
-
-  if v_filter ? 'asInput' then
-    v_as_input := nullif(btrim(v_filter ->> 'asInput'), '')::boolean;
-  end if;
-  v_filter := v_filter - 'asInput';
-
-  if jsonb_typeof(v_filter -> 'classification') = 'array' then
-    v_classification_filter := v_filter -> 'classification';
-  end if;
-  v_filter := v_filter - 'classification';
-
-  return p_json @> v_filter
-    and (
-      v_type_filters is null
-      or p_json #>> '{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}' = any(v_type_filters)
-    )
-    and (
-      v_as_input is null
-      or not v_as_input
-      or not p_json @> '{"flowDataSet":{"flowInformation":{"dataSetInformation":{"classificationInformation":{"common:elementaryFlowCategorization":{"common:category":[{"#text":"Emissions","@level":"0"}]}}}}}}'::jsonb
-    )
-    and (
-      jsonb_array_length(v_classification_filter) = 0
-      or exists (
-        select 1
-        from jsonb_array_elements(v_classification_filter) selected(item)
-        where (
-          selected.item ->> 'scope' = 'elementary'
-          and exists (
-            select 1
-            from jsonb_array_elements(
-              case jsonb_typeof(p_json #> '{flowDataSet,flowInformation,dataSetInformation,classificationInformation,common:elementaryFlowCategorization,common:category}')
-                when 'array' then p_json #> '{flowDataSet,flowInformation,dataSetInformation,classificationInformation,common:elementaryFlowCategorization,common:category}'
-                when 'object' then jsonb_build_array(p_json #> '{flowDataSet,flowInformation,dataSetInformation,classificationInformation,common:elementaryFlowCategorization,common:category}')
-                else '[]'::jsonb
-              end
-            ) category(item)
-            where category.item ->> '@catId' = selected.item ->> 'code'
-          )
-        ) or (
-          selected.item ->> 'scope' = 'classification'
-          and exists (
-            select 1
-            from jsonb_array_elements(
-              case jsonb_typeof(p_json #> '{flowDataSet,flowInformation,dataSetInformation,classificationInformation,common:classification,common:class}')
-                when 'array' then p_json #> '{flowDataSet,flowInformation,dataSetInformation,classificationInformation,common:classification,common:class}'
-                when 'object' then jsonb_build_array(p_json #> '{flowDataSet,flowInformation,dataSetInformation,classificationInformation,common:classification,common:class}')
-                else '[]'::jsonb
-              end
-            ) classification(item)
-            where classification.item ->> '@classId' = selected.item ->> 'code'
-          )
-        )
-      )
-    );
-end;
-$$;
+    AS $$ select private.dataset_catalog_filter_matches(p_dataset_kind,p_json,p_filter_condition) $$;
 
 
 ALTER FUNCTION "private"."open_data_catalog_filter_matches"("p_dataset_kind" "text", "p_json" "jsonb", "p_filter_condition" "jsonb") OWNER TO "postgres";
@@ -78253,6 +78866,7 @@ begin
     else null::uuid
   end;
   filter_condition_jsonb := coalesce(filter_condition, '{}'::jsonb);
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   escaped_query_terms := private.pgroonga_escape_query_terms(query_terms);
   if cardinality(escaped_query_terms) = 0 then
     escaped_query_terms := private.pgroonga_escape_query_terms(array[query_text]);
@@ -78266,6 +78880,7 @@ begin
     flow_type_array := null;
   end if;
   filter_condition_jsonb := filter_condition_jsonb - 'flowType';
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
 
   if filter_condition_jsonb ? 'asInput' then
     as_input := nullif(btrim(filter_condition_jsonb->>'asInput'), '')::boolean;
@@ -78273,13 +78888,16 @@ begin
     as_input := null;
   end if;
   filter_condition_jsonb := filter_condition_jsonb - 'asInput';
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
 
   if jsonb_typeof(filter_condition_jsonb->'classification') = 'array' then
-    classification_filter := filter_condition_jsonb->'classification';
+    classification_filter := '[]'::jsonb;
   else
     classification_filter := '[]'::jsonb;
   end if;
-  filter_condition_jsonb := filter_condition_jsonb - 'classification';
+  -- Canonical selector remains in the residual predicate before recall.
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
 
   if exact_query_id is not null then
     return query
@@ -78287,7 +78905,7 @@ begin
         select f.id, 1.0::double precision as search_score
         from public.flows f
         where f.id = exact_query_id
-          and f.json @> filter_condition_jsonb
+          and private.dataset_catalog_filter_matches(NULL, f.json, filter_condition_jsonb)
           and (
             (((normalized_data_source = 'tg' AND f.state_code = 100) OR (normalized_data_source = 'ex' AND f.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or f.team_id = team_id_filter))
             or (normalized_data_source = 'co' and f.state_code = 200 and (team_id_filter is null or f.team_id = team_id_filter))
@@ -78356,6 +78974,7 @@ begin
               or (normalized_data_source = 'my' and effective_user_id is not null and f2.user_id = effective_user_id and (state_code_filter is null or f2.state_code = state_code_filter))
               or (normalized_data_source = 'te' and team_id_filter is not null and can_read_team_filter and f2.team_id = team_id_filter and (state_code_filter is null or f2.state_code = state_code_filter))
             )
+          and (case when coalesce(filter_condition_jsonb->'classification','[]'::jsonb)='[]'::jsonb then true else (private.dataset_catalog_filter_matches(NULL,f2.json,(filter_condition_jsonb || jsonb_strip_nulls(jsonb_build_object('flowType',flow_type,'asInput',as_input))))) end)
           order by f2.version desc, f2.modified_at desc
           limit 1
         ) latest_row on true
@@ -78374,7 +78993,7 @@ begin
 
   json_filter_clause := case
     when filter_condition_jsonb = '{}'::jsonb then ''
-    else 'and f.json @> $2'
+    else 'and private.dataset_catalog_filter_matches(NULL, f.json, $2)'
   end;
 
   -- Statistics choose only the execution strategy, never the result universe.
@@ -78493,7 +79112,8 @@ begin
             or ($5 = 'my' and $6 is not null and f2.user_id = $6 and ($8 is null or f2.state_code = $8))
             or ($5 = 'te' and $7 is not null and $9 and f2.team_id = $7 and ($8 is null or f2.state_code = $8))
           )
-        order by f2.version desc, f2.modified_at desc
+        and (case when coalesce($2->'classification','[]'::jsonb)='[]'::jsonb then true else (private.dataset_catalog_filter_matches(NULL,f2.json,($2 || jsonb_strip_nulls(jsonb_build_object('flowType',$10,'asInput',$12))))) end)
+          order by f2.version desc, f2.modified_at desc
         limit 1
       ) latest_row on true
     ),
@@ -78562,6 +79182,7 @@ begin
     else null::uuid
   end;
   filter_condition_jsonb := coalesce(filter_condition, '{}'::jsonb);
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   escaped_query_terms := private.pgroonga_escape_query_terms(query_terms);
   if cardinality(escaped_query_terms) = 0 then
     escaped_query_terms := private.pgroonga_escape_query_terms(array[query_text]);
@@ -78574,7 +79195,7 @@ begin
         select l.id, 1.0::double precision as search_score
         from public.lifecyclemodels l
         where l.id = exact_query_id
-          and l.json @> filter_condition_jsonb
+          and private.dataset_catalog_filter_matches(NULL, l.json, filter_condition_jsonb)
           and (
             (((normalized_data_source = 'tg' AND l.state_code = 100) OR (normalized_data_source = 'ex' AND l.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or l.team_id = team_id_filter))
             or (normalized_data_source = 'co' and l.state_code = 200 and (team_id_filter is null or l.team_id = team_id_filter))
@@ -78596,6 +79217,7 @@ begin
               or (normalized_data_source = 'my' and effective_user_id is not null and l2.user_id = effective_user_id and (state_code_filter is null or l2.state_code = state_code_filter))
               or (normalized_data_source = 'te' and team_id_filter is not null and can_read_team_filter and l2.team_id = team_id_filter and (state_code_filter is null or l2.state_code = state_code_filter))
             )
+          and (case when coalesce(filter_condition_jsonb->'classification','[]'::jsonb)='[]'::jsonb then true else (private.dataset_catalog_filter_matches(NULL,l2.json,(filter_condition_jsonb))) end)
           order by l2.version desc, l2.modified_at desc
           limit 1
         ) latest_row on true
@@ -78614,7 +79236,7 @@ begin
 
   json_filter_clause := case
     when filter_condition_jsonb = '{}'::jsonb then ''
-    else 'and l.json @> $2'
+    else 'and private.dataset_catalog_filter_matches(NULL, l.json, $2)'
   end;
 
   v_sql := format($sql$
@@ -78653,7 +79275,8 @@ begin
             or ($5 = 'my' and $6 is not null and l2.user_id = $6 and ($8 is null or l2.state_code = $8))
             or ($5 = 'te' and $7 is not null and $9 and l2.team_id = $7 and ($8 is null or l2.state_code = $8))
           )
-        order by l2.version desc, l2.modified_at desc
+        and (case when coalesce($2->'classification','[]'::jsonb)='[]'::jsonb then true else (private.dataset_catalog_filter_matches(NULL,l2.json,($2))) end)
+          order by l2.version desc, l2.modified_at desc
         limit 1
       ) latest_row on true
     ),
@@ -78713,6 +79336,7 @@ begin
     else null::uuid
   end;
   filter_condition_jsonb := coalesce(filter_condition, '{}'::jsonb);
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   escaped_query_terms := private.pgroonga_escape_query_terms(query_terms);
   if cardinality(escaped_query_terms) = 0 then
     escaped_query_terms := private.pgroonga_escape_query_terms(array[query_text]);
@@ -78725,7 +79349,7 @@ begin
         select p.id, 1.0::double precision as search_score
         from public.processes p
         where p.id = exact_query_id
-          and p.json @> filter_condition_jsonb
+          and private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb)
           and (
             (((normalized_data_source = 'tg' AND p.state_code = 100) OR (normalized_data_source = 'ex' AND p.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or p.team_id = team_id_filter))
             or (normalized_data_source = 'co' and p.state_code = 200 and (team_id_filter is null or p.team_id = team_id_filter))
@@ -78751,6 +79375,7 @@ begin
               or (normalized_data_source = 'my' and effective_user_id is not null and p2.user_id = effective_user_id and (state_code_filter is null or p2.state_code = state_code_filter))
               or (normalized_data_source = 'te' and team_id_filter is not null and can_read_team_filter and p2.team_id = team_id_filter and (state_code_filter is null or p2.state_code = state_code_filter))
             )
+          and (case when coalesce(filter_condition_jsonb->'classification','[]'::jsonb)='[]'::jsonb then true else (private.dataset_catalog_filter_matches(NULL,p2.json,(filter_condition_jsonb)) and (coalesce(type_of_data_set_filter,'all')='all' or p2.json #>> '{processDataSet,modellingAndValidation,LCIMethodAndAllocation,typeOfDataSet}'=type_of_data_set_filter)) end)
           order by p2.version desc, p2.modified_at desc
           limit 1
         ) latest_row on true
@@ -78769,7 +79394,7 @@ begin
 
   json_filter_clause := case
     when filter_condition_jsonb = '{}'::jsonb then ''
-    else 'and p.json @> $2'
+    else 'and private.dataset_catalog_filter_matches(NULL, p.json, $2)'
   end;
 
   v_sql := format($sql$
@@ -78813,7 +79438,8 @@ begin
             or ($5 = 'my' and $6 is not null and p2.user_id = $6 and ($8 is null or p2.state_code = $8))
             or ($5 = 'te' and $7 is not null and $9 and p2.team_id = $7 and ($8 is null or p2.state_code = $8))
           )
-        order by p2.version desc, p2.modified_at desc
+        and (case when coalesce($2->'classification','[]'::jsonb)='[]'::jsonb then true else (private.dataset_catalog_filter_matches(NULL,p2.json,($2)) and (coalesce($10,'all')='all' or p2.json #>> '{processDataSet,modellingAndValidation,LCIMethodAndAllocation,typeOfDataSet}'=$10)) end)
+          order by p2.version desc, p2.modified_at desc
         limit 1
       ) latest_row on true
     ),
@@ -78876,6 +79502,7 @@ begin
     else null::uuid
   end;
   filter_condition_jsonb := coalesce(filter_condition, '{}'::jsonb);
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   escaped_query_terms := private.pgroonga_escape_query_terms(query_terms);
   if cardinality(escaped_query_terms) = 0 then
     escaped_query_terms := private.pgroonga_escape_query_terms(array[query_text]);
@@ -78888,7 +79515,7 @@ begin
         select p.id, 1.0::double precision as search_score
         from public.processes p
         where p.id = exact_query_id
-          and p.json @> filter_condition_jsonb
+          and private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb)
           and (
             (((normalized_data_source = 'tg' AND p.state_code = 100) OR (normalized_data_source = 'ex' AND p.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or p.team_id = team_id_filter))
             or (normalized_data_source = 'co' and p.state_code = 200 and (team_id_filter is null or p.team_id = team_id_filter))
@@ -78914,6 +79541,7 @@ begin
               or (normalized_data_source = 'my' and effective_user_id is not null and p2.user_id = effective_user_id and (state_code_filter is null or p2.state_code = state_code_filter) and (not owner_draft_only or (p2.state_code = 0)) and p2.state_code is distinct from 120)
               or (normalized_data_source = 'te' and team_id_filter is not null and can_read_team_filter and p2.team_id = team_id_filter and (state_code_filter is null or p2.state_code = state_code_filter) and p2.state_code is distinct from 120)
             )
+          and (case when coalesce(filter_condition_jsonb->'classification','[]'::jsonb)='[]'::jsonb then true else (private.dataset_catalog_filter_matches(NULL,p2.json,(filter_condition_jsonb)) and (coalesce(type_of_data_set_filter,'all')='all' or p2.json #>> '{processDataSet,modellingAndValidation,LCIMethodAndAllocation,typeOfDataSet}'=type_of_data_set_filter)) end)
           order by p2.version desc, p2.modified_at desc
           limit 1
         ) latest_row on true
@@ -78932,7 +79560,7 @@ begin
 
   json_filter_clause := case
     when filter_condition_jsonb = '{}'::jsonb then ''
-    else 'and p.json @> $2'
+    else 'and private.dataset_catalog_filter_matches(NULL, p.json, $2)'
   end;
 
   v_sql := format($sql$
@@ -78977,7 +79605,8 @@ begin
             or ($5 = 'my' and $6 is not null and p2.user_id = $6 and ($8 is null or p2.state_code = $8) and (not $12 or (p2.state_code = 0)) and p2.state_code is distinct from 120)
             or ($5 = 'te' and $7 is not null and $9 and p2.team_id = $7 and ($8 is null or p2.state_code = $8) and p2.state_code is distinct from 120)
           )
-        order by p2.version desc, p2.modified_at desc
+        and (case when coalesce($2->'classification','[]'::jsonb)='[]'::jsonb then true else (private.dataset_catalog_filter_matches(NULL,p2.json,($2)) and (coalesce($10,'all')='all' or p2.json #>> '{processDataSet,modellingAndValidation,LCIMethodAndAllocation,typeOfDataSet}'=$10)) end)
+          order by p2.version desc, p2.modified_at desc
         limit 1
       ) latest_row on true
     ),
@@ -79100,6 +79729,7 @@ declare
 begin
   query_embedding_vector := query_embedding::vector(1024);
   filter_condition_jsonb := coalesce(nullif(btrim(filter_condition), ''), '{}')::jsonb;
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   normalized_data_source := coalesce(nullif(lower(btrim(data_source)), ''), 'tg');
   normalized_match_count := greatest(coalesce(match_count, 20), 1);
   candidate_size := greatest(normalized_match_count * 10, 200);
@@ -79113,6 +79743,7 @@ begin
     flow_type_array := null;
   end if;
   filter_condition_jsonb := filter_condition_jsonb - 'flowType';
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
 
   if filter_condition_jsonb ? 'asInput' then
     as_input := nullif(btrim(filter_condition_jsonb->>'asInput'), '')::boolean;
@@ -79120,6 +79751,7 @@ begin
     as_input := null;
   end if;
   filter_condition_jsonb := filter_condition_jsonb - 'asInput';
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
 
   if normalized_data_source = 'tg' then
     return query
@@ -79130,7 +79762,7 @@ begin
         from public.flows f
         where f.embedding_ft is not null
           and f.state_code = 100
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, f.json, filter_condition_jsonb))
           and (
             flow_type is null
             or flow_type = ''
@@ -79170,7 +79802,7 @@ begin
         from public.flows f
         where f.embedding_ft is not null
           and f.state_code = -1
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, f.json, filter_condition_jsonb))
           and (
             flow_type is null
             or flow_type = ''
@@ -79210,7 +79842,7 @@ begin
         from public.flows f
         where f.embedding_ft is not null
           and f.state_code = 200
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, f.json, filter_condition_jsonb))
           and (
             flow_type is null
             or flow_type = ''
@@ -79254,7 +79886,7 @@ begin
         from public.flows f
         where f.embedding_ft is not null
           and f.user_id = effective_user_id
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, f.json, filter_condition_jsonb))
           and (
             flow_type is null
             or flow_type = ''
@@ -79304,7 +79936,7 @@ begin
               and r.team_id = f.team_id
               and r.role::text in ('admin', 'member', 'owner')
           )
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, f.json, filter_condition_jsonb))
           and (
             flow_type is null
             or flow_type = ''
@@ -79365,6 +79997,7 @@ declare
 begin
   query_embedding_vector := query_embedding::extensions.vector(1024);
   filter_condition_jsonb := coalesce(nullif(btrim(filter_condition), ''), '{}')::jsonb;
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   normalized_data_source := coalesce(nullif(lower(btrim(data_source)), ''), 'tg');
   normalized_match_count := least(greatest(coalesce(match_count, 200), 1), 200);
   candidate_size := normalized_match_count;
@@ -79378,6 +80011,7 @@ begin
     flow_type_array := null;
   end if;
   filter_condition_jsonb := filter_condition_jsonb - 'flowType';
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
 
   if filter_condition_jsonb ? 'asInput' then
     as_input := nullif(btrim(filter_condition_jsonb->>'asInput'), '')::boolean;
@@ -79385,6 +80019,7 @@ begin
     as_input := null;
   end if;
   filter_condition_jsonb := filter_condition_jsonb - 'asInput';
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
 
   if normalized_data_source = 'tg' then
     return query
@@ -79396,7 +80031,7 @@ begin
         from public.flows f
         where f.embedding_ft is not null
           and f.state_code = 100
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, f.json, filter_condition_jsonb))
           and (
             flow_type is null
             or flow_type = ''
@@ -79438,7 +80073,7 @@ begin
         from public.flows f
         where f.embedding_ft is not null
           and f.state_code = -1
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, f.json, filter_condition_jsonb))
           and (
             flow_type is null
             or flow_type = ''
@@ -79480,7 +80115,7 @@ begin
         from public.flows f
         where f.embedding_ft is not null
           and f.state_code = 200
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, f.json, filter_condition_jsonb))
           and (
             flow_type is null
             or flow_type = ''
@@ -79526,7 +80161,7 @@ begin
         from public.flows f
         where f.embedding_ft is not null
           and f.user_id = effective_user_id
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, f.json, filter_condition_jsonb))
           and (
             flow_type is null
             or flow_type = ''
@@ -79578,7 +80213,7 @@ begin
               and r.team_id = f.team_id
               and r.role::text in ('admin', 'member', 'owner')
           )
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, f.json, filter_condition_jsonb))
           and (
             flow_type is null
             or flow_type = ''
@@ -79632,6 +80267,7 @@ declare
 begin
   query_embedding_vector := query_embedding::vector(1024);
   filter_condition_jsonb := coalesce(nullif(btrim(filter_condition), ''), '{}')::jsonb;
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   normalized_data_source := coalesce(nullif(lower(btrim(data_source)), ''), 'tg');
   normalized_match_count := greatest(coalesce(match_count, 20), 1);
   candidate_size := greatest(normalized_match_count * 10, 200);
@@ -79647,7 +80283,7 @@ begin
         from public.lifecyclemodels l
         where l.embedding_ft is not null
           and l.state_code = 100
-          and l.json @> filter_condition_jsonb
+          and private.dataset_catalog_filter_matches(NULL, l.json, filter_condition_jsonb)
         order by l.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -79675,7 +80311,7 @@ begin
         from public.lifecyclemodels l
         where l.embedding_ft is not null
           and l.state_code = -1
-          and l.json @> filter_condition_jsonb
+          and private.dataset_catalog_filter_matches(NULL, l.json, filter_condition_jsonb)
         order by l.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -79703,7 +80339,7 @@ begin
         from public.lifecyclemodels l
         where l.embedding_ft is not null
           and l.state_code = 200
-          and l.json @> filter_condition_jsonb
+          and private.dataset_catalog_filter_matches(NULL, l.json, filter_condition_jsonb)
         order by l.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -79735,7 +80371,7 @@ begin
         from public.lifecyclemodels l
         where l.embedding_ft is not null
           and l.user_id = effective_user_id
-          and l.json @> filter_condition_jsonb
+          and private.dataset_catalog_filter_matches(NULL, l.json, filter_condition_jsonb)
         order by l.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -79773,7 +80409,7 @@ begin
               and r.team_id = l.team_id
               and r.role::text in ('admin', 'member', 'owner')
           )
-          and l.json @> filter_condition_jsonb
+          and private.dataset_catalog_filter_matches(NULL, l.json, filter_condition_jsonb)
         order by l.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -79798,6 +80434,117 @@ $$;
 ALTER FUNCTION "private"."semantic_lifecyclemodel_candidates"("query_embedding" "text", "filter_condition" "text", "match_threshold" double precision, "match_count" integer, "data_source" "text") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "private"."semantic_lifecyclemodel_catalog_candidates"("p_table" "regclass", "query_embedding" "text", "filter_condition" "text" DEFAULT ''::"text", "match_threshold" double precision DEFAULT 0.5, "match_count" integer DEFAULT 20, "data_source" "text" DEFAULT 'tg'::"text", "state_code_filter" integer DEFAULT NULL::integer, "team_id_filter" "uuid" DEFAULT NULL::"uuid") RETURNS TABLE("rank" bigint, "id" "uuid", "distance" double precision)
+    LANGUAGE "plpgsql"
+    SET "row_security" TO 'on'
+    SET "search_path" TO 'private', 'api', 'public', 'util', 'extensions', 'extensions', 'pg_temp'
+    SET "statement_timeout" TO '60s'
+    SET "plan_cache_mode" TO 'force_custom_plan'
+    SET "hnsw.iterative_scan" TO 'strict_order'
+    AS $_$
+declare
+  query_embedding_vector extensions.vector(1024);
+  filter_condition_jsonb jsonb;
+  normalized_data_source text;
+  normalized_match_count integer;
+  candidate_size integer;
+  threshold_distance double precision;
+  effective_user_id uuid;
+  can_read_team_filter boolean;
+  visibility_clause text;
+  json_filter_clause text;
+  candidate_sql text;
+begin
+  if p_table is distinct from 'public.lifecyclemodels'::regclass then
+    raise exception 'unsupported semantic dataset table: %', p_table;
+  end if;
+
+  query_embedding_vector := query_embedding::extensions.vector(1024);
+  filter_condition_jsonb := coalesce(nullif(btrim(filter_condition), ''), '{}')::jsonb;
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
+  normalized_data_source := coalesce(nullif(lower(btrim(data_source)), ''), 'tg');
+  normalized_match_count := least(greatest(coalesce(match_count, 20), 1), 200);
+  candidate_size := greatest(normalized_match_count * 10, 200);
+  threshold_distance := 1 - least(greatest(coalesce(match_threshold, 0.5), -1), 1);
+  effective_user_id := private.dataset_search_effective_user_id('');
+  can_read_team_filter := private.dataset_search_can_read_team_filter(
+    team_id_filter,
+    effective_user_id
+  );
+
+  if normalized_data_source = 'tg' then
+    visibility_clause := 'd.state_code = 100 and ($7::uuid is null or d.team_id = $7)';
+  elsif normalized_data_source = 'ex' then
+    if auth.uid() is null then return; end if;
+    visibility_clause := 'd.state_code = -1 and ($7::uuid is null or d.team_id = $7)';
+  elsif normalized_data_source = 'co' then
+    visibility_clause := 'd.state_code = 200 and ($7::uuid is null or d.team_id = $7)';
+  elsif normalized_data_source = 'my' then
+    if effective_user_id is null then
+      return;
+    end if;
+    visibility_clause := 'd.user_id = $5 and ($8::integer is null or d.state_code = $8)';
+  elsif normalized_data_source = 'te' then
+    if team_id_filter is null or not can_read_team_filter then
+      return;
+    end if;
+    visibility_clause := 'd.team_id = $7 and ($8::integer is null or d.state_code = $8)';
+  else
+    return;
+  end if;
+
+  json_filter_clause := case
+    when filter_condition_jsonb = '{}'::jsonb then ''
+    else 'and private.dataset_catalog_filter_matches(NULL, d.json, $2)'
+  end;
+
+  candidate_sql := format(
+    $sql$
+      with candidates as materialized (
+        select
+          d.id as candidate_id,
+          d.embedding_ft <=> $1 as candidate_distance
+        from %1$s d
+        where d.embedding_ft is not null
+          and %2$s
+          %3$s
+        order by d.embedding_ft <=> $1
+        limit $3
+      ),
+      deduplicated as (
+        select
+          candidates.candidate_id,
+          min(candidates.candidate_distance) as candidate_distance
+        from candidates
+        where candidates.candidate_distance < $4
+        group by candidates.candidate_id
+      )
+      select
+        rank() over (
+          order by deduplicated.candidate_distance, deduplicated.candidate_id
+        )::bigint,
+        deduplicated.candidate_id,
+        deduplicated.candidate_distance
+      from deduplicated
+      order by deduplicated.candidate_distance, deduplicated.candidate_id
+      limit $6
+    $sql$,
+    p_table,
+    visibility_clause,
+    json_filter_clause
+  );
+
+  return query execute candidate_sql
+    using query_embedding_vector, filter_condition_jsonb, candidate_size,
+          threshold_distance, effective_user_id, normalized_match_count,
+          team_id_filter, state_code_filter;
+end;
+$_$;
+
+
+ALTER FUNCTION "private"."semantic_lifecyclemodel_catalog_candidates"("p_table" "regclass", "query_embedding" "text", "filter_condition" "text", "match_threshold" double precision, "match_count" integer, "data_source" "text", "state_code_filter" integer, "team_id_filter" "uuid") OWNER TO "api_internal_executor";
+
+
 CREATE OR REPLACE FUNCTION "private"."semantic_process_candidates"("query_embedding" "text", "filter_condition" "text" DEFAULT ''::"text", "match_threshold" double precision DEFAULT 0.5, "match_count" integer DEFAULT 20, "data_source" "text" DEFAULT 'tg'::"text") RETURNS TABLE("rank" bigint, "id" "uuid", "distance" double precision)
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'private', 'api', 'public', 'util', 'extensions', 'extensions', 'pg_temp'
@@ -79816,6 +80563,7 @@ declare
 begin
   query_embedding_vector := query_embedding::vector(1024);
   filter_condition_jsonb := coalesce(nullif(btrim(filter_condition), ''), '{}')::jsonb;
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   normalized_data_source := coalesce(nullif(lower(btrim(data_source)), ''), 'tg');
   normalized_match_count := greatest(coalesce(match_count, 20), 1);
   candidate_size := greatest(normalized_match_count * 10, 200);
@@ -79831,7 +80579,7 @@ begin
         from public.processes p
         where p.embedding_ft is not null
           and p.state_code = 100
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb))
         order by p.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -79859,7 +80607,7 @@ begin
         from public.processes p
         where p.embedding_ft is not null
           and p.state_code = -1
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb))
         order by p.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -79887,7 +80635,7 @@ begin
         from public.processes p
         where p.embedding_ft is not null
           and p.state_code = 200
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb))
         order by p.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -79919,7 +80667,7 @@ begin
         from public.processes p
         where p.embedding_ft is not null
           and p.user_id = effective_user_id
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb))
         order by p.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -79957,7 +80705,7 @@ begin
               and r.team_id = p.team_id
               and r.role::text in ('admin', 'member', 'owner')
           )
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb))
         order by p.embedding_ft <=> query_embedding_vector
         limit candidate_size
       ),
@@ -80003,6 +80751,7 @@ declare
 begin
   query_embedding_vector := query_embedding::extensions.vector(1024);
   filter_condition_jsonb := coalesce(nullif(btrim(filter_condition), ''), '{}')::jsonb;
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   normalized_data_source := coalesce(nullif(lower(btrim(data_source)), ''), 'tg');
   normalized_match_count := least(greatest(coalesce(match_count, 200), 1), 200);
   candidate_size := normalized_match_count;
@@ -80019,7 +80768,7 @@ begin
         from public.processes p
         where p.embedding_ft is not null
           and p.state_code = 100
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb))
         order by p.embedding_ft operator(extensions.<=>) query_embedding_vector
         limit candidate_size
       ),
@@ -80049,7 +80798,7 @@ begin
         from public.processes p
         where p.embedding_ft is not null
           and p.state_code = -1
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb))
         order by p.embedding_ft operator(extensions.<=>) query_embedding_vector
         limit candidate_size
       ),
@@ -80079,7 +80828,7 @@ begin
         from public.processes p
         where p.embedding_ft is not null
           and p.state_code = 200
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb))
         order by p.embedding_ft operator(extensions.<=>) query_embedding_vector
         limit candidate_size
       ),
@@ -80113,7 +80862,7 @@ begin
         from public.processes p
         where p.embedding_ft is not null
           and p.user_id = effective_user_id
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb))
         order by p.embedding_ft operator(extensions.<=>) query_embedding_vector
         limit candidate_size
       ),
@@ -80153,7 +80902,7 @@ begin
               and r.team_id = p.team_id
               and r.role::text in ('admin', 'member', 'owner')
           )
-          and (filter_condition_jsonb = '{}'::jsonb or p.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, p.json, filter_condition_jsonb))
         order by p.embedding_ft operator(extensions.<=>) query_embedding_vector
         limit candidate_size
       ),
@@ -80210,6 +80959,7 @@ begin
 
   query_embedding_vector := query_embedding::extensions.vector(1024);
   filter_condition_jsonb := coalesce(nullif(btrim(filter_condition), ''), '{}')::jsonb;
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   normalized_data_source := coalesce(nullif(lower(btrim(data_source)), ''), 'tg');
   normalized_match_count := least(greatest(coalesce(match_count, 20), 1), 200);
   candidate_size := greatest(normalized_match_count * 10, 200);
@@ -80243,7 +80993,7 @@ begin
 
   json_filter_clause := case
     when filter_condition_jsonb = '{}'::jsonb then ''
-    else 'and d.json @> $2'
+    else 'and private.dataset_catalog_filter_matches(NULL, d.json, $2)'
   end;
 
   candidate_sql := format(
@@ -106024,6 +106774,12 @@ GRANT ALL ON FUNCTION "api"."hybrid_search_lifecyclemodels"("query_text" "text",
 
 
 
+REVOKE ALL ON FUNCTION "api"."hybrid_search_lifecyclemodels_filtered"("query_text" "text", "query_embedding" "text", "filter_condition" "jsonb", "match_threshold" double precision, "match_count" integer, "lexical_weight" double precision, "semantic_weight" double precision, "rrf_k" integer, "data_source" "text", "page_size" integer, "page_current" integer, "query_terms" "text"[], "state_code_filter" integer, "team_id_filter" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."hybrid_search_lifecyclemodels_filtered"("query_text" "text", "query_embedding" "text", "filter_condition" "jsonb", "match_threshold" double precision, "match_count" integer, "lexical_weight" double precision, "semantic_weight" double precision, "rrf_k" integer, "data_source" "text", "page_size" integer, "page_current" integer, "query_terms" "text"[], "state_code_filter" integer, "team_id_filter" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "api"."hybrid_search_lifecyclemodels_filtered"("query_text" "text", "query_embedding" "text", "filter_condition" "jsonb", "match_threshold" double precision, "match_count" integer, "lexical_weight" double precision, "semantic_weight" double precision, "rrf_k" integer, "data_source" "text", "page_size" integer, "page_current" integer, "query_terms" "text"[], "state_code_filter" integer, "team_id_filter" "uuid") TO "authenticated";
+
+
+
 REVOKE ALL ON FUNCTION "api"."hybrid_search_lifecyclemodels_v2"("query_text" "text", "query_embedding" "text", "filter_condition" "text", "match_threshold" double precision, "match_count" integer, "lexical_weight" double precision, "semantic_weight" double precision, "rrf_k" integer, "data_source" "text", "page_size" integer, "page_current" integer, "query_terms" "text"[]) FROM PUBLIC;
 GRANT ALL ON FUNCTION "api"."hybrid_search_lifecyclemodels_v2"("query_text" "text", "query_embedding" "text", "filter_condition" "text", "match_threshold" double precision, "match_count" integer, "lexical_weight" double precision, "semantic_weight" double precision, "rrf_k" integer, "data_source" "text", "page_size" integer, "page_current" integer, "query_terms" "text"[]) TO "anon";
 GRANT ALL ON FUNCTION "api"."hybrid_search_lifecyclemodels_v2"("query_text" "text", "query_embedding" "text", "filter_condition" "text", "match_threshold" double precision, "match_count" integer, "lexical_weight" double precision, "semantic_weight" double precision, "rrf_k" integer, "data_source" "text", "page_size" integer, "page_current" integer, "query_terms" "text"[]) TO "authenticated";
@@ -106147,9 +106903,21 @@ GRANT ALL ON FUNCTION "api"."list_dataset_display_candidates"("p_dataset_kind" "
 
 
 
+REVOKE ALL ON FUNCTION "api"."list_dataset_display_candidates_filtered"("p_dataset_kind" "text", "p_visibility" "text", "p_query" "text", "p_page_size" integer, "p_page" integer, "p_filter_condition" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."list_dataset_display_candidates_filtered"("p_dataset_kind" "text", "p_visibility" "text", "p_query" "text", "p_page_size" integer, "p_page" integer, "p_filter_condition" "jsonb") TO "authenticated";
+GRANT ALL ON FUNCTION "api"."list_dataset_display_candidates_filtered"("p_dataset_kind" "text", "p_visibility" "text", "p_query" "text", "p_page_size" integer, "p_page" integer, "p_filter_condition" "jsonb") TO "api_internal_executor";
+
+
+
 REVOKE ALL ON FUNCTION "api"."list_displayed_datasets"("p_dataset_kind" "text", "p_query" "text", "p_page_size" integer, "p_page" integer) FROM PUBLIC;
 GRANT ALL ON FUNCTION "api"."list_displayed_datasets"("p_dataset_kind" "text", "p_query" "text", "p_page_size" integer, "p_page" integer) TO "authenticated";
 GRANT ALL ON FUNCTION "api"."list_displayed_datasets"("p_dataset_kind" "text", "p_query" "text", "p_page_size" integer, "p_page" integer) TO "api_internal_executor";
+
+
+
+REVOKE ALL ON FUNCTION "api"."list_displayed_datasets_filtered"("p_dataset_kind" "text", "p_query" "text", "p_page_size" integer, "p_page" integer, "p_filter_condition" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."list_displayed_datasets_filtered"("p_dataset_kind" "text", "p_query" "text", "p_page_size" integer, "p_page" integer, "p_filter_condition" "jsonb") TO "authenticated";
+GRANT ALL ON FUNCTION "api"."list_displayed_datasets_filtered"("p_dataset_kind" "text", "p_query" "text", "p_page_size" integer, "p_page" integer, "p_filter_condition" "jsonb") TO "api_internal_executor";
 
 
 
@@ -106840,6 +107608,11 @@ GRANT ALL ON FUNCTION "api"."qry_team_list"("p_mode" "text", "p_keyword" "text",
 
 
 
+REVOKE ALL ON FUNCTION "api"."query_dataset_catalog"("p_dataset_kind" "text", "p_data_source" "text", "p_filter_condition" "jsonb", "p_state_code" integer, "p_team_id" "uuid", "p_page_size" integer, "p_page_current" integer, "p_sort_by" "text", "p_sort_direction" "text", "p_owner_draft_only" boolean, "p_version_scope" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."query_dataset_catalog"("p_dataset_kind" "text", "p_data_source" "text", "p_filter_condition" "jsonb", "p_state_code" integer, "p_team_id" "uuid", "p_page_size" integer, "p_page_current" integer, "p_sort_by" "text", "p_sort_direction" "text", "p_owner_draft_only" boolean, "p_version_scope" "text") TO "authenticated";
+
+
+
 REVOKE ALL ON FUNCTION "api"."search_contacts"("query_text" "text", "filter_condition" "jsonb", "page_size" integer, "page_current" integer, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer) FROM PUBLIC;
 GRANT ALL ON FUNCTION "api"."search_contacts"("query_text" "text", "filter_condition" "jsonb", "page_size" integer, "page_current" integer, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer) TO "anon";
 GRANT ALL ON FUNCTION "api"."search_contacts"("query_text" "text", "filter_condition" "jsonb", "page_size" integer, "page_current" integer, "data_source" "text", "this_user_id" "text", "team_id_filter" "uuid", "state_code_filter" integer) TO "authenticated";
@@ -106855,6 +107628,12 @@ GRANT ALL ON FUNCTION "api"."search_contacts_latest"("query_text" "text", "filte
 REVOKE ALL ON FUNCTION "api"."search_dataset_json_uuid_mentions"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer) FROM PUBLIC;
 GRANT ALL ON FUNCTION "api"."search_dataset_json_uuid_mentions"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer) TO "anon";
 GRANT ALL ON FUNCTION "api"."search_dataset_json_uuid_mentions"("p_uuid" "uuid", "p_source_entity_kinds" "text"[], "p_data_source" "text", "p_this_user_id" "text", "p_team_id_filter" "uuid", "p_state_code_filter" integer, "p_limit" integer) TO "authenticated";
+
+
+
+REVOKE ALL ON FUNCTION "api"."search_dataset_uuid_mentions_page"("p_dataset_kind" "text", "p_uuid" "uuid", "p_data_source" "text", "p_filter_condition" "jsonb", "p_state_code" integer, "p_team_id" "uuid", "p_page_size" integer, "p_page_current" integer, "p_sort_by" "text", "p_sort_direction" "text", "p_owner_draft_only" boolean, "p_version_scope" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "api"."search_dataset_uuid_mentions_page"("p_dataset_kind" "text", "p_uuid" "uuid", "p_data_source" "text", "p_filter_condition" "jsonb", "p_state_code" integer, "p_team_id" "uuid", "p_page_size" integer, "p_page_current" integer, "p_sort_by" "text", "p_sort_direction" "text", "p_owner_draft_only" boolean, "p_version_scope" "text") TO "anon";
+GRANT ALL ON FUNCTION "api"."search_dataset_uuid_mentions_page"("p_dataset_kind" "text", "p_uuid" "uuid", "p_data_source" "text", "p_filter_condition" "jsonb", "p_state_code" integer, "p_team_id" "uuid", "p_page_size" integer, "p_page_current" integer, "p_sort_by" "text", "p_sort_direction" "text", "p_owner_draft_only" boolean, "p_version_scope" "text") TO "authenticated";
 
 
 
@@ -107568,6 +108347,32 @@ REVOKE ALL ON FUNCTION "private"."dataset_alias_v2_replace_fu_text"("p_before" "
 
 
 
+REVOKE ALL ON FUNCTION "private"."dataset_catalog_classification_matches"("p_kind" "text", "p_json" "jsonb", "p_selectors" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "private"."dataset_catalog_classification_matches"("p_kind" "text", "p_json" "jsonb", "p_selectors" "jsonb") TO "api_internal_executor";
+GRANT ALL ON FUNCTION "private"."dataset_catalog_classification_matches"("p_kind" "text", "p_json" "jsonb", "p_selectors" "jsonb") TO "next_public_search_executor";
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_catalog_display_metadata"("p_kind" "text", "p_json" "jsonb") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_catalog_filter_matches"("p_kind" "text", "p_json" "jsonb", "p_filter" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "private"."dataset_catalog_filter_matches"("p_kind" "text", "p_json" "jsonb", "p_filter" "jsonb") TO "api_internal_executor";
+GRANT ALL ON FUNCTION "private"."dataset_catalog_filter_matches"("p_kind" "text", "p_json" "jsonb", "p_filter" "jsonb") TO "next_public_search_executor";
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_catalog_filter_validate"("p_filter" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "private"."dataset_catalog_filter_validate"("p_filter" "jsonb") TO "api_internal_executor";
+GRANT ALL ON FUNCTION "private"."dataset_catalog_filter_validate"("p_filter" "jsonb") TO "next_public_search_executor";
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_catalog_source_json"("p_kind" "text", "p_id" "uuid", "p_version" "text") FROM PUBLIC;
+
+
+
 REVOKE ALL ON FUNCTION "private"."dataset_derivative_http_body_candidate_ids"("p_body" "bytea") FROM PUBLIC;
 
 
@@ -107577,6 +108382,10 @@ REVOKE ALL ON FUNCTION "private"."dataset_derivative_rebuild_queue_cache"("p_tar
 
 
 REVOKE ALL ON FUNCTION "private"."dataset_display_list"("p_kind" "text", "p_visibility" "text", "p_query" "text", "p_page_size" integer, "p_page" integer, "p_candidates" boolean) FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "private"."dataset_display_list_filtered"("p_kind" "text", "p_visibility" "text", "p_query" "text", "p_page_size" integer, "p_page" integer, "p_candidates" boolean, "p_filter_condition" "jsonb") FROM PUBLIC;
 
 
 
@@ -108619,6 +109428,10 @@ REVOKE ALL ON FUNCTION "private"."guard_portal_navigation_seed_v1"() FROM PUBLIC
 REVOKE ALL ON FUNCTION "private"."hybrid_search_flows_v2_impl"("query_text" "text", "query_embedding" "text", "filter_condition" "text", "match_threshold" double precision, "match_count" integer, "lexical_weight" double precision, "semantic_weight" double precision, "rrf_k" integer, "data_source" "text", "page_size" integer, "page_current" integer, "query_terms" "text"[]) FROM PUBLIC;
 GRANT ALL ON FUNCTION "private"."hybrid_search_flows_v2_impl"("query_text" "text", "query_embedding" "text", "filter_condition" "text", "match_threshold" double precision, "match_count" integer, "lexical_weight" double precision, "semantic_weight" double precision, "rrf_k" integer, "data_source" "text", "page_size" integer, "page_current" integer, "query_terms" "text"[]) TO "service_role";
 GRANT ALL ON FUNCTION "private"."hybrid_search_flows_v2_impl"("query_text" "text", "query_embedding" "text", "filter_condition" "text", "match_threshold" double precision, "match_count" integer, "lexical_weight" double precision, "semantic_weight" double precision, "rrf_k" integer, "data_source" "text", "page_size" integer, "page_current" integer, "query_terms" "text"[]) TO "api_internal_executor";
+
+
+
+REVOKE ALL ON FUNCTION "private"."hybrid_search_lifecyclemodels_catalog"("p_table" "regclass", "query_text" "text", "query_embedding" "text", "filter_condition" "text", "match_threshold" double precision, "match_count" integer, "lexical_weight" double precision, "semantic_weight" double precision, "rrf_k" integer, "data_source" "text", "page_size" integer, "page_current" integer, "query_terms" "text"[], "state_code_filter" integer, "team_id_filter" "uuid") FROM PUBLIC;
 
 
 
@@ -109707,6 +110520,10 @@ REVOKE ALL ON FUNCTION "private"."semantic_flow_version_candidates_v1"("query_em
 REVOKE ALL ON FUNCTION "private"."semantic_lifecyclemodel_candidates"("query_embedding" "text", "filter_condition" "text", "match_threshold" double precision, "match_count" integer, "data_source" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "private"."semantic_lifecyclemodel_candidates"("query_embedding" "text", "filter_condition" "text", "match_threshold" double precision, "match_count" integer, "data_source" "text") TO "service_role";
 GRANT ALL ON FUNCTION "private"."semantic_lifecyclemodel_candidates"("query_embedding" "text", "filter_condition" "text", "match_threshold" double precision, "match_count" integer, "data_source" "text") TO "api_internal_executor";
+
+
+
+REVOKE ALL ON FUNCTION "private"."semantic_lifecyclemodel_catalog_candidates"("p_table" "regclass", "query_embedding" "text", "filter_condition" "text", "match_threshold" double precision, "match_count" integer, "data_source" "text", "state_code_filter" integer, "team_id_filter" "uuid") FROM PUBLIC;
 
 
 
