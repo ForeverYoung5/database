@@ -33,7 +33,7 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-14
-lastReviewedCommit: 79bb9823b6951f836665b903495ae23ce401ace9
+lastReviewedCommit: f58da675c15a7f0c11a975e88548b8d45062fbce
 lastReviewedNote: "Reviewed Database #838 classification-aware raw Hybrid fingerprint and predicate baselines. Four private definition hashes were independently replayed and verified; the existing owners, security modes, settings, ACLs, branch counts and Portal recovery boundaries remain unchanged."
 related:
   - ../../AGENTS.md
