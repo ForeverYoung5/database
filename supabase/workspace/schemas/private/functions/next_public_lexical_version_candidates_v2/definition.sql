@@ -37,7 +37,7 @@ begin
     v_filter_sql := $sql$
       source.state_code = $1
       and ($2::uuid is null or source.team_id = $2)
-      and ($3::jsonb = '{}'::jsonb or source.json @> $3)
+      and ($3::jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, source.json, $3))
       and (
         $4::text is null
         or source.json #>> '{processDataSet,modellingAndValidation,LCIMethodAndAllocation,typeOfDataSet}' = $4
@@ -47,7 +47,7 @@ begin
     v_filter_sql := $sql$
       source.state_code = $1
       and ($2::uuid is null or source.team_id = $2)
-      and ($3::jsonb = '{}'::jsonb or source.json @> $3)
+      and ($3::jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, source.json, $3))
       and (
         pg_catalog.cardinality($5::text[]) = 0
         or source.json #>> '{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}' = any($5)

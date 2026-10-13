@@ -25,6 +25,14 @@ BEGIN
     ELSE NULL::uuid
   END;
   filter_condition_jsonb := coalesce(filter_condition, '{}'::jsonb);
+  -- Preserve this raw invoker's RLS/ACL; validate before boolean casts.
+  if filter_condition_jsonb ? 'flowType' and jsonb_typeof(filter_condition_jsonb->'flowType') is distinct from 'string' then
+    raise exception using errcode='22023',message='flowType must be a string';
+  end if;
+  if filter_condition_jsonb ? 'asInput' and not (
+    jsonb_typeof(filter_condition_jsonb->'asInput')='boolean'
+    or (jsonb_typeof(filter_condition_jsonb->'asInput')='string' and lower(btrim(filter_condition_jsonb->>'asInput')) in ('true','false'))
+  ) then raise exception using errcode='22023',message='asInput must be boolean or true/false string'; end if;
 
   flow_type := nullif(btrim(filter_condition_jsonb->>'flowType'), '');
   IF flow_type IS NOT NULL THEN

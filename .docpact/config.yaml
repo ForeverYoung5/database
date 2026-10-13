@@ -1,8 +1,8 @@
 version: 1
 layout: repo
 lastReviewedAt: "2026-10-14"
-lastReviewedCommit: "d5250151ca2da18919ca415df62a654672619dc5"
-lastReviewedNote: "Reviewed Database #834 / Worker #318 internal scanner R5 admission and warm-history test contract. New requests avoid old R4 metadata while historical fingerprints, artifacts, public DTOs, scientific rules and leases remain unchanged. Worker-before-config adoption and real reset/populated-upgrade/native-consumer validation remain required; source review is not SQL execution."
+lastReviewedCommit: "6428ff2822fbad63c7c44a33d38224b3b7933066"
+lastReviewedNote: "Reviewed Database #838 canonical classification/RLS repair, generated schema/type refresh and registration of the 526-assertion suite in local-contract CI. Preview, persistent Dev, production authorization and migration ownership are unchanged."
 
 # Keep deterministic governance facts here.
 # AGENTS.md remains the repo contract entrypoint.

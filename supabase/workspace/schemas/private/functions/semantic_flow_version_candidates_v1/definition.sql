@@ -22,6 +22,7 @@ declare
 begin
   query_embedding_vector := query_embedding::extensions.vector(1024);
   filter_condition_jsonb := coalesce(nullif(btrim(filter_condition), ''), '{}')::jsonb;
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   normalized_data_source := coalesce(nullif(lower(btrim(data_source)), ''), 'tg');
   normalized_match_count := least(greatest(coalesce(match_count, 200), 1), 200);
   candidate_size := normalized_match_count;
@@ -35,6 +36,7 @@ begin
     flow_type_array := null;
   end if;
   filter_condition_jsonb := filter_condition_jsonb - 'flowType';
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
 
   if filter_condition_jsonb ? 'asInput' then
     as_input := nullif(btrim(filter_condition_jsonb->>'asInput'), '')::boolean;
@@ -42,6 +44,7 @@ begin
     as_input := null;
   end if;
   filter_condition_jsonb := filter_condition_jsonb - 'asInput';
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
 
   if normalized_data_source = 'tg' then
     return query
@@ -53,7 +56,7 @@ begin
         from public.flows f
         where f.embedding_ft is not null
           and f.state_code = 100
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, f.json, filter_condition_jsonb))
           and (
             flow_type is null
             or flow_type = ''
@@ -95,7 +98,7 @@ begin
         from public.flows f
         where f.embedding_ft is not null
           and f.state_code = -1
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, f.json, filter_condition_jsonb))
           and (
             flow_type is null
             or flow_type = ''
@@ -137,7 +140,7 @@ begin
         from public.flows f
         where f.embedding_ft is not null
           and f.state_code = 200
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, f.json, filter_condition_jsonb))
           and (
             flow_type is null
             or flow_type = ''
@@ -183,7 +186,7 @@ begin
         from public.flows f
         where f.embedding_ft is not null
           and f.user_id = effective_user_id
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, f.json, filter_condition_jsonb))
           and (
             flow_type is null
             or flow_type = ''
@@ -235,7 +238,7 @@ begin
               and r.team_id = f.team_id
               and r.role::text in ('admin', 'member', 'owner')
           )
-          and (filter_condition_jsonb = '{}'::jsonb or f.json @> filter_condition_jsonb)
+          and (filter_condition_jsonb = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, f.json, filter_condition_jsonb))
           and (
             flow_type is null
             or flow_type = ''

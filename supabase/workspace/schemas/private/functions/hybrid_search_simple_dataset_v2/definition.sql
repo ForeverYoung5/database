@@ -39,6 +39,7 @@ begin
   candidate_limit := least(greatest(normalized_match_count, normalized_page_size) * 10, 5000);
   normalized_rrf_k := greatest(coalesce(rrf_k, 10), 1);
   filter_condition_jsonb := coalesce(nullif(btrim(filter_condition), ''), '{}')::jsonb;
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   escaped_query_terms := private.pgroonga_escape_query_terms(query_terms);
   if cardinality(escaped_query_terms) = 0 then
     escaped_query_terms := private.pgroonga_escape_query_terms(array[query_text]);
@@ -73,7 +74,7 @@ begin
 
   json_filter_clause := case
     when filter_condition_jsonb = '{}'::jsonb then ''
-    else 'and d.json @> $2'
+    else 'and private.dataset_catalog_filter_matches(NULL, d.json, $2)'
   end;
   text_match_clause := case
     when cardinality(escaped_query_terms) = 0 then 'false'
@@ -139,7 +140,7 @@ begin
         select d.*, fused.score
         from %1$s d
         join fused on fused.id = d.id
-        where %3$s
+        where %3$s and (case when coalesce($2->'classification','[]'::jsonb)='[]'::jsonb then true else private.dataset_catalog_filter_matches(NULL,d.json,$2) end)
       ),
       latest_rows as (
         select distinct on (visible_rows.id)

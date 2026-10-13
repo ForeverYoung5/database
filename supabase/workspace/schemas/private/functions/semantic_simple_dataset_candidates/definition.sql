@@ -29,6 +29,7 @@ begin
 
   query_embedding_vector := query_embedding::extensions.vector(1024);
   filter_condition_jsonb := coalesce(nullif(btrim(filter_condition), ''), '{}')::jsonb;
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   normalized_data_source := coalesce(nullif(lower(btrim(data_source)), ''), 'tg');
   normalized_match_count := least(greatest(coalesce(match_count, 20), 1), 200);
   candidate_size := greatest(normalized_match_count * 10, 200);
@@ -62,7 +63,7 @@ begin
 
   json_filter_clause := case
     when filter_condition_jsonb = '{}'::jsonb then ''
-    else 'and d.json @> $2'
+    else 'and private.dataset_catalog_filter_matches(NULL, d.json, $2)'
   end;
 
   candidate_sql := format(

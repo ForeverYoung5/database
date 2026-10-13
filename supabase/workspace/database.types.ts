@@ -1168,6 +1168,32 @@ export type Database = {
           version: string
         }[]
       }
+      hybrid_search_lifecyclemodels_filtered: {
+        Args: {
+          data_source?: string
+          filter_condition?: Json
+          lexical_weight?: number
+          match_count?: number
+          match_threshold?: number
+          page_current?: number
+          page_size?: number
+          query_embedding: string
+          query_terms?: string[]
+          query_text: string
+          rrf_k?: number
+          semantic_weight?: number
+          state_code_filter?: number
+          team_id_filter?: string
+        }
+        Returns: {
+          id: string
+          json: Json
+          modified_at: string
+          team_id: string
+          total_count: number
+          version: string
+        }[]
+      }
       hybrid_search_lifecyclemodels_v2: {
         Args: {
           data_source?: string
@@ -1475,9 +1501,30 @@ export type Database = {
         }
         Returns: Json
       }
+      list_dataset_display_candidates_filtered: {
+        Args: {
+          p_dataset_kind?: string
+          p_filter_condition?: Json
+          p_page?: number
+          p_page_size?: number
+          p_query?: string
+          p_visibility?: string
+        }
+        Returns: Json
+      }
       list_displayed_datasets: {
         Args: {
           p_dataset_kind?: string
+          p_page?: number
+          p_page_size?: number
+          p_query?: string
+        }
+        Returns: Json
+      }
+      list_displayed_datasets_filtered: {
+        Args: {
+          p_dataset_kind?: string
+          p_filter_condition?: Json
           p_page?: number
           p_page_size?: number
           p_query?: string
@@ -2852,6 +2899,33 @@ export type Database = {
           total_count: number
         }[]
       }
+      query_dataset_catalog: {
+        Args: {
+          p_data_source?: string
+          p_dataset_kind: string
+          p_filter_condition?: Json
+          p_owner_draft_only?: boolean
+          p_page_current?: number
+          p_page_size?: number
+          p_sort_by?: string
+          p_sort_direction?: string
+          p_state_code?: number
+          p_team_id?: string
+          p_version_scope?: string
+        }
+        Returns: {
+          created_at: string
+          id: string
+          json: Json
+          model_id: string
+          model_version: string
+          modified_at: string
+          state_code: number
+          team_id: string
+          total_count: number
+          version: string
+        }[]
+      }
       search_contacts: {
         Args: {
           data_source?: string
@@ -2915,6 +2989,35 @@ export type Database = {
           source_name: string
           source_team_id: string
           source_version: string
+        }[]
+      }
+      search_dataset_uuid_mentions_page: {
+        Args: {
+          p_data_source?: string
+          p_dataset_kind: string
+          p_filter_condition?: Json
+          p_owner_draft_only?: boolean
+          p_page_current?: number
+          p_page_size?: number
+          p_sort_by?: string
+          p_sort_direction?: string
+          p_state_code?: number
+          p_team_id?: string
+          p_uuid: string
+          p_version_scope?: string
+        }
+        Returns: {
+          matched_by: string
+          matched_entity_table: string
+          rank: number
+          source_entity_kind: string
+          source_id: string
+          source_json: Json
+          source_modified_at: string
+          source_name: string
+          source_team_id: string
+          source_version: string
+          total_count: number
         }[]
       }
       search_flowproperties: {

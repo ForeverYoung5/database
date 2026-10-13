@@ -25,9 +25,10 @@ begin
     else null::uuid
   end;
   filter_condition_jsonb := coalesce(filter_condition, '{}'::jsonb);
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   json_filter_clause := case
     when filter_condition_jsonb = '{}'::jsonb then ''
-    else 'and d.json @> $8'
+    else 'and private.dataset_catalog_filter_matches(NULL, d.json, $8)'
   end;
 
   if exact_query_id is not null then
@@ -58,6 +59,7 @@ begin
               or ($4 = 'my' and $5 is not null and d2.user_id = $5 and ($7 is null or d2.state_code = $7))
               or ($4 = 'te' and $6 is not null and d2.team_id = $6 and ($7 is null or d2.state_code = $7))
             )
+          and (case when coalesce($8->'classification','[]'::jsonb)='[]'::jsonb then true else (private.dataset_catalog_filter_matches(NULL,d2.json,($8))) end)
           order by d2.version desc, d2.modified_at desc
           limit 1
         ) latest_row on true
@@ -82,7 +84,7 @@ begin
 
   json_filter_clause := case
     when filter_condition_jsonb = '{}'::jsonb then ''
-    else 'and d.json @> $2'
+    else 'and private.dataset_catalog_filter_matches(NULL, d.json, $2)'
   end;
 
   v_sql := format($sql$
@@ -121,7 +123,8 @@ begin
             or ($5 = 'my' and $6 is not null and d2.user_id = $6 and ($8 is null or d2.state_code = $8))
             or ($5 = 'te' and $7 is not null and d2.team_id = $7 and ($8 is null or d2.state_code = $8))
           )
-        order by d2.version desc, d2.modified_at desc
+        and (case when coalesce($2->'classification','[]'::jsonb)='[]'::jsonb then true else (private.dataset_catalog_filter_matches(NULL,d2.json,($2))) end)
+          order by d2.version desc, d2.modified_at desc
         limit 1
       ) latest_row on true
     ),

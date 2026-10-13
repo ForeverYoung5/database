@@ -12,6 +12,7 @@ begin
   candidate_limit := greatest(coalesce(match_count, 20), coalesce(page_size, 10)) * 10;
   semantic_match_count := greatest(coalesce(match_count, 20), coalesce(page_size, 10));
   filter_condition_jsonb := coalesce(nullif(btrim(filter_condition), ''), '{}')::jsonb;
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   text_weight := coalesce(lexical_weight, 0);
 
   return query
@@ -72,7 +73,7 @@ begin
               and r.role::text in ('admin', 'member', 'owner')
           )
         )
-      )
+      ) and (case when coalesce((coalesce(nullif(btrim(filter_condition),''),'{}')::jsonb)->'classification','[]'::jsonb)='[]'::jsonb then true else private.dataset_catalog_filter_matches(NULL,f.json,(coalesce(nullif(btrim(filter_condition),''),'{}')::jsonb)) end)
     ),
     latest_rows as (
       select distinct on (visible_rows.id)

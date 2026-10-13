@@ -88,7 +88,12 @@ begin
     from pg_catalog.jsonb_array_elements(v_classification) as selected(item);
   end if;
 
-  v_residual := v_filter - 'flowType' - 'asInput' - 'classification';
+  -- Multi-system/path predicates run against each source before recall.
+  -- The flat code sidecar cannot represent a complete system/path selector.
+  v_classification_codes := '{}'::text[];
+  v_elementary_codes := '{}'::text[];
+  v_residual := v_filter - 'flowType' - 'asInput';
+  perform private.dataset_catalog_filter_validate(v_filter);
 
   if v_source in ('my', 'te', 'ex') and v_actor is null then return; end if;
   if v_source = 'te' and (
@@ -140,7 +145,7 @@ begin
           and (state_code_filter is null or source.state_code = state_code_filter)
           and private.dataset_search_can_read_team_filter(team_id_filter, v_actor))
       )
-      and (v_residual = '{}'::jsonb or source.json @> v_residual)
+      and (v_residual = '{}'::jsonb or private.dataset_catalog_filter_matches(NULL, source.json, v_residual))
       and (
         pg_catalog.cardinality(v_flow_types) = 0
         or source.json #>> '{flowDataSet,modellingAndValidation,LCIMethod,typeOfDataSet}' = any(v_flow_types)

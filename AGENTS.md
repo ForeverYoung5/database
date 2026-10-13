@@ -37,9 +37,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-10-12
-lastReviewedCommit: 294e6cbe38dbb1f26c901d74b67d9c47ebfcc7dd
-lastReviewedNote: "Reviewed Database #834 / Worker #318 internal scanner R5 admission and warm-history test contract. New requests avoid old R4 metadata while historical fingerprints, artifacts, public DTOs, scientific rules and leases remain unchanged. Worker-before-config adoption and real reset/populated-upgrade/native-consumer validation remain required; source review is not SQL execution."
+lastReviewedAt: 2026-10-14
+lastReviewedCommit: 6428ff2822fbad63c7c44a33d38224b3b7933066
+lastReviewedNote: "Reviewed Database #838 canonical classification/RLS repair, generated schema/type refresh and registration of the 526-assertion suite in local-contract CI. Preview, persistent Dev, production authorization and migration ownership are unchanged."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md

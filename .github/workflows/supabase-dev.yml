@@ -111,6 +111,7 @@ jobs:
           supabase test db supabase/tests/20260923_open_data_catalog_publications.sql
           supabase test db supabase/tests/20261009_dataset_display_settings.sql
           supabase test db supabase/tests/20261009_dataset_display_list_page_hydration.sql
+          supabase test db supabase/tests/20261013_dataset_classification_catalog.sql
           supabase test db supabase/tests/20261010_portal_display_brand_foundation.sql
           supabase test db supabase/tests/20261010_portal_display_readers.sql
           supabase test db supabase/tests/20261011_portal_display_exchange_paging.sql

@@ -32,6 +32,7 @@ begin
     else null::uuid
   end;
   filter_condition_jsonb := coalesce(filter_condition, '{}'::jsonb);
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
   escaped_query_terms := private.pgroonga_escape_query_terms(query_terms);
   if cardinality(escaped_query_terms) = 0 then
     escaped_query_terms := private.pgroonga_escape_query_terms(array[query_text]);
@@ -45,6 +46,7 @@ begin
     flow_type_array := null;
   end if;
   filter_condition_jsonb := filter_condition_jsonb - 'flowType';
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
 
   if filter_condition_jsonb ? 'asInput' then
     as_input := nullif(btrim(filter_condition_jsonb->>'asInput'), '')::boolean;
@@ -52,13 +54,16 @@ begin
     as_input := null;
   end if;
   filter_condition_jsonb := filter_condition_jsonb - 'asInput';
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
 
   if jsonb_typeof(filter_condition_jsonb->'classification') = 'array' then
-    classification_filter := filter_condition_jsonb->'classification';
+    classification_filter := '[]'::jsonb;
   else
     classification_filter := '[]'::jsonb;
   end if;
-  filter_condition_jsonb := filter_condition_jsonb - 'classification';
+  -- Canonical selector remains in the residual predicate before recall.
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
+  perform private.dataset_catalog_filter_validate(filter_condition_jsonb);
 
   if exact_query_id is not null then
     return query
@@ -66,7 +71,7 @@ begin
         select f.id, 1.0::double precision as search_score
         from public.flows f
         where f.id = exact_query_id
-          and f.json @> filter_condition_jsonb
+          and private.dataset_catalog_filter_matches(NULL, f.json, filter_condition_jsonb)
           and (
             (((normalized_data_source = 'tg' AND f.state_code = 100) OR (normalized_data_source = 'ex' AND f.state_code = -1 AND (SELECT auth.uid()) IS NOT NULL)) and (team_id_filter is null or f.team_id = team_id_filter))
             or (normalized_data_source = 'co' and f.state_code = 200 and (team_id_filter is null or f.team_id = team_id_filter))
@@ -135,6 +140,7 @@ begin
               or (normalized_data_source = 'my' and effective_user_id is not null and f2.user_id = effective_user_id and (state_code_filter is null or f2.state_code = state_code_filter))
               or (normalized_data_source = 'te' and team_id_filter is not null and can_read_team_filter and f2.team_id = team_id_filter and (state_code_filter is null or f2.state_code = state_code_filter))
             )
+          and (case when coalesce(filter_condition_jsonb->'classification','[]'::jsonb)='[]'::jsonb then true else (private.dataset_catalog_filter_matches(NULL,f2.json,(filter_condition_jsonb || jsonb_strip_nulls(jsonb_build_object('flowType',flow_type,'asInput',as_input))))) end)
           order by f2.version desc, f2.modified_at desc
           limit 1
         ) latest_row on true
@@ -153,7 +159,7 @@ begin
 
   json_filter_clause := case
     when filter_condition_jsonb = '{}'::jsonb then ''
-    else 'and f.json @> $2'
+    else 'and private.dataset_catalog_filter_matches(NULL, f.json, $2)'
   end;
 
   -- Statistics choose only the execution strategy, never the result universe.
@@ -272,7 +278,8 @@ begin
             or ($5 = 'my' and $6 is not null and f2.user_id = $6 and ($8 is null or f2.state_code = $8))
             or ($5 = 'te' and $7 is not null and $9 and f2.team_id = $7 and ($8 is null or f2.state_code = $8))
           )
-        order by f2.version desc, f2.modified_at desc
+        and (case when coalesce($2->'classification','[]'::jsonb)='[]'::jsonb then true else (private.dataset_catalog_filter_matches(NULL,f2.json,($2 || jsonb_strip_nulls(jsonb_build_object('flowType',$10,'asInput',$12))))) end)
+          order by f2.version desc, f2.modified_at desc
         limit 1
       ) latest_row on true
     ),
