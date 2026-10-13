@@ -1308,3 +1308,51 @@ upgrade/concurrency harness verify successive scopes on one prepared statement,
 multiple differently scoped RPCs in one statement, outer-GUC restoration after
 success and failure, and simultaneous sessions. The ordinary contract assertion
 still rejects a changed view definition or security barrier before serving.
+
+## Shared dataset classification readers (Database #838)
+
+`api.query_dataset_catalog` adds one actor-bound reader for all seven dataset
+kinds. It accepts `tg/co/my/te/ex` visibility scopes and authenticated
+`all_data` public-plus-owner selection. Default `latest` mode selects the latest
+matching visible version; `all` retains exact versions for version drawers and
+connectable-process selection. `datasetId` and `flowReference` are bound filters;
+id, optional exact version and direction must match the same exchange. It does
+not accept caller actor IDs. The raw catalog is authenticated-only; both new raw
+readers run as the established `api_internal_executor` with `row_security=on`,
+retaining restrictive result-state/OAuth policies as well as explicit scope
+guards. `api.search_dataset_uuid_mentions_page` retains
+latest-visible then UUID-mention/filter ordering and returns complete counts
+before server pagination. Its `all` kind plus `sourceEntityKinds` supports mixed
+reads; the old bounded discovery API remains available to unchanged consumers.
+
+Classification uses `classification:[{scope,code,system?,path?}]`. The private
+pure matcher normalizes both repeated container layers. A path is an ordered
+ancestor prefix from level zero inside one system. An ancestor includes deeper
+records. Unspecified `system` accepts a path within any single named or unnamed
+legacy system; labels and cross-system ancestor/leaf joins never participate.
+Selectors allow 50 items, 200-character codes/system names and 20 path entries.
+A nonempty path ends at `code`; `elementary` matches only the Flow namespace.
+
+Open Data list, lexical, UUID and Hybrid keep their existing facades and apply
+the shared matcher before count/page or recall. Raw lexical/semantic readers
+also filter before bounded recall. A classification-filtered historical match
+hydrates the latest version that satisfies classification before count/page;
+omitted or empty classification retains historical-match/latest-visible
+behavior. Matched Flow classification stays in the source residual predicate
+because flat code sidecars cannot express complete paths or repeated systems.
+Existing budgets, type/team selective routing, principals, no-classification
+paths and threshold fallback remain. No relation, index, trigger, writer or
+backfill is added. The old invoker Flow list keeps its original body and ACLs;
+frontend classification uses the additive catalog facade.
+
+`api.hybrid_search_lifecyclemodels_filtered` adds state/team arguments using the
+existing private foundation lexical/semantic kernel. Edge selects this facade
+and forwards visibility context before selected-team model Hybrid adoption.
+Legacy model wires keep their signatures. No service-role grant is added.
+
+The two `*_filtered` display facades preserve manager-only candidates and
+signed-in displayed-list admission. Classification runs before count/page. The
+bounded selected page reads geographic code, actual reference year and subtype;
+raw JSON, owner and team do not leave this DTO. Existing unfiltered facades and
+bounded name hydration are unchanged. Mixed display classification requires a
+selected kind.

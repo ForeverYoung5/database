@@ -1150,3 +1150,37 @@ continuation cursors on one rollback-only fixture, alternates variant order,
 retains nested natural plans, and covers empty/filtered/lexical/UUID/escaped/
 one-character/zero-result shapes in single- and multi-brand deployments. These
 are local synthetic warm samples, not hosted p95 or concurrent-load acceptance.
+
+## Seven-kind classification catalog qualification (Database #838)
+
+After rebuilding an explicitly owned isolated database, run
+`supabase/tests/20261013_dataset_classification_catalog.sql`, full-schema/API and
+OAuth closure, adjacent Open Data/display suites,
+`20260902_next_hybrid_versions_v1.sql`,
+`20260905_next_hybrid_filter_adaptive_v2.sql`,
+`20260910_example_dataset_scope.sql`, and
+`20261006_search_request_identity.sql`. Retain raw request-bound and
+no-classification Flow regressions. Record exact migration, image/runtime,
+commands and pgTAP results; standalone GoTrue bootstrap differences are separate
+from SQL failures. Local proof does not activate hosted APIs or prove
+production-volume latency.
+
+The task suite checks complete third pages/totals in schema-admissible scopes,
+lexical and semantic-only recalls, mixed UUID pages beyond 50 results, both
+repeated shapes, named/unnamed systems, ancestor paths, same-exchange exact
+references, all-version/public-plus-owner reads, display admission/DTO metadata,
+and owner/team/anonymous isolation. With a newer nonmatching classification,
+historical matches return matching JSON/version; omission retains latest-visible
+hydration. Existing commercial-state CHECK constraints remain unchanged.
+Generic raw catalog/UUID reads must still deny actor-owned state-120 Processes
+and OAuth clients without core-read capability; grant/owner/RLS checks are part
+of the same task suite.
+
+Preflight freezes exact predecessor bodies and replacement counts. SET/CREATE
+authority is borrowed only inside the transaction and full role memberships and
+schema ACLs restore before commit. Verify owners, ACLs, RLS principals, settings
+and candidate budgets remain. Five additive API identities must enter the exact
+capability manifest; six new private helpers remain externally closed. Update
+exact cutover inventory and migration-head assertions together. Deployment order
+is Database, reviewed model Hybrid Edge route, then frontend. Eligible promote
+and root integration remain required after ordinary child merge.
