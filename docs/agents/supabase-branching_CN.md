@@ -23,8 +23,8 @@ checkPaths:
   - .env.supabase.dev.local.example
   - .env.supabase.main.local.example
 lastReviewedAt: 2026-10-14
-lastReviewedCommit: 6428ff2822fbad63c7c44a33d38224b3b7933066
-lastReviewedNote: "Reviewed Database #838 canonical classification/RLS repair, generated schema/type refresh and registration of the 526-assertion suite in local-contract CI. Preview, persistent Dev, production authorization and migration ownership are unchanged."
+lastReviewedCommit: 6c3118c024b57df216e5c098c72f63e5073196f7
+lastReviewedNote: "Reviewed Database #842 local-contract registration and exact migration-head assertion. Preview, persistent Dev and production deployment boundaries are unchanged."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

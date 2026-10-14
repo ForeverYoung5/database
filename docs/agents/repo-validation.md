@@ -84,6 +84,8 @@ The local contract CI job includes Model bundle version allocation. For focused 
 
 ## Proof Matrix
 
+For Database #842, the local-contract job runs `20261014_snapshot_build_terminal_guard.sql`: terminal failures survive repeated polling without additional jobs or draft snapshots, while explicit service retry and completed-request refresh remain available. The API closure assertion must track the exact new migration head.
+
 For the Database #834 / Worker #318 scanner r5 admission migration, run
 `supabase/tests/20260722_scope_closure_release_binding_e2e.sql` after the normal
 reset. Its warm fixture completes and reuses r4 evidence through the native
