@@ -1371,3 +1371,5 @@ bounded selected page reads geographic code, actual reference year and subtype;
 raw JSON, owner and team do not leave this DTO. Existing unfiltered facades and
 bounded name hydration are unchanged. Mixed display classification requires a
 selected kind.
+
+Snapshot auto-enqueue terminal guard (Database #842): under the existing request advisory lock, the service facade reuses active work, returns `SNAPSHOT_BUILD_BLOCKED` for blockage, and returns `SNAPSHOT_BUILD_FAILED` for the latest same-actor/request failure or cancellation regardless of retryability. It never inserts a replacement draft for those outcomes. A partial snapshot-request history index bounds this lookup. Existing explicit service-only `private.worker_retry_job` recovery requeues the same canonical job; a changed build contract has a new request key. Live source edits do not implicitly clear a same-key failure. Successful previous jobs retain normal refresh behavior, since request keys do not bind mutable dataset content.

@@ -1,0 +1,1 @@
+CREATE INDEX "worker_jobs_snapshot_request_history_idx" ON "private"."worker_jobs" USING "btree" ("concurrency_key", "requested_by", "created_at" DESC, "id") WHERE ("job_kind" = 'lca.build_snapshot'::"text");

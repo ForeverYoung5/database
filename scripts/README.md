@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-14
-lastReviewedCommit: 6428ff2822fbad63c7c44a33d38224b3b7933066
-lastReviewedNote: "Reviewed Database #838 exact-local five-schema and public/api type regeneration from the isolated complete migration state. Canonical scripts and generated/stable ownership remain unchanged; hosted Dev provenance still requires later comparison."
+lastReviewedCommit: 57a4d2874b04f6c7111eba1c8b8e55417f81dd4c
+lastReviewedNote: "Reviewed Database #842 exact-local schema regeneration and deterministic repeat from the complete migration state. Generated schema remains a review snapshot; hosted Dev comparison and deployment boundaries are unchanged."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml

@@ -38,8 +38,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-14
-lastReviewedCommit: 6428ff2822fbad63c7c44a33d38224b3b7933066
-lastReviewedNote: "Reviewed Database #838 canonical classification/RLS repair, generated schema/type refresh and registration of the 526-assertion suite in local-contract CI. Preview, persistent Dev, production authorization and migration ownership are unchanged."
+lastReviewedCommit: 8b700833cb6a679cb19a1762bf237da003bf0153
+lastReviewedNote: "Reviewed Database #842 terminal snapshot enqueue guard. Existing service-only capability, explicit worker retry and successful refresh behavior remain. New and legacy pgTAP proof runs on isolated task-owned PostgreSQL; no hosted migration."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md

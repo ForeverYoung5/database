@@ -31,6 +31,9 @@ begin
   order by created_at desc, id
   limit 1;
   if found then
+    if v_existing.status = 'blocked' then
+      return jsonb_build_object('ok', false, 'code', 'SNAPSHOT_BUILD_BLOCKED', 'status', 409, 'worker_job_id', v_existing.id, 'next_action', 'resolve_worker_job_blocker');
+    end if;
     v_resolved_job_id := nullif(v_existing.payload_json ->> 'job_id', '')::uuid;
     v_resolved_snapshot_id := nullif(v_existing.payload_json ->> 'snapshot_id', '')::uuid;
     if v_resolved_job_id is null or v_resolved_snapshot_id is null then
@@ -42,6 +45,24 @@ begin
       'job_id', v_resolved_job_id,
       'worker_job_id', v_existing.id,
       'snapshot_id', v_resolved_snapshot_id
+    );
+  end if;
+
+  -- Polling is not a retry intent. Keep the canonical failure until an operator
+  -- explicitly retries that job or a changed build contract has a new request key.
+  select * into v_existing from private.worker_jobs
+  where job_kind = 'lca.build_snapshot'
+    and concurrency_key = v_concurrency_key
+    and requested_by = p_requested_by
+  order by created_at desc, id
+  limit 1;
+  if found and v_existing.status in ('failed', 'cancelled') then
+    return jsonb_build_object(
+      'ok', false, 'code', 'SNAPSHOT_BUILD_FAILED', 'status', 409,
+      'worker_job_id', v_existing.id,
+      'job_id', v_existing.payload_json ->> 'job_id',
+      'snapshot_id', v_existing.payload_json ->> 'snapshot_id',
+      'next_action', 'explicit_worker_job_retry'
     );
   end if;
 
