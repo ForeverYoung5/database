@@ -33,8 +33,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-14
-lastReviewedCommit: f58da675c15a7f0c11a975e88548b8d45062fbce
-lastReviewedNote: "Reviewed Database #838 classification-aware raw Hybrid fingerprint and predicate baselines. Four private definition hashes were independently replayed and verified; the existing owners, security modes, settings, ACLs, branch counts and Portal recovery boundaries remain unchanged."
+lastReviewedCommit: 8b700833cb6a679cb19a1762bf237da003bf0153
+lastReviewedNote: "Reviewed Database #842 terminal snapshot enqueue guard. Existing service-only capability, explicit worker retry and successful refresh behavior remain. New and legacy pgTAP proof runs on isolated task-owned PostgreSQL; no hosted migration."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
