@@ -28,6 +28,8 @@ update private.worker_jobs set status='cancelled' where idempotency_key='issue84
 select is(pg_temp.enqueue_terminal_guard()->>'code','LCA_REQUEST_TERMINAL','cancelled job remains terminal');
 update private.worker_jobs set status='blocked', blocker_codes=array['artifact_too_large'], resolution_scope='operator' where idempotency_key='issue846-terminal';
 select is(pg_temp.enqueue_terminal_guard()->>'code','LCA_REQUEST_TERMINAL','blocked job is not recreated');
+select is(pg_temp.enqueue_terminal_guard()->>'mode','blocked','blocked replay preserves the existing response mode');
+select is((select status from private.lca_result_cache where request_key='issue846-terminal'),'failed','terminal worker synchronizes cache failure');
 select ok((private.worker_retry_job((select (value->>'worker_job_id')::uuid from terminal_guard_results))->>'ok')::boolean,'explicit service retry reuses canonical job');
 select is(pg_temp.enqueue_terminal_guard()->>'mode','in_progress','poll observes explicit retry');
 select is((select count(*) from private.worker_jobs where idempotency_key='issue846-terminal'),1::bigint,'explicit retry preserves identity');
