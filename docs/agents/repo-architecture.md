@@ -31,8 +31,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-16
-lastReviewedCommit: f7c0b829dcf41b7b80b903f91fe13773ac2119df
-lastReviewedNote: "Reviewed for Worker #320 phase one: independent immutable-bundle export jobs, default Parquet, bounded compressed CSV and terminal polling protection. Existing authorization, numerical, lease and production boundaries remain; validation results belong to the linked Issues and PRs."
+lastReviewedCommit: a84fcd60be87bec5bea3f54ff2d494a09a51e1a4
+lastReviewedNote: "Reviewed Database #845 Actions-only monitoring and exact persistent-Dev push scope guard; existing local/ARM64 checks, Preview authority, generated-workspace ownership and production boundaries remain required."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -553,7 +553,7 @@ pagination, new JSON GIN index, or synthetic 50,000-row benchmark is required.
 - Git `main` is the promoted release line
 - PR branches map to Supabase preview branches
 - the pull-request-only Preview job skips forks before authority, verifies exact event base/head commits, and classifies only deployable Preview inputs: `config.toml`, migrations, root/extra seed files, and Functions. Repository-only workspace, test, template, and documentation files are excluded. An exact zero diff over the deployable set succeeds without Preview authority or hosted mutation and accepts the official App's expected `skipped` result. The exact same-repository `dev -> main` promotion also stops before authority or hosted mutation because its long-lived head is the persistent Dev project and it reuses the source PRs' disposable Preview evidence plus persistent-Dev proof. Every other deployable change still fails closed when authority is absent and requires the exact official check, disposable BranchResponse identity, PostgREST PATCH/readback, enabled public key, and anonymous Hybrid/sitemap proof; the job has no migration, Function, persistent-Dev, or production mutation path
-- `.github/workflows/supabase-dev.yml` is the sole migration deployer for Git `dev`; it gates the remote job on the local contract, issues exactly one `db push --include-all`, applies one exact Management API PATCH limited to the three PostgREST runtime fields checked into `supabase/config.toml`, and verifies the exact hosted result without Functions deployment, broad config push, or any other Management API mutation
+- `.github/workflows/supabase-dev.yml` is the sole migration deployer for Git `dev`; it gates the remote job on both mandatory local jobs and the secretless exact push classification over config/migrations/root and extra seeds/Functions; an empty deployable diff stops before credentials or mutation, while unknown commits, unexpected checkout/history or diff errors fail closed. Dev push runs do not cancel each other. Deployment jobs serialize with a bounded non-replacing queue and freshly fetch Dev under the lock; a candidate superseded by newer deployable inputs performs no hosted step, while a later repository-only push preserves its deployment proof. A verified current deployable push issues exactly one `db push --include-all`, applies one exact Management API PATCH limited to the three PostgREST runtime fields checked into `supabase/config.toml`, and verifies the exact hosted result without Functions deployment, broad config push, or any other Management API mutation
 - after the database deployment succeeds, persistent-Dev Functions are deployed and validated through `tiangong-lca-edge-functions`; this repo contains no Function runtime source or Function deploy command
 - the production Supabase project is migrated automatically by the Supabase GitHub integration when Git `main` advances
 

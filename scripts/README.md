@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-16
-lastReviewedCommit: f7c0b829dcf41b7b80b903f91fe13773ac2119df
-lastReviewedNote: "Reviewed Database #842 exact-local schema regeneration and deterministic repeat from the complete migration state. Generated schema remains a review snapshot; hosted Dev comparison and deployment boundaries are unchanged."
+lastReviewedCommit: a84fcd60be87bec5bea3f54ff2d494a09a51e1a4
+lastReviewedNote: "Reviewed Database #845 Actions-only monitoring and exact persistent-Dev push scope guard; existing local/ARM64 checks, Preview authority, generated-workspace ownership and production boundaries remain required."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml
@@ -506,6 +506,22 @@ python scripts/test_resolve_migration_head.py
 ```
 
 ### `test_supabase_dev_workflow_contract.py`
+
+The same script executes the actual push and Preview classifier Bash bodies
+against disposable local Git history. It covers all five deployable path
+families, repository-only changes, mixed deletions/renames, zero/unknown bases,
+stale checkouts, unrelated history and diff errors. The push job must expose
+its verified scope from the secretless local job, and the persistent-Dev job
+must require that output plus both mandatory checks before credentials. Missing
+Preview authority fails even for a same-repository dependency-bot fixture.
+The fixtures also fetch an explicitly disposable local Git remote to test a
+queued deployable A followed by docs-only B, newer deployable C finishing first,
+a late older A, later docs-only D, and fetch/history/diff failures. Distinct push
+run groups preserve checks; the single persistent-Dev deployment queue preserves
+pending jobs up to GitHub's 100-job bound. Every hosted step requires a fresh
+current-tree match under that lock. Complete folded/plain expressions are checked,
+including negative same-line/continued OR bypasses. These tests use no Supabase
+process, external network request or hosted credential.
 
 Fails closed unless `.github/workflows/supabase-dev.yml` keeps two isolated
 hosted paths. The push-only persistent-Dev job must link the configured Dev

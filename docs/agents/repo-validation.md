@@ -33,8 +33,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-16
-lastReviewedCommit: f7c0b829dcf41b7b80b903f91fe13773ac2119df
-lastReviewedNote: "Reviewed for Worker #320 phase one: independent immutable-bundle export jobs, default Parquet, bounded compressed CSV and terminal polling protection. Existing authorization, numerical, lease and production boundaries remain; validation results belong to the linked Issues and PRs."
+lastReviewedCommit: a84fcd60be87bec5bea3f54ff2d494a09a51e1a4
+lastReviewedNote: "Reviewed Database #845 Actions-only monitoring and exact persistent-Dev push scope guard; existing local/ARM64 checks, Preview authority, generated-workspace ownership and production boundaries remain required."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -51,7 +51,7 @@ related:
 
 ## Default Baseline
 
-Unless the change is doc-only repo-maintenance work, the baseline local commands are:
+Unless the change is doc-only repo-maintenance work or the offline workflow/monitoring contract category below, the baseline local commands are:
 
 ```bash
 supabase start
@@ -81,6 +81,13 @@ result-process-lifecycle-protection, result-process-product-read-isolation, and
 manager-attested-result-publication suites before hosted steps.
 
 The local contract CI job includes Model bundle version allocation. For focused validation, run `20261009_model_bundle_process_references.sql` with `20260611_dataset_create_version_rpc.sql` and `20260902_process_model_version.sql`. Verify exact same-bundle reference rewriting, external version preservation, singleton/array shape and child ownership after a blank rebuild and a populated upgrade.
+
+For workflow/Actions-monitoring changes that preserve every deployable input,
+run the offline workflow contract and YAML/config validation before delivery;
+no local or hosted database operation is needed for that scoped proof. The
+unchanged required hosted PR jobs still rebuild and validate the full database
+contract. Record those hosted results separately before merge; offline fixtures
+do not replace them.
 
 ## Proof Matrix
 
@@ -160,7 +167,8 @@ qualify original R1 inputs, a hosted Preview branch, or browser acceptance.
 | `supabase/tests/**` only | run the relevant SQL assertion files against a reset local DB | add a nearby migration or policy smoke check if the new assertions expose a gap | This repo stores PGTAP-style SQL assertions, not a single canonical runner wrapper. |
 | `supabase/seed.sql` or `supabase/seeds/dev.sql` | `supabase db reset` succeeds with expected seed behavior | rerun targeted SQL assertions that depend on the seeded rows; for shared-seed changes, confirm the hosted Preview seed stage completes | Keep shared seed and dev-only seed expectations separate. A shared seed with no data must still contain an executable no-op statement; a comments-only batch is not deployment-safe. |
 | `supabase/config.toml` or `supabase/templates/**` | `supabase start` and `supabase db reset` still work locally; for Auth recovery template changes, run `python3 scripts/check_auth_email_templates.py` and `python3 scripts/test_check_auth_email_templates.py` | verify the changed branch-binding or auth assumption against `docs/agents/supabase-branching.md`; for exposed-schema changes, prove the Supabase GitHub integration applies the configuration or record the explicit operator gate, then read back exact ordered hosted PostgREST schema/search-path lists; for hosted Auth templates, require the documented authorized Dashboard apply and end-to-end email validation | Config changes affect preview, persistent dev, and local behavior together; neither local CLI order nor a checked-in email template proves the hosted project state. |
-| `.github/workflows/supabase-dev.yml` | inspect and parse YAML; run `python3 scripts/test_resolve_migration_head.py` and `python3 scripts/test_supabase_dev_workflow_contract.py`; prove the Preview classifier validates exact base/head commits and compares exactly `supabase/config.toml`, `supabase/migrations/`, `supabase/seed.sql`, `supabase/seeds/`, and `supabase/functions/`; prove repository-only workspace/tests/templates/docs are excluded; require both the x64 local contract and isolated ARM64 profiles before persistent-Dev deployment; retain the persistent-Dev one-push/one-PATCH and Preview one-PATCH/no-deployment contracts | on a PR changing only repository-owned nondeployable files, prove the official Supabase App `skipped` result does not fail the job and no authority or hosted mutation step runs. On any deployable-input change, require all authority, exact successful official check, disposable BranchResponse, PostgREST readback, public-key selection, and anonymous Hybrid/sitemap probes | Missing commits or diff errors fail. The explicit allowlist mirrors the Supabase GitHub integration's configuration, migration, seeding, and Function inputs; Auth templates remain separately manual. Every deployable change retains fail-closed App identity, branch equality, main/Dev exclusion, credential isolation, and no Functions/config/schema deployment from the verifier. |
+| `.github/workflows/supabase-dev.yml` | inspect and parse YAML; run `python3 scripts/test_resolve_migration_head.py` and `python3 scripts/test_supabase_dev_workflow_contract.py`; execute the shipped push/Preview/fresh-Dev classifiers against disposable Git fixtures; prove A-deployable/B-docs does not lose A, non-replacing deployment queueing, C-first/out-of-order completion cannot let late A overwrite newer inputs, and failed fetch/unknown current history stops; compare complete folded/plain gate expressions and reject same-line or continued logical-OR bypass mutations; prove persistent Dev validates the exact nonzero push before/head, checkout and ancestor history before credentials, and that zero diff skips its entire job while unknown bases, stale checkouts, unrelated history and diff errors fail closed; prove the Preview classifier validates exact base/head commits and compares exactly `supabase/config.toml`, `supabase/migrations/`, `supabase/seed.sql`, `supabase/seeds/`, and `supabase/functions/`; prove repository-only workspace/tests/templates/docs are excluded; require both the x64 local contract and isolated ARM64 profiles before persistent-Dev deployment; retain the persistent-Dev one-push/one-PATCH and Preview one-PATCH/no-deployment contracts | on a PR changing only repository-owned nondeployable files, prove the official Supabase App `skipped` result does not fail the job and no authority or hosted mutation step runs. On any deployable-input change, require all authority, exact successful official check, disposable BranchResponse, PostgREST readback, public-key selection, and anonymous Hybrid/sitemap probes | Missing commits or diff errors fail. The explicit allowlist mirrors the Supabase GitHub integration's configuration, migration, seeding, and Function inputs; Auth templates remain separately manual. Every deployable change retains fail-closed App identity, branch equality, main/Dev exclusion, credential isolation, and no Functions/config/schema deployment from the verifier. |
+| `.github/dependabot.yml` | parse YAML and validate the current Dependabot schema; retain Actions-only `dev` targeting, weekly cooldown/limit and existing PR jobs; run the workflow contract above without starting a database | after separate Main promotion, require a successful hosted Actions scan before claiming activation | This configuration is not SQL, CLI or hosted-runtime qualification; security settings are independent. |
 | `scripts/**` | run the touched script with `--help` when possible, or execute the narrowest safe non-destructive path | if a script changes generated workspace behavior, refresh the workspace in a safe environment and inspect git diff | Avoid remote-destructive script runs unless the task explicitly requires them. |
 | `supabase/workspace/**` | prove whether the touched file is generated or stable | if stable manual overlay files changed, explain how they feed migration generation | Generated files alone are not sufficient evidence of a durable schema change. |
 | repo docs only | `scripts/docpact lint --root . --files "<csv>" --mode enforce` | `scripts/docpact validate-config --root . --strict` when `.docpact/config.yaml` changes | Refresh review metadata even when prose stays unchanged. |

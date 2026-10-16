@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-16
-lastReviewedCommit: f7c0b829dcf41b7b80b903f91fe13773ac2119df
-lastReviewedNote: "Reviewed Database #842 exact-local schema regeneration and deterministic repeat from the complete migration state. Generated schema remains a review snapshot; hosted Dev comparison and deployment boundaries are unchanged."
+lastReviewedCommit: a84fcd60be87bec5bea3f54ff2d494a09a51e1a4
+lastReviewedNote: "Reviewed Database #845 Actions-only monitoring and exact persistent-Dev push scope guard; existing local/ARM64 checks, Preview authority, generated-workspace ownership and production boundaries remain required."
 related:
   - ../AGENTS.md
   - ../.docpact/config.yaml
@@ -423,6 +423,16 @@ python scripts/test_resolve_migration_head.py
 ```
 
 ### `test_supabase_dev_workflow_contract.py`
+
+同一脚本在临时本地 Git 历史上执行 workflow 中真实的 push/Preview 分类 Bash，
+覆盖五类可部署路径、仓库维护、混合删除/重命名、零值/未知 base、过期 checkout、
+无祖先关系与 diff 错误。无凭据 local job 输出准确范围，持久 Dev job 必须同时
+要求该输出及两项本地检查成功才可取得凭据；同仓依赖 bot 也不能绕过缺失的
+Preview authority。测试还从明确归属临时 fixture 的本地 Git remote fetch，覆盖 A 可部署后跟 B 文档、
+较新 C 先完成检查、迟到 A、后续 D 文档及 fetch/历史/diff 错误。独立 push run 保留检查，
+串行部署队列保留等待者（上限 100）；部署锁内的准确当前 tree 证明必须控制每个
+hosted step。完整 folded/plain 条件拒绝同行/续行 OR 绕过。
+测试不启动 Supabase、不发外部网络请求，也不使用托管凭据。
 
 除非 `.github/workflows/supabase-dev.yml` 保持两条相互隔离的托管路径，否则立即
 失败。push-only 持久化 Dev job 必须绑定配置的 Dev 项目，准确执行一次
