@@ -22,8 +22,8 @@ checkPaths:
   - .github/workflows/supabase-dev.yml
   - .env.supabase.dev.local.example
   - .env.supabase.main.local.example
-lastReviewedAt: 2026-10-14
-lastReviewedCommit: 6c3118c024b57df216e5c098c72f63e5073196f7
+lastReviewedAt: 2026-10-16
+lastReviewedCommit: f7c0b829dcf41b7b80b903f91fe13773ac2119df
 lastReviewedNote: "Reviewed Database #842 local-contract registration and exact migration-head assertion. Preview, persistent Dev and production deployment boundaries are unchanged."
 related:
   - ../../AGENTS.md

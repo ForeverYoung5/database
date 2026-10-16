@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "api"."svc_lca_calculation_export"("p_requested_by" "uuid", "p_package_id" "uuid", "p_format" "text", "p_enqueue" boolean) IS 'Service-only manager-authorized immutable bundle export admission and readback. Readback never enqueues; every same-binding job, including failures, is reused until explicit Worker retry.';

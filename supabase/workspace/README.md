@@ -20,8 +20,8 @@ checkPaths:
   - .githooks/pre-push
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-10-14
-lastReviewedCommit: 57a4d2874b04f6c7111eba1c8b8e55417f81dd4c
+lastReviewedAt: 2026-10-16
+lastReviewedCommit: f7c0b829dcf41b7b80b903f91fe13773ac2119df
 lastReviewedNote: "Reviewed Database #842 exact-local schema regeneration and deterministic repeat from the complete migration state. Generated schema remains a review snapshot; hosted Dev comparison and deployment boundaries are unchanged."
 related:
   - ../../AGENTS.md

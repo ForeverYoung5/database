@@ -1,8 +1,8 @@
 version: 1
 layout: repo
-lastReviewedAt: "2026-10-14"
-lastReviewedCommit: "8b700833cb6a679cb19a1762bf237da003bf0153"
-lastReviewedNote: "Reviewed Database #842 terminal snapshot enqueue guard. Existing service-only capability, explicit worker retry and successful refresh behavior remain. New and legacy pgTAP proof runs on isolated task-owned PostgreSQL; no hosted migration."
+lastReviewedAt: "2026-10-16"
+lastReviewedCommit: "f7c0b829dcf41b7b80b903f91fe13773ac2119df"
+lastReviewedNote: "Reviewed Worker #320 phase-one calculation/export separation and terminal protection; ownership, branch and production boundaries remain unchanged."
 
 # Keep deterministic governance facts here.
 # AGENTS.md remains the repo contract entrypoint.

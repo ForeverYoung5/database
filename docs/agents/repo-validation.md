@@ -32,9 +32,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-10-14
-lastReviewedCommit: 8b700833cb6a679cb19a1762bf237da003bf0153
-lastReviewedNote: "Reviewed Database #842 terminal snapshot enqueue guard. Existing service-only capability, explicit worker retry and successful refresh behavior remain. New and legacy pgTAP proof runs on isolated task-owned PostgreSQL; no hosted migration."
+lastReviewedAt: 2026-10-16
+lastReviewedCommit: f7c0b829dcf41b7b80b903f91fe13773ac2119df
+lastReviewedNote: "Reviewed for Worker #320 phase one: independent immutable-bundle export jobs, default Parquet, bounded compressed CSV and terminal polling protection. Existing authorization, numerical, lease and production boundaries remain; validation results belong to the linked Issues and PRs."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -1207,3 +1207,7 @@ display rows rolled back to zero. These are one-client warm synthetic observatio
 on an unconstrained shared host, not hosted/cold-cache/concurrency certification
 or a production SLA; deep/wide selector worst cases remain separate proof. No
 index was added from the unconfirmed performance hypothesis.
+
+For Database #846 run `20261016_all_unit_terminal_guard.sql` and `20261016_calculation_exports.sql` with API closure, full-schema inventory, prior snapshot terminal guard and semantic-download regressions. The candidate adds exactly one API function and no domain tables. Prove repeated poll/explicit duplicate admission preserves terminal identity, read-only status creates no job, live manager revocation is honored, and export failure preserves the completed package.
+
+`scripts/test_calculation_export_upgrade.sh` runs only in the matching isolated GitHub-hosted workspace with `CALCULATION_EXPORT_UPGRADE_ALLOW_RESET=isolated`. It resets the verified migration prefix to canonical `f7c0b829` / `20261014081710`, seeds completed jobs/results/packages, applies the two exact phase-one migration files, compares every historical row, runs export admission/lease/revocation tests and restores the candidate migration head. The rendering helper is read-only and can supply the same fixture to an explicitly owned local baseline.

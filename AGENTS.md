@@ -37,9 +37,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-10-14
-lastReviewedCommit: 8b700833cb6a679cb19a1762bf237da003bf0153
-lastReviewedNote: "Reviewed Database #842 terminal snapshot enqueue guard. Existing service-only capability, explicit worker retry and successful refresh behavior remain. New and legacy pgTAP proof runs on isolated task-owned PostgreSQL; no hosted migration."
+lastReviewedAt: 2026-10-16
+lastReviewedCommit: f7c0b829dcf41b7b80b903f91fe13773ac2119df
+lastReviewedNote: "Reviewed for Worker #320 phase one: independent immutable-bundle export jobs, default Parquet, bounded compressed CSV and terminal polling protection. Existing authorization, numerical, lease and production boundaries remain; validation results belong to the linked Issues and PRs."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md

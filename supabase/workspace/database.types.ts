@@ -3607,6 +3607,15 @@ export type Database = {
         }
         Returns: Json
       }
+      svc_lca_calculation_export: {
+        Args: {
+          p_enqueue?: boolean
+          p_format?: string
+          p_package_id: string
+          p_requested_by: string
+        }
+        Returns: Json
+      }
       svc_lca_latest_all_unit_result: {
         Args: { p_requested_by: string; p_snapshot_id: string }
         Returns: Json

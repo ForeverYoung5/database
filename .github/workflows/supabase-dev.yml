@@ -67,6 +67,11 @@ jobs:
           supabase test db supabase/tests/20260722_scope_closure_release_binding_e2e.sql
           supabase test db supabase/tests/20260722_data_product_scope_closure_and_task_feed.sql
 
+      - name: Verify calculation export populated upgrade
+        env:
+          CALCULATION_EXPORT_UPGRADE_ALLOW_RESET: isolated
+        run: scripts/test_calculation_export_upgrade.sh
+
       - name: Verify schema and capability contracts
         run: |
           supabase test db supabase/tests/20261006_search_request_identity.sql
@@ -140,6 +145,8 @@ jobs:
           supabase test db supabase/tests/20260830_oauth_client_capability_foundation.sql
           supabase test db supabase/tests/20260831_oauth_actor_command_capabilities.sql
           supabase test db supabase/tests/20261014_snapshot_build_terminal_guard.sql
+          supabase test db supabase/tests/20261016_all_unit_terminal_guard.sql
+          supabase test db supabase/tests/20261016_calculation_exports.sql
           supabase test db supabase/tests/20261002_oauth_release_cli_capabilities.sql
           python3 scripts/test_oauth_release_migration_guard.py --local-container supabase_db_database-engine
           python3 scripts/test_release_manifest_drift.py --local-container supabase_db_database-engine
