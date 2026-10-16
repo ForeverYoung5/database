@@ -45,26 +45,45 @@ begin
           'job_id', v_cache.job_id, 'worker_job_id', v_cache.worker_job_id
         );
       end if;
-      if v_worker.status = 'failed' and v_worker.retryable is false then
+      if v_worker.status in ('failed', 'cancelled', 'blocked', 'completed') then
+        update private.lca_result_cache set
+          status = 'failed',
+          error_code = coalesce(error_code, v_worker.error_code),
+          error_message = coalesce(error_message, v_worker.error_message),
+          updated_at = now()
+        where id = v_cache.id returning * into v_cache;
         return jsonb_build_object(
           'ok', false,
-          'code', 'WORKER_REQUEST_NON_RETRYABLE_FAILURE',
+          'code', case when v_worker.status = 'failed' and v_worker.retryable is false
+            then 'WORKER_REQUEST_NON_RETRYABLE_FAILURE' else 'LCA_REQUEST_TERMINAL' end,
           'status', 409,
-          'mode', 'failed_cache_hit',
-          'message', 'The cached worker request failed and is not retryable',
+          'mode', case when v_worker.status = 'blocked' then 'blocked' else 'failed_cache_hit' end,
+          'message', 'The cached worker request is terminal; polling cannot restart it',
+          'next_action', case when v_worker.status = 'completed' then 'inspect_missing_result' else 'explicit_worker_job_retry' end,
+          'terminal', true,
           'reused', true,
-          'reuseReason', 'terminal_non_retryable_failure',
+          'reuseReason', 'terminal_request',
           'cache_id', v_cache.id,
           'job_id', v_cache.job_id,
           'worker_job_id', v_worker.id,
           'error_code', coalesce(v_cache.error_code, v_worker.error_code),
           'error_message', coalesce(v_cache.error_message, v_worker.error_message),
-          'retryable', false,
+          'retryable', v_worker.retryable,
           'details', jsonb_build_object(
             'workerJob', private.worker_job_payload(v_worker, false)
           )
         );
       end if;
+    end if;
+    if v_cache.status = 'failed' then
+      return jsonb_build_object(
+        'ok', false, 'code', 'LCA_REQUEST_TERMINAL', 'status', 409,
+        'mode', 'failed_cache_hit', 'terminal', true, 'reused', true,
+        'message', 'The failed cached request has no active worker; polling cannot restart it',
+        'next_action', 'inspect_missing_worker', 'cache_id', v_cache.id,
+        'job_id', v_cache.job_id, 'worker_job_id', v_cache.worker_job_id,
+        'error_code', v_cache.error_code, 'error_message', v_cache.error_message
+      );
     end if;
   end if;
 

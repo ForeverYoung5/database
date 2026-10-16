@@ -20,8 +20,8 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-10-14
-lastReviewedCommit: 57a4d2874b04f6c7111eba1c8b8e55417f81dd4c
+lastReviewedAt: 2026-10-16
+lastReviewedCommit: f7c0b829dcf41b7b80b903f91fe13773ac2119df
 lastReviewedNote: "Reviewed Database #842 exact-local schema regeneration and deterministic repeat from the complete migration state. Generated schema remains a review snapshot; hosted Dev comparison and deployment boundaries are unchanged."
 related:
   - ../AGENTS.md
@@ -825,3 +825,7 @@ Database #807 的本地 sitemap 对比工具，仅使用可回滚的合成测试
 候选查询保留原有 8 秒预算。该结果仅证明本地读取规模，不代表生产 p95。
 执行方式及上线验证边界见 `docs/agents/repo-validation.md` 的 Portal display
 qualification 小节。
+
+### 计算导出升级验证
+
+`render_calculation_export_upgrade.py <output.sql>` 只生成绑定准确基线和迁移文件的 populated fixture，不连接数据库。`test_calculation_export_upgrade.sh` 只在匹配的临时 GitHub-hosted workspace 中、显式允许隔离重置后执行，验证既有任务/结果/包/快照不变、导出租约和不可变输入绑定。基线与恢复顺序见 validation guide。

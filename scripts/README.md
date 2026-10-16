@@ -20,8 +20,8 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-10-14
-lastReviewedCommit: 57a4d2874b04f6c7111eba1c8b8e55417f81dd4c
+lastReviewedAt: 2026-10-16
+lastReviewedCommit: f7c0b829dcf41b7b80b903f91fe13773ac2119df
 lastReviewedNote: "Reviewed Database #842 exact-local schema regeneration and deterministic repeat from the complete migration state. Generated schema remains a review snapshot; hosted Dev comparison and deployment boundaries are unchanged."
 related:
   - ../AGENTS.md
@@ -965,3 +965,7 @@ restores source connections immediately, and owns only its fixed local clone
 sessions with independent scopes, and removes the clone before recording success.
 Release the task-owned Docker group through the workspace resource controller
 once qualification evidence is preserved.
+
+### Calculation export upgrade qualification
+
+`render_calculation_export_upgrade.py <output.sql>` renders the exact canonical-base populated fixture without connecting to a database. `test_calculation_export_upgrade.sh` runs that fixture only in the matching ephemeral GitHub-hosted workspace, with explicit isolated-reset admission. It verifies historical jobs/results/packages/snapshots, native export leases and immutable admission; see the validation guide for the pinned base and restore sequence.
