@@ -20,6 +20,6 @@ if source.count(marker) != 1:
 relations = ["worker_jobs", "lca_results", "lcia_result_packages", "lca_network_snapshots"]
 capture = "".join(f"create temp table before_{table} as select to_jsonb(t) as body from private.{table} t;\n" for table in relations)
 checks = "".join(f"select is((select jsonb_agg(to_jsonb(t) order by id) from private.{table} t),(select jsonb_agg(body order by body->>'id') from before_{table}),'upgrade preserves populated {table}');\n" for table in relations)
-sql = "\n".join((ROOT / "supabase/migrations" / name).read_text() for name in ["20261016023144_all_unit_terminal_guard.sql", "20261016023731_calculation_export_jobs.sql"])
+sql = "\n".join((ROOT / "supabase/migrations" / name).read_text() for name in ["20261016023144_all_unit_terminal_guard.sql", "20261016023731_calculation_export_jobs.sql", "20261016035632_terminal_cache_replay_compatibility.sql"])
 Path(sys.argv[1]).write_text(source.replace(marker, capture + sql + "\n" + checks + marker))
 print(f"Canonical base {BASE}; migration SHA-256 {hashlib.sha256(sql.encode()).hexdigest()}; populated history checked before new admission")
