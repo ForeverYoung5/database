@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: friday
+      time: "07:00"
+      timezone: Asia/Shanghai
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
+    groups:
+      actions-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]

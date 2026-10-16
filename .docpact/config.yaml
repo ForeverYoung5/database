@@ -1,8 +1,8 @@
 version: 1
 layout: repo
 lastReviewedAt: "2026-10-16"
-lastReviewedCommit: "f7c0b829dcf41b7b80b903f91fe13773ac2119df"
-lastReviewedNote: "Reviewed Worker #320 phase-one calculation/export separation and terminal protection; ownership, branch and production boundaries remain unchanged."
+lastReviewedCommit: a84fcd60be87bec5bea3f54ff2d494a09a51e1a4
+lastReviewedNote: "Reviewed Database #845 Actions-only monitoring and exact persistent-Dev push scope guard; existing local/ARM64 checks, Preview authority, generated-workspace ownership and production boundaries remain required."
 
 # Keep deterministic governance facts here.
 # AGENTS.md remains the repo contract entrypoint.
@@ -16,6 +16,7 @@ catalog:
       branchPolicyDoc: docs/agents/supabase-branching.md
       workflowDocs:
         - docs/agents/repo-validation.md
+        - docs/agents/dependency-maintenance.md
         - docs/agents/repo-architecture.md
         - docs/agents/portal-projection-migration-recovery.md
       workspaceIntegrationRequired: true
@@ -31,6 +32,7 @@ ownership:
           - .docpact/**
           - docs/agents/**
           - .github/workflows/ai-doc-lint.yml
+          - .github/dependabot.yml
       ownerRepo: database-engine
     - id: supabase-schema-branch-config-and-operator-templates
       paths:
@@ -77,6 +79,7 @@ coverage:
     - README.zh-CN.md
     - .docpact/**
     - docs/agents/repo-validation.md
+    - docs/agents/dependency-maintenance.md
     - docs/agents/repo-architecture.md
     - docs/agents/portal-projection-migration-recovery.md
     - docs/agents/supabase-branching.md
@@ -96,6 +99,7 @@ coverage:
     - .env.supabase.dev.local.example
     - .env.supabase.main.local.example
     - .github/workflows/ai-doc-lint.yml
+    - .github/dependabot.yml
     - .github/workflows/supabase-dev.yml
     - contracts/portal/**
   exclude:
@@ -254,6 +258,7 @@ docInventory:
     - README.zh-CN.md
     - .docpact/config.yaml
     - docs/agents/repo-validation.md
+    - docs/agents/dependency-maintenance.md
     - docs/agents/repo-architecture.md
     - docs/agents/portal-projection-migration-recovery.md
     - docs/agents/supabase-branching.md
@@ -588,3 +593,15 @@ rules:
       - path: docs/agents/portal-projection-migration-recovery.md
         mode: review_or_update
     reason: The immutable card and facet manifests, online expand/backfill/reconcile/index/cutover sequences, selected-row card-context decorator, query-only Flow geography Search repair, forced-RLS exact-CAS binding, sharded narrow character projection, bounded Process keyword expression-GIN pre-limit cutover, fixed sitemap shards, recovery procedure, and representative performance gates must change together.
+  - id: database-engine-actions-dependency-maintenance
+    scope: repo
+    repo: database-engine
+    triggers:
+      - path: .github/dependabot.yml
+        kind: dependency-monitoring
+      - path: docs/agents/dependency-maintenance.md
+        kind: maintenance-guide
+    requiredDocs:
+      - path: docs/agents/dependency-maintenance.md
+        mode: review_or_update
+    reason: Actions monitoring cadence and Dev/Main activation need one focused guide; workflow, scripts and deployable source retain their existing stricter rules.

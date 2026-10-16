@@ -23,8 +23,8 @@ checkPaths:
   - .env.supabase.dev.local.example
   - .env.supabase.main.local.example
 lastReviewedAt: 2026-10-16
-lastReviewedCommit: f7c0b829dcf41b7b80b903f91fe13773ac2119df
-lastReviewedNote: "Reviewed Database #842 local-contract registration and exact migration-head assertion. Preview, persistent Dev and production deployment boundaries are unchanged."
+lastReviewedCommit: a84fcd60be87bec5bea3f54ff2d494a09a51e1a4
+lastReviewedNote: "Reviewed Database #845 Actions-only monitoring and exact persistent-Dev push scope guard; existing local/ARM64 checks, Preview authority, generated-workspace ownership and production boundaries remain required."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -166,7 +166,7 @@ push-only 的持久化 Dev job。
    profile，以及固定 sitemap manifest/shard 合同。Hybrid 与 sitemap readiness
    各自在一个 300 秒总期限内结束；Hybrid 失败后 sitemap 仍独立运行，因此 hosted
    证据不会相互耦合。
-6. 合并后，`.github/workflows/supabase-dev.yml` 先完成本地空库重建；本地合同通过后，绑定配置的持久化 Dev 项目并执行 `supabase db push --include-all`。
+6. 合并后，`.github/workflows/supabase-dev.yml` 无托管权限地验证准确 push before/head 范围，并保留本地与 ARM64 检查。只有准确可部署 diff 且两项检查通过时，才绑定持久化 Dev 并执行 `supabase db push --include-all`；仓库维护变更跳过整个 hosted job。
 7. workflow 从当前 checkout 的 migration 目录推导期望 head，再等待 service-only readback 报告该准确 head；workflow 中不手工固定 migration head。
 8. workflow 在第一次托管 RPC 探测前，通过一次定向 Management API PATCH
    应用且只应用 `db_schema=public,api,graphql_public`、
@@ -298,8 +298,20 @@ python3 scripts/test_check_auth_email_templates.py
 
 ### 持久化 `dev` 分支部署
 
-- 对 Git `dev` 的 push 由 `.github/workflows/supabase-dev.yml` 部署。
-- workflow 先在本地重建并验证完整 migration history；Hosted job 依赖该结果，
+- Git `dev` 的 push 运行 `.github/workflows/supabase-dev.yml`。无托管凭据的 local job
+  先验证非零事件 before/head commit、准确 checkout 与祖先关系，再只比较
+  `supabase/config.toml`、`supabase/migrations/`、`supabase/seed.sql`、
+  `supabase/seeds/`、`supabase/functions/`。该集合无 diff 时，在凭据、link、
+  migration push 或 PostgREST PATCH 前跳过整个持久化 Dev job。缺失/未知 commit、
+  异常 checkout/历史或 diff 错误均 fail closed；混合或多 commit push 比较整个范围。
+- 每次 Dev push 保留独立 workflow run，后续文档 push 不取消先前 migration 的验证。
+  持久 Dev job 串行、不取消运行者，`queue: max` 保留等待者（最多 100 个；队列满需明确恢复）。
+- 取得部署锁后重新 fetch Dev，验证候选 checkout/commit 及祖先关系；同一五类可部署
+  输入必须与当前 Dev 完全一致才运行后续 hosted steps。A migration 后跟 B 文档不会丢失
+  A 部署；较新可部署 C 即使先通过检查，也会使迟到 A 跳过，不能覆盖 C。
+  未知 ref、fetch/历史/checkout/diff 错误均在 mutation 前失败；运行中部署完成验证后才释放锁。
+- workflow 保留 x64 与 ARM64 的完整本地验证；Hosted job 要求两者成功且
+  `deploy_required=true`，
   随后绑定配置的 Dev 项目，并准确执行一次 `supabase db push --include-all`。
 - 部署后先应用准确的三字段 PostgREST 运行时 PATCH，再从当前 checkout 推导
   期望 head；exact-head readback、Management API 回读或 REST profile 探测任一
@@ -330,8 +342,17 @@ python3 scripts/test_check_auth_email_templates.py
 数据库验证 workflow 覆盖目标为 `dev` 或 `main` 的 PR，包括 hotfix；两者都执行
 本地合同重建。routine 与 hotfix PR 的可部署变化继续执行精确的一次性 Preview
 检查；准确的同仓 `dev -> main` promote 复用源 PR Preview 与持久 Dev 证明，不再
-执行额外 hosted mutation。持久 Dev 部署仍只接受 `refs/heads/dev` 的 push，Main PR
+执行额外 hosted mutation。持久 Dev 部署仍只接受 `refs/heads/dev` 上通过精确可部署 diff 与两项本地检查的 push，Main PR
 不会部署该持久环境。
+
+## Actions 依赖监控
+
+`.github/dependabot.yml` 只监控 Actions，并向日常 trunk `dev` 发版本 PR。
+计划、冷却、限额、分组、无自动合并及独立 `dev -> main` 激活边界由
+[依赖维护说明](dependency-maintenance.md) 统一说明。
+沿用已有 local-contract/ARM64 检查；无可部署 diff 的 PR 与 Dev push 均在
+托管权限前停止。bot 身份不豁免可部署变化的 Preview authority；不要为满足
+同仓条件而提供部署凭据。Supabase CLI、SQL、数据及发布输入不随本次监控升级。
 
 ## 消费者仓边界
 

@@ -21,8 +21,8 @@ checkPaths:
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
 lastReviewedAt: 2026-10-16
-lastReviewedCommit: f7c0b829dcf41b7b80b903f91fe13773ac2119df
-lastReviewedNote: "Reviewed Database #842 exact-local schema regeneration and deterministic repeat from the complete migration state. Generated schema remains a review snapshot; hosted Dev comparison and deployment boundaries are unchanged."
+lastReviewedCommit: a84fcd60be87bec5bea3f54ff2d494a09a51e1a4
+lastReviewedNote: "Reviewed Database #845 Actions-only monitoring and exact persistent-Dev push scope guard; existing local/ARM64 checks, Preview authority, generated-workspace ownership and production boundaries remain required."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml

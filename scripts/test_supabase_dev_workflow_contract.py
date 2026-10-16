@@ -3,7 +3,13 @@
 
 from __future__ import annotations
 
+import os
 import re
+import shlex
+import shutil
+import subprocess
+import tempfile
+import textwrap
 from pathlib import Path
 
 from resolve_migration_head import resolve_migration_head
@@ -31,6 +37,43 @@ def job_sections(text: str) -> dict[str, str]:
     }
 
 
+
+EXPECTED_DEPLOYMENT_CONDITION = (
+    "github.event_name == 'push' && github.ref == 'refs/heads/dev' && "
+    "needs.local-contract.outputs.deploy_required == 'true'"
+)
+
+
+def effective_condition(header: str, indent: int) -> str | None:
+    """Read the complete plain/folded scalar; reject duplicate or unsupported keys."""
+
+    prefix = " " * indent
+    matches = list(re.finditer(rf"(?m)^{prefix}if: (.*)$", header))
+    if len(matches) != 1:
+        return None
+    first = matches[0].group(1).strip()
+    if first in {">-", ">"}:
+        lines = []
+    elif first.startswith(("|", "'", '\"')):
+        return None
+    else:
+        lines = [first]
+    rest = header[matches[0].end():].lstrip("\n")
+    for line in rest.splitlines():
+        if not line.startswith(prefix + " "):
+            break
+        lines.append(line.strip())
+    return " ".join(lines)
+
+
+def effective_deployment_condition(header: str) -> str | None:
+    return effective_condition(header, 4)
+
+
+def exact_deployment_condition(header: str) -> bool:
+    return effective_deployment_condition(header) == EXPECTED_DEPLOYMENT_CONDITION
+
+
 def management_api_mutations(text: str) -> list[tuple[str, str]]:
     """Classify curl calls to Management API without parsing unrelated REST probes."""
 
@@ -45,6 +88,199 @@ def management_api_mutations(text: str) -> list[tuple[str, str]]:
         if method in {"PATCH", "POST", "PUT", "DELETE"}:
             calls.append((method, url_match.group(1)))
     return calls
+
+
+
+def step_script(text: str, name: str) -> str:
+    """Extract the actual Bash body so fixtures exercise the shipped workflow."""
+
+    step = text.split(f"      - name: {name}\n", 1)[1].split("      - name:", 1)[0]
+    return textwrap.dedent(step.split("        run: |\n", 1)[1]).rstrip() + "\n"
+
+
+def exercise_scope_classifiers(text: str) -> int:
+    """Use disposable Git history, no Supabase runtime or hosted authority."""
+
+    push = step_script(text, "Classify exact persistent Dev push scope")
+    preview = step_script(text, "Classify exact Supabase Preview scope")
+    authority = step_script(text, "Check Preview verification authority")
+    current = step_script(text, "Verify current persistent Dev deployment scope")
+    checks = 0
+    with tempfile.TemporaryDirectory(prefix="database-workflow-contract-") as folder:
+        root = Path(folder)
+        repo = root / "repo"
+        repo.mkdir()
+        env = {
+            "PATH": os.environ["PATH"],
+            "HOME": folder,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_AUTHOR_NAME": "Workflow fixture",
+            "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+            "GIT_COMMITTER_NAME": "Workflow fixture",
+            "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+        }
+
+        def git(*args: str) -> str:
+            return subprocess.check_output(["git", *args], cwd=repo, env=env, text=True).strip()
+
+        def write(path: str, body: str = "fixture\n") -> None:
+            target = repo / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(body)
+
+        def commit(parent: str | None = None) -> str:
+            git("add", "-A")
+            tree = git("write-tree")
+            args = ["commit-tree", tree, "-m", "Disposable workflow fixture"]
+            if parent:
+                args += ["-p", parent]
+            sha = git(*args)
+            git("checkout", "-q", "--detach", sha)
+            return sha
+
+        def run(script: str, values: dict[str, str], expected: str | None,
+                *, fail: bool = False) -> None:
+            nonlocal checks
+            output = root / "output"
+            output.write_text("")
+            result = subprocess.run(
+                ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script],
+                cwd=repo, env={**env, **values, "GITHUB_OUTPUT": str(output)},
+                text=True, capture_output=True,
+            )
+            assert (result.returncode != 0) == fail, (values, result.returncode, result.stderr)
+            assert output.read_text() == (f"required={expected}\n" if expected else ""), values
+            checks += 1
+
+        git("init", "-q", "--template=")
+        deployable = (
+            "supabase/config.toml", "supabase/migrations/001.sql", "supabase/seed.sql",
+            "supabase/seeds/dev.sql", "supabase/functions/example/index.ts",
+        )
+        for path in deployable:
+            write(path)
+        write("README.md")
+        base = commit()
+
+        def push_values(head: str) -> dict[str, str]:
+            return {"GITHUB_REF": "refs/heads/dev", "GITHUB_SHA": head,
+                    "PUSH_BASE_SHA": base, "PUSH_HEAD_SHA": head}
+
+        def preview_values(head: str) -> dict[str, str]:
+            return {"PREVIEW_BASE_SHA": base, "PREVIEW_HEAD_SHA": head,
+                    "PREVIEW_BASE_BRANCH": "dev", "PREVIEW_GIT_BRANCH": "dependabot/github_actions/fixture",
+                    "GITHUB_ACTOR": "dependabot[bot]"}
+
+        for path in (".github/dependabot.yml", ".github/workflows/supabase-dev.yml",
+                     "scripts/test.py", "supabase/workspace/schema.sql",
+                     "supabase/tests/test.sql", "supabase/templates/recovery.html", "README.md"):
+            git("checkout", "-q", "--detach", base)
+            write(path, "nondeployable update\n")
+            head = commit(base)
+            run(push, push_values(head), "false")
+            run(preview, preview_values(head), "false")
+
+        for path in deployable:
+            git("checkout", "-q", "--detach", base)
+            write(path, "deployable update\n")
+            head = commit(base)
+            run(push, push_values(head), "true")
+            run(preview, preview_values(head), "true")
+            # Same-repository bot identity cannot replace missing Preview authority.
+            run(authority, {"GITHUB_ACTOR": "dependabot[bot]"}, None, fail=True)
+
+        git("checkout", "-q", "--detach", base)
+        write(deployable[1], "first pushed commit\n")
+        intermediate = commit(base)
+        write("README.md", "second pushed commit\n")
+        head = commit(intermediate)
+        run(push, push_values(head), "true")
+        git("checkout", "-q", "--detach", base)
+        (repo / deployable[1]).unlink()
+        write("README.md", "mixed removal\n")
+        head = commit(base)
+        run(push, push_values(head), "true")
+        # Renaming a migration out of the allowlist must also remain deployable.
+        git("checkout", "-q", "--detach", base)
+        git("mv", deployable[1], "retired.sql")
+        head = commit(base)
+        run(push, push_values(head), "true")
+        git("checkout", "-q", "--detach", base)
+        run(push, push_values(base), "false")
+        for bad_base in ("", "0" * 40, "f" * 40, "--help"):
+            run(push, {**push_values(base), "PUSH_BASE_SHA": bad_base}, None, fail=True)
+        run(push, {**push_values(base), "PUSH_HEAD_SHA": "f" * 40}, None, fail=True)
+        run(push, {**push_values(base), "PUSH_HEAD_SHA": "f" * 40,
+                   "GITHUB_SHA": "f" * 40}, None, fail=True)
+        run(push, {**push_values(base), "GITHUB_REF": "refs/heads/main"}, None, fail=True)
+        # An unrelated root commit and a stale checkout cannot authorize deployment.
+        write("README.md", "unrelated\n")
+        unrelated = commit()
+        run(push, push_values(unrelated), None, fail=True)
+        run(push, push_values(base), None, fail=True)
+        git("checkout", "-q", "--detach", base)
+        # A real Git diff error must not be mistaken for a deployable difference.
+        git_bin = shutil.which("git", path=env["PATH"])
+        shim = root / "bin"
+        shim.mkdir()
+        wrapper = shim / "git"
+        wrapper.write_text('#!/bin/bash\nif [[ "$1" == diff ]]; then exit 128; fi\nexec '
+                           + shlex.quote(git_bin) + ' "$@"\n')
+        wrapper.chmod(0o755)
+        run(push, {**push_values(base), "PATH": str(shim) + os.pathsep + env["PATH"]},
+            None, fail=True)
+        run(preview, {**preview_values(base), "PREVIEW_BASE_SHA": "f" * 40}, None, fail=True)
+        # Real fetched Dev heads model waiting checks, queueing and out-of-order completion.
+        git("remote", "add", "origin", str(repo))
+
+        def current_values(candidate: str) -> dict[str, str]:
+            return {"GITHUB_REF": "refs/heads/dev", "GITHUB_SHA": candidate}
+
+        # Any newer deployable family supersedes an older otherwise-qualified run.
+        for path in deployable:
+            git("checkout", "-q", "--detach", base)
+            write(path, "newer deployable input\n")
+            candidate = commit(base)
+            git("update-ref", "refs/heads/dev", candidate)
+            git("checkout", "-q", "--detach", base)
+            run(current, current_values(base), "false")
+        git("checkout", "-q", "--detach", base)
+        write(deployable[1], "deployable A\n")
+        a = commit(base)
+        write("README.md", "nondeployable B\n")
+        b = commit(a)
+        git("update-ref", "refs/heads/dev", b)
+        # B must not cancel A at workflow level or enter/replace its deployment queue.
+        run(push, {**push_values(b), "PUSH_BASE_SHA": a}, "false")
+        git("checkout", "-q", "--detach", a)
+        run(current, current_values(a), "true")
+        # Deployable C may complete checks first; its tree includes A and must win.
+        git("checkout", "-q", "--detach", b)
+        write(deployable[2], "newer deployable C\n")
+        c = commit(b)
+        git("update-ref", "refs/heads/dev", c)
+        run(current, current_values(c), "true")
+        git("checkout", "-q", "--detach", a)
+        run(current, current_values(a), "false")
+        # A late older pending job cannot overwrite C, even after a later docs push.
+        git("checkout", "-q", "--detach", c)
+        write("README.md", "nondeployable D\n")
+        d = commit(c)
+        git("update-ref", "refs/heads/dev", d)
+        git("checkout", "-q", "--detach", a)
+        run(current, current_values(a), "false")
+        git("checkout", "-q", "--detach", c)
+        run(current, current_values(c), "true")
+        # Unknown history/ref, stale checkout, failed fetch and diff errors all stop.
+        run(current, current_values(a), None, fail=True)
+        run(current, {**current_values(c), "GITHUB_REF": "refs/heads/main"}, None, fail=True)
+        git("update-ref", "refs/heads/dev", unrelated)
+        run(current, current_values(c), None, fail=True)
+        git("update-ref", "refs/heads/dev", d)
+        run(current, {**current_values(c), "PATH": str(shim) + os.pathsep + env["PATH"]}, None, fail=True)
+        git("remote", "remove", "origin")
+        run(current, current_values(c), None, fail=True)
+    return checks
 
 
 def main() -> int:
@@ -187,6 +423,55 @@ def main() -> int:
         for token in hosted_required
         if token not in hosted_workflow
     )
+
+    push_scope = step_script(text, "Classify exact persistent Dev push scope")
+    for token in (
+        "deploy_required: ${{ steps.dev_scope.outputs.required }}",
+        "if: github.event_name == 'push'",
+        "PUSH_BASE_SHA: ${{ github.event.before }}",
+        "PUSH_HEAD_SHA: ${{ github.event.after }}",
+    ):
+        if token not in local_workflow:
+            failures.append(f"secretless local job must classify push scope: {token}")
+    hosted_header = hosted_workflow.split("    steps:", 1)[0]
+    if not exact_deployment_condition(hosted_header):
+        failures.append("persistent Dev must require the complete exact deployable-diff condition before credentials")
+    for bypass in (
+        " || true", " || always()", "\n      || true", "\n      || success()",
+    ):
+        mutated = hosted_header.replace(
+            "needs.local-contract.outputs.deploy_required == 'true'",
+            "needs.local-contract.outputs.deploy_required == 'true'" + bypass,
+        )
+        if exact_deployment_condition(mutated):
+            failures.append(f"deployment condition parser accepted bypass {bypass!r}")
+    for bypass in (" || true", "\n          || true"):
+        scalar = "        if: steps.current_dev_scope.outputs.required == 'true'" + bypass + "\n        shell: bash\n"
+        if effective_condition(scalar, 8) == "steps.current_dev_scope.outputs.required == 'true'":
+            failures.append(f"step condition parser accepted bypass {bypass!r}")
+    workflow_header = text.split("jobs:\n", 1)[0]
+    if (
+        "group: supabase-dev-deployment-${{ github.event_name == 'push' && github.run_id || github.ref }}" not in workflow_header
+        or "cancel-in-progress: ${{ github.event_name != 'push' }}" not in workflow_header
+    ):
+        failures.append("Dev pushes must use distinct run groups without cancelling earlier push proof")
+    if "    concurrency:\n      group: supabase-persistent-dev\n      cancel-in-progress: false\n      queue: max\n" not in hosted_header:
+        failures.append("persistent Dev jobs must serialize and preserve queued deployment candidates")
+    hosted_steps = hosted_workflow.split("    steps:\n", 1)[1]
+    for step in hosted_steps.split("      - name:")[1:]:
+        name = step.splitlines()[0].strip()
+        if name in {"Checkout repository", "Verify current persistent Dev deployment scope"}:
+            continue
+        if effective_condition(step.split("        run:", 1)[0], 8) != "steps.current_dev_scope.outputs.required == 'true'":
+            failures.append(f"hosted step must require the complete current Dev scope condition: {name}")
+    if "secrets." in local_workflow or "SUPABASE_ACCESS_TOKEN" in push_scope:
+        failures.append("push classification/local checks must remain free of hosted authority")
+    for path in ("supabase/config.toml", "supabase/migrations/", "supabase/seed.sql",
+                 "supabase/seeds/", "supabase/functions/"):
+        if push_scope.count(path) != 1:
+            failures.append(f"persistent Dev classifier must contain deployable path exactly once: {path}")
+    if "permissions:\n  contents: read\n" not in text:
+        failures.append("workflow token must default to read-only contents")
 
     if lowered.count("supabase db push --include-all") != 1:
         failures.append("workflow must contain exactly one database-only db push")
@@ -498,8 +783,8 @@ def main() -> int:
 
     required = (
         "pull_request:",
-        "supabase-dev-deployment-${{ github.ref }}",
-        "cancel-in-progress: true",
+        "supabase-dev-deployment-${{ github.event_name == 'push' && github.run_id || github.ref }}",
+        "cancel-in-progress: ${{ github.event_name != 'push' }}",
         "github.event_name == 'push' && github.ref == 'refs/heads/dev'",
         "python scripts/test_resolve_migration_head.py",
         "python3 scripts/test_configure_derivative_scheduler.py",
@@ -558,6 +843,8 @@ def main() -> int:
             print(f"FAIL: {failure}")
         return 1
 
+    checks = exercise_scope_classifiers(text)
+    print(f"PASS: {checks} offline push/Preview scope and missing-authority controls")
     print(
         "PASS: Supabase Dev workflow separately gates persistent Dev and exact "
         "PR Preview runtime contracts, limits Management API mutation to two "

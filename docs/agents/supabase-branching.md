@@ -23,8 +23,8 @@ checkPaths:
   - .env.supabase.dev.local.example
   - .env.supabase.main.local.example
 lastReviewedAt: 2026-10-16
-lastReviewedCommit: f7c0b829dcf41b7b80b903f91fe13773ac2119df
-lastReviewedNote: "Reviewed Database #842 local-contract registration and exact migration-head assertion. Preview, persistent Dev and production deployment boundaries are unchanged."
+lastReviewedCommit: a84fcd60be87bec5bea3f54ff2d494a09a51e1a4
+lastReviewedNote: "Reviewed Database #845 Actions-only monitoring and exact persistent-Dev push scope guard; existing local/ARM64 checks, Preview authority, generated-workspace ownership and production boundaries remain required."
 related:
   - ../../AGENTS.md
   - ../../.docpact/config.yaml
@@ -170,9 +170,11 @@ Normal PR path:
    fixed sitemap manifest/shard contract. Hybrid and sitemap readiness each
    stop at one 300-second deadline; sitemap still runs after Hybrid failure so
    the hosted evidence is not coupled.
-6. After merge, `.github/workflows/supabase-dev.yml` performs a blank local
-   rebuild, links the configured persistent Dev project, and runs
-   `supabase db push --include-all` after the local contract passes.
+6. After merge, `.github/workflows/supabase-dev.yml` classifies the exact
+   push before/head deployable diff without hosted authority and performs both
+   existing local and ARM64 checks. Only a verified deployable change links the
+   configured persistent Dev project and runs `supabase db push --include-all`.
+   A repository-only merge skips the hosted job entirely.
 7. The workflow derives the expected head from the checked-out migration
    directory and waits until a service-only readback reports that exact head;
    it never carries a manually pinned head.
@@ -355,9 +357,32 @@ Rules:
 
 ### Persistent `dev` branch deployment
 
-- Pushes to Git `dev` are deployed by `.github/workflows/supabase-dev.yml`.
+- Pushes to Git `dev` run `.github/workflows/supabase-dev.yml`. Its secretless
+  local job verifies exact nonzero event before/head commits, the checked-out
+  head and ancestor history, then compares exactly `supabase/config.toml`,
+  `supabase/migrations/`, `supabase/seed.sql`, `supabase/seeds/`, and
+  `supabase/functions/`. A zero diff skips the entire persistent-Dev job before
+  credentials, linking, migration push or PostgREST PATCH. Missing/unknown
+  commits, an unexpected checkout/history or a diff error fail closed.
+  Tests, generated workspace, templates, scripts, workflows and docs alone do
+  not authorize persistent-Dev writes. The classification covers the whole
+  pushed range, including mixed and multi-commit changes.
+- Dev pushes use distinct workflow run groups and do not cancel each other's
+  checks. A later repository-only push must not erase a prior migration's
+  deployment proof. Persistent-Dev jobs serialize without cancellation and use
+  `queue: max` so another qualified job cannot replace a waiting candidate
+  (GitHub permits up to 100 pending jobs; a full queue needs explicit recovery).
+- Once that deployment lock is held, fetch current Dev and verify the candidate
+  checkout/commit and ancestor relationship. Only an exact zero diff over the
+  same five deployable paths permits the following hosted steps. Thus a docs-only
+  B can follow deployable A while A still deploys; a newer deployable C supersedes
+  a late A even when C's checks finish first. Missing refs, fetch errors,
+  unexpected history/checkouts or diff errors stop before mutation. An already
+  running deployment completes verification before another deployment can start.
+  See [GitHub concurrency semantics](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
 - The workflow first rebuilds and verifies the complete migration history
-  locally. The hosted job depends on that success, links the configured Dev
+  locally and retains both x64 and ARM64 jobs for every existing event. The
+  hosted job requires both successes plus `deploy_required=true`, links the configured Dev
   project, and runs exactly one `supabase db push --include-all`.
 - It then applies the exact three-field PostgREST runtime PATCH, derives the
   expected head from its checkout, and fails unless the exact-head readback,
@@ -395,8 +420,15 @@ including hotfixes. Both targets receive the local contract rebuild. Routine
 and hotfix PRs with deployable changes retain exact disposable Preview checks;
 the exact same-repository `dev -> main` promotion reuses its source-PR Preview
 and persistent-Dev proof and performs no additional hosted mutation. Persistent
-Dev deployment still requires a push to `refs/heads/dev`; a Main PR never
+Dev deployment still requires a verified deployable push to `refs/heads/dev`
+and both mandatory local jobs; a Main PR never
 deploys that persistent environment.
+
+## Actions dependency monitoring
+
+Actions-only monitoring and its separate Main activation boundary are maintained
+in [Dependency maintenance](dependency-maintenance.md). Routine monitoring
+changes do not authorize database operations.
 
 ## Consumer repo boundaries
 
