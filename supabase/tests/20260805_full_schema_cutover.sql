@@ -71,8 +71,9 @@ select is(
   -- Database #807 adds 14 brand-scoped Portal public facades; legacy inventory remains included.
   -- Database #838 adds five additive filtered catalog/UUID/display/model-Hybrid facades.
   -- Database #846 adds one service-only export facade.
-  338::bigint,
-  'Four Portal navigation/V3 facades plus: api contains the active cutover and consumer facades, including the two Open Data catalog readers and three dataset display RPCs, the reviewer Contact status and activation RPCs, eight additive Portal/Next version-search APIs, two V4, two V5 and two V6 review queues plus batch eligibility, the rejection-detail RPC, the actor-bound rejected-review report download descriptor RPC and the reviewer workload drill-down RPC, two partial-import APIs, the three manager-attested Result publication RPCs, the guarded owner-draft before-content save facade, and the five versioned v2 Time-alias protected endpoints (preflight/gate/admit/read plus the service-only execute callback)'
+  -- Database #860 adds the versioned organization dashboard facade; v5 stays available.
+  339::bigint,
+  'One additive organization dashboard v6 facade plus four Portal navigation/V3 facades: api contains the active cutover and consumer facades, including the two Open Data catalog readers and three dataset display RPCs, the reviewer Contact status and activation RPCs, eight additive Portal/Next version-search APIs, two V4, two V5 and two V6 review queues plus batch eligibility, the rejection-detail RPC, the actor-bound rejected-review report download descriptor RPC and the reviewer workload drill-down RPC, two partial-import APIs, the three manager-attested Result publication RPCs, the guarded owner-draft before-content save facade, and the five versioned v2 Time-alias protected endpoints (preflight/gate/admit/read plus the service-only execute callback)'
 );
 
 select is(
