@@ -1221,3 +1221,7 @@ For Database #846 run `20261016_all_unit_terminal_guard.sql` and `20261016_calcu
 `scripts/test_calculation_export_upgrade.sh` runs only in the matching isolated GitHub-hosted workspace with `CALCULATION_EXPORT_UPGRADE_ALLOW_RESET=isolated`. It resets the verified migration prefix to canonical `f7c0b829` / `20261014081710`, seeds completed jobs/results/packages, applies the two exact phase-one migration files, compares every historical row, runs export admission/lease/revocation tests and restores the candidate migration head. The rendering helper is read-only and can supply the same fixture to an explicitly owned local baseline.
 
 The terminal-cache replay compatibility fix is a separate forward migration (`20261016035632`) because an already-created Supabase Preview applies only new migrations. Preserve the original pending migration bytes; qualify both the canonical populated-base upgrade and the final Preview head.
+
+## National carbon organization drafts v6
+
+Run `supabase test db supabase/tests/20260901_national_carbon_organization_contributions.sql` after a fresh migration rebuild. In addition to v5 compatibility, verify v6 admission/ACL/capability, latest-version state-0 counting, current-profile unit merging and reviewer-role exclusions, draft-only/zero units, all four numeric ranking priorities, deterministic name ties and continuous ranks. Keep chart membership/limits and summary/region/activity scopes covered.

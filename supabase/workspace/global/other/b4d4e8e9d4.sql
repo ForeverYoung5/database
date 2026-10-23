@@ -1,0 +1,1 @@
+COMMENT ON FUNCTION "api"."qry_national_carbon_organization_contributions_v6"("p_limit" integer) IS 'System-manager dashboard v6: latest-current state-0 processes count as drafts per current unit; v5 remains available unchanged.';

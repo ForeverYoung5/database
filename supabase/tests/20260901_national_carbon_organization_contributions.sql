@@ -455,5 +455,161 @@ select is((select jsonb_agg(item ->> 'organizationKey' order by (item ->> 'rank'
   where item ->> 'organizationKey' like 'sort %'),
   '["sort d", "sort c", "sort e", "sort b", "sort a"]'::jsonb,
   'chart uses the same ordered positive-published units');
+
+-- V6 is additive: preserve the original strict v5 payload and ranking.
+set local session_replication_role = replica;
+update private.users set raw_user_meta_data='{"organization":"Acme Labs"}'
+ where id='57400000-0000-4000-8000-000000000002';
+update private.users set raw_user_meta_data='{"organization":"acme LABS"}'
+ where id='57400000-0000-4000-8000-000000000003';
+-- Multiple drafts for one ID count once, using the latest version's owner.
+insert into public.processes (id, version, user_id, state_code, created_at, modified_at)
+values
+ ('57410000-0000-4000-8000-000000000301','01.00.000','57400000-0000-4000-8000-000000000203',0,now(),now()),
+ ('57410000-0000-4000-8000-000000000301','02.00.000','57400000-0000-4000-8000-000000000203',0,now(),now()),
+ ('57410000-0000-4000-8000-000000000302','01.00.000','57400000-0000-4000-8000-000000000205',0,now(),now()),
+ ('57410000-0000-4000-8000-000000000303','01.00.000','57400000-0000-4000-8000-000000000205',0,now(),now()),
+ -- Older drafts no longer count after latest version leaves state 0.
+ ('57410000-0000-4000-8000-000000000304','01.00.000','57400000-0000-4000-8000-000000000203',0,now(),now()),
+ ('57410000-0000-4000-8000-000000000304','02.00.000','57400000-0000-4000-8000-000000000203',-1,now(),now()),
+ -- Same normalized unit across contributors; reviewer roles remain excluded.
+ ('57410000-0000-4000-8000-000000000305','01.00.000','57400000-0000-4000-8000-000000000002',0,now(),now()),
+ ('57410000-0000-4000-8000-000000000306','01.00.000','57400000-0000-4000-8000-000000000003',0,now(),now()),
+ ('57410000-0000-4000-8000-000000000307','01.00.000','57400000-0000-4000-8000-000000000006',0,now(),now()),
+ ('57410000-0000-4000-8000-000000000308','01.00.000','57400000-0000-4000-8000-000000000008',0,now(),now());
+-- A unit with fewer unassigned processes must not overtake one with more,
+-- even when it has more drafts. Likewise assigned and published stay higher priorities.
+insert into public.processes (id,version,user_id,state_code,created_at,modified_at)
+select ('57410000-0000-4000-8000-' || lpad(n::text,12,'0'))::uuid,
+ '01.00.000', ('57400000-0000-4000-8000-' || lpad(owner_id::text,12,'0'))::uuid,
+ 0,now(),now()
+from (values (320,202),(321,202),(322,202),(323,201),(324,201),(325,201),(326,201),
+ (327,206),(328,206),(329,206),(330,206),(331,206)) v(n,owner_id);
+-- Draft-only and zero units, plus a second exact numeric tie for C-name ordering.
+insert into auth.users (id,raw_user_meta_data)
+values
+ ('57400000-0000-4000-8000-000000000207','{"organization":"Draft Only"}'),
+ ('57400000-0000-4000-8000-000000000208','{"organization":"Draft Zero"}'),
+ ('57400000-0000-4000-8000-000000000209','{"organization":"Sort G"}');
+insert into private.users (id,raw_user_meta_data)
+select id,raw_user_meta_data from auth.users where id in
+ ('57400000-0000-4000-8000-000000000207','57400000-0000-4000-8000-000000000208',
+  '57400000-0000-4000-8000-000000000209');
+insert into public.processes (id,version,user_id,state_code,created_at,modified_at)
+values
+ ('57410000-0000-4000-8000-000000000340','01.00.000','57400000-0000-4000-8000-000000000207',0,now(),now()),
+ ('57410000-0000-4000-8000-000000000341','01.00.000','57400000-0000-4000-8000-000000000209',100,now(),now()),
+ ('57410000-0000-4000-8000-000000000342','01.00.000','57400000-0000-4000-8000-000000000209',20,now(),now()),
+ ('57410000-0000-4000-8000-000000000343','01.00.000','57400000-0000-4000-8000-000000000209',20,now(),now()),
+ ('57410000-0000-4000-8000-000000000344','01.00.000','57400000-0000-4000-8000-000000000209',0,now(),now());
+insert into private.reviews (id,data_id,data_version,state_code,reviewer_id,json,
+ review_kind,target_table,submitted_revision_checksum,target_owner_id)
+values ('57430000-0000-4000-8000-000000000342','57410000-0000-4000-8000-000000000342',
+ '01.00.000',1,'[]','{}','root','processes',repeat('a',64),'57400000-0000-4000-8000-000000000209');
+set local session_replication_role = origin;
+
+create temporary table organization_v6 as
+select api.qry_national_carbon_organization_contributions_v6(10) as snapshot;
+select is((select snapshot->>'schemaVersion' from organization_v6),
+ 'national_carbon_organization_contribution_v6','v6 identifies its new required draft contract');
+select is((select item->>'draftDatasetCount' from organization_v6,
+ jsonb_array_elements(snapshot->'organizations') item where item->>'organizationKey'='sort c'),
+ '1','multiple draft versions count once; a newer non-draft excludes old draft');
+select is((select item->>'draftDatasetCount' from organization_v6,
+ jsonb_array_elements(snapshot->'organizations') item where item->>'organizationKey'='acme labs'),
+ '2','drafts merge current normalized profile units across users');
+select is((select item->>'draftDatasetCount' from organization_v6,
+ jsonb_array_elements(snapshot->'organizations') item where item->>'organizationKey'='draft only'),
+ '1','draft-only unit remains in the full table');
+select is((select item->>'draftDatasetCount' from organization_v6,
+ jsonb_array_elements(snapshot->'organizations') item where item->>'organizationKey'='draft zero'),
+ '0','unit without facts returns zero drafts');
+select ok(not exists(select 1 from organization_v6,jsonb_array_elements(snapshot->'organizations') item
+ where item->>'organizationKey' in ('reviewer only','review admin only')),
+ 'any-team review roles remain excluded from draft attribution');
+select is((select jsonb_agg(item->>'organizationKey' order by (item->>'rank')::integer)
+ from organization_v6,jsonb_array_elements(snapshot->'organizations') item
+ where item->>'organizationKey' like 'sort %'),
+ '["sort d","sort e","sort c","sort g","sort b","sort a","sort f"]'::jsonb,
+ 'v6 sorts published, assigned, unassigned, drafts descending then C-name ascending');
+select is((select jsonb_agg(item->>'organizationKey' order by (item->>'rank')::integer)
+ from organization_v6,jsonb_array_elements(snapshot->'rankings') item
+ where item->>'organizationKey' like 'sort %'),
+ '["sort d","sort e","sort c","sort g","sort b","sort a"]'::jsonb,
+ 'chart uses the new shared order and excludes unpublished units');
+select ok((select bool_and((item->>'rank')::integer = ordinal) from organization_v6,
+ jsonb_array_elements(snapshot->'organizations') with ordinality as rows(item,ordinal)),
+ 'v6 ranks are consecutive across the whole table');
+select is((select snapshot->'summary' from organization_v6),
+ api.qry_national_carbon_organization_contributions(10)->'summary','v6 keeps v5 summary scopes');
+select is((select snapshot->'regions' from organization_v6),
+ api.qry_national_carbon_organization_contributions(10)->'regions','v6 keeps regional statistics');
+select is((select snapshot->'dailyActivity' from organization_v6),
+ api.qry_national_carbon_organization_contributions(10)->'dailyActivity','v6 keeps activity statistics');
+select is(api.qry_national_carbon_organization_contributions(10)->>'schemaVersion',
+ 'national_carbon_organization_contribution_v5','original RPC remains v5');
+select ok(not exists(select 1 from jsonb_array_elements(
+ api.qry_national_carbon_organization_contributions(10)->'organizations') item
+ where item ? 'draftDatasetCount'),'v5 row shape remains compatible with strict old clients');
+select is((select jsonb_agg(item->>'organizationKey' order by (item->>'rank')::integer)
+ from jsonb_array_elements(api.qry_national_carbon_organization_contributions(10)->'organizations') item
+ where item->>'organizationKey' in ('sort c','sort e')),
+ '["sort c","sort e"]'::jsonb,'original v5 ranking does not use the draft tiebreaker');
+select is(jsonb_array_length(api.qry_national_carbon_organization_contributions_v6(1)->'organizations'),
+ (select (snapshot#>>'{summary,organizationCount}')::integer from organization_v6),
+ 'chart limit never truncates v6 organizations');
+select is(jsonb_array_length(api.qry_national_carbon_organization_contributions_v6(1)->'rankings'),
+ 1,'v6 still applies the chart limit');
+
+-- Latest reviewing/published versions exclude their earlier drafts.
+set local session_replication_role = replica;
+insert into public.processes (id,version,user_id,state_code,created_at,modified_at)
+values
+ ('57410000-0000-4000-8000-000000000302','02.00.000','57400000-0000-4000-8000-000000000205',20,now(),now()),
+ ('57410000-0000-4000-8000-000000000303','02.00.000','57400000-0000-4000-8000-000000000205',100,now(),now());
+set local session_replication_role = origin;
+select is((select item->>'draftDatasetCount' from jsonb_array_elements(
+ api.qry_national_carbon_organization_contributions_v6(10)->'organizations') item
+ where item->>'organizationKey'='sort e'),'0','new reviewing and published versions remove earlier drafts');
+
+-- Draft attribution follows the latest process owner and the current unit profile.
+set local session_replication_role = replica;
+insert into public.processes (id,version,user_id,state_code,created_at,modified_at)
+values ('57410000-0000-4000-8000-000000000340','02.00.000',
+ '57400000-0000-4000-8000-000000000208',0,now(),now());
+update private.users set raw_user_meta_data='{"organization":"Moved Unit"}'
+ where id='57400000-0000-4000-8000-000000000208';
+set local session_replication_role = origin;
+select is((select item->>'draftDatasetCount' from jsonb_array_elements(
+ api.qry_national_carbon_organization_contributions_v6(10)->'organizations') item
+ where item->>'organizationKey'='draft only'),'0','older owner does not retain the latest draft');
+select is((select item->>'draftDatasetCount' from jsonb_array_elements(
+ api.qry_national_carbon_organization_contributions_v6(10)->'organizations') item
+ where item->>'organizationKey'='moved unit'),'1','latest draft belongs to latest owner current profile');
+
+select ok(has_function_privilege('authenticated',
+ 'api.qry_national_carbon_organization_contributions_v6(integer)','EXECUTE')
+ and not has_function_privilege('anon','api.qry_national_carbon_organization_contributions_v6(integer)','EXECUTE')
+ and not has_function_privilege('service_role','api.qry_national_carbon_organization_contributions_v6(integer)','EXECUTE'),
+ 'v6 retains authenticated-only ACL');
+select is((select capability_id from private.api_capability_grants
+ where routine_identity='api.qry_national_carbon_organization_contributions_v6(integer)'
+ and allow_authenticated and not allow_anon and not allow_service_role),
+ 'NX-DASH-01','v6 is registered in the dashboard capability manifest');
+select is((select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+ where n.nspname='api' and p.proname='qry_national_carbon_organization_contributions_v6'
+ and p.prosecdef and p.provolatile='s'
+ and p.proconfig @> array['search_path=""','statement_timeout=30s']::text[]),
+ 1::bigint,'v6 retains fixed search path stable definer and bounded timeout');
+select throws_ok($$select api.qry_national_carbon_organization_contributions_v6(0)$$,
+ '22023','INVALID_LIMIT','v6 rejects invalid chart limit');
+select set_config('request.jwt.claim.sub','57400000-0000-4000-8000-000000000002',true);
+select throws_ok($$select api.qry_national_carbon_organization_contributions_v6(10)$$,
+ '42501','SYSTEM_MANAGER_REQUIRED','v6 rejects non-manager users');
+select set_config('request.jwt.claim.sub','',true);
+select set_config('request.jwt.claims','{}',true);
+select throws_ok($$select api.qry_national_carbon_organization_contributions_v6(10)$$,
+ '28000','AUTH_REQUIRED','v6 rejects absent identity');
+
 select * from finish();
 rollback;

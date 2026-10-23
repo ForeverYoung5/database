@@ -37,9 +37,9 @@ checkPaths:
   - scripts/docpact
   - scripts/docpact-gate.sh
   - scripts/install-git-hooks.sh
-lastReviewedAt: 2026-10-21
-lastReviewedCommit: 96d042679810e8df0427d4d4ecd34e2c1b6a5d61
-lastReviewedNote: "Database #857: reviewed one-current-assigned-approval finalization and batch eligibility. Exact-local schema is generated from clean migration history; authority, revision, target-only publication, metadata, helper ACLs and independent rejection remain unchanged. Focused and populated-upgrade proof is tracked on the Issue."
+lastReviewedAt: 2026-10-23
+lastReviewedCommit: 51a0b3e81287c691b18b885af8767d4a8f8fd47d
+lastReviewedNote: "Database #860: reviewed additive dashboard v6 migration, latest-current state-0 attribution, draft ranking, capability ACLs and generated schema; original v5, ownership and deployment workflow remain unchanged."
 related:
   - .docpact/config.yaml
   - docs/agents/repo-validation.md
